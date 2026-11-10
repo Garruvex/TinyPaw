@@ -171,7 +171,7 @@ Steps 3 and 4 depend only on step 2's reaction plumbing and can be built in eith
 
 ## Decisions
 
-1. **Left click — agreed 11 November 2026.** A left click reacts and speaks; a right click opens the menu (as in MateEngine), and the tray keeps the same entries. Escape or an outside click still closes the menu, and a drag never opens it. This replaces the next-phase plan's "keep left-click as the launcher gesture". It lands with step 2, when click reactions exist; until then left click keeps opening the menu so the character is never without one.
+1. **Left click — agreed 11 November 2026.** A left click reacts and speaks; a right click opens the menu (as in MateEngine), and the tray keeps the same entries. Escape or an outside click still closes the menu, and a drag never opens it. This replaces the next-phase plan's "keep left-click as the launcher gesture". Landed with step 2a.
 2. **Where behaviour lives — agreed.** Motion and lines live in the pack, so a shared character brings them; a user's edits are saved as overrides.
 3. **Audio dependency — agreed.** Add the `windows` crate with only its audio features, alongside `windows-sys`, for per-session peak meters that leave out TinyPaw's own sounds. Stage B's loopback analysis still uses `cpal`.
 4. **Petting — deferred.** Revisit once click and drag reactions feel right, with a rub gesture that can't fire during a drag.

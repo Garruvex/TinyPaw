@@ -3,9 +3,9 @@
 //! Yohta and imported characters share one list and one selection setting.
 //! Every pack is validated completely, and staged, before it can be used.
 //!
-//! This version renders one image per pose. The manifest is the version 1
-//! format from `docs/mascot-feature.md`; layered parts (head, tail, eyes)
-//! are rejected with a clear message until the renderer supports them.
+//! The manifest is the version 1 format from `docs/mascot-feature.md`: each
+//! pose has a body and optional moving parts (head, tail, ears, wings, hair),
+//! eyes and head faces, every image on the same canvas.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,7 +15,8 @@ use iced::advanced::image::Handle;
 use image::RgbaImage;
 use serde_json::{Value as Json, json};
 
-use super::rig::Rig;
+use super::motion::{MotionSpec, PartType, Preset};
+use super::rig::{EyeArt, LayeredArt, PartArt, Rig};
 
 /// The bundled character's ID, also the fallback selection.
 pub const BUILTIN: &str = "yohta";
@@ -37,8 +38,14 @@ const SOLID: u8 = 32;
 /// Transparent margin kept around trimmed quick-import art.
 const MARGIN: u32 = 4;
 const POSES: [&str; 2] = ["sit", "stand"];
-/// Layered fields the renderer cannot draw yet.
-const LAYERED: [&str; 4] = ["head", "tail", "eyes", "parts"];
+const MAX_PARTS: usize = 16;
+const MAX_EYES: usize = 4;
+/// Image files per pack, across every pose.
+const MAX_IMAGES: usize = 32;
+/// Head faces, in the order the rig takes them.
+const FACES: [&str; 3] = ["blink", "pressed", "dragging"];
+/// Furthest a pupil may travel, as a fraction of the canvas.
+const MAX_GAZE: f32 = 0.1;
 
 /// An installed or bundled character, as listed in Settings.
 #[derive(Debug, Clone)]
@@ -85,8 +92,45 @@ impl Character {
         };
         let m = read_manifest(folder)?;
         let pose = m.default_pose();
-        let art = read_png(folder, &pose.body, m.canvas)?;
-        Ok(Rig::sprite(art, pose.ground))
+        let png = |asset: &str| read_png(folder, asset, m.canvas);
+        let body = png(&pose.body)?;
+        if pose.parts.is_empty() && pose.eyes.is_empty() {
+            return Ok(Rig::sprite(body, pose.ground));
+        }
+        let mut parts = Vec::new();
+        for part in &pose.parts {
+            let mut faces = [None, None, None];
+            for (slot, face) in faces.iter_mut().zip(&part.faces) {
+                if let Some(asset) = face {
+                    *slot = Some(png(asset)?);
+                }
+            }
+            parts.push(PartArt {
+                kind: part.kind,
+                image: png(&part.image)?,
+                pivot: part.pivot,
+                parent: part.parent,
+                behind: part.behind,
+                motion: part.motion,
+                faces,
+            });
+        }
+        let mut eyes = Vec::new();
+        for eye in &pose.eyes {
+            eyes.push(EyeArt {
+                white: png(&eye.white)?,
+                pupil: png(&eye.pupil)?,
+                mask: png(&eye.mask)?,
+                blink: eye.blink.as_deref().map(png).transpose()?,
+                max_offset: eye.max_offset,
+            });
+        }
+        Ok(Rig::layered(LayeredArt {
+            body,
+            ground: pose.ground,
+            parts,
+            eyes,
+        }))
     }
 }
 
@@ -116,6 +160,266 @@ struct Pose {
     ground: (f32, f32),
     /// Relative path of the body image, using `/`.
     body: String,
+    parts: Vec<PartDef>,
+    eyes: Vec<EyeDef>,
+}
+
+#[derive(Debug)]
+struct PartDef {
+    kind: PartType,
+    image: String,
+    pivot: (f32, f32),
+    /// Index of the part this rides on; only the head can carry parts.
+    parent: Option<usize>,
+    behind: bool,
+    motion: MotionSpec,
+    /// Head faces: blink, pressed, dragging.
+    faces: [Option<String>; 3],
+}
+
+#[derive(Debug)]
+struct EyeDef {
+    white: String,
+    pupil: String,
+    mask: String,
+    blink: Option<String>,
+    max_offset: (f32, f32),
+}
+
+impl Pose {
+    /// Every image this pose names.
+    fn assets(&self) -> Vec<&str> {
+        let mut out = vec![self.body.as_str()];
+        for p in &self.parts {
+            out.push(&p.image);
+            out.extend(p.faces.iter().flatten().map(String::as_str));
+        }
+        for e in &self.eyes {
+            out.extend([e.white.as_str(), e.pupil.as_str(), e.mask.as_str()]);
+            out.extend(e.blink.as_deref());
+        }
+        out
+    }
+
+    fn to_json(&self) -> Json {
+        let mut pose = json!({
+            "ground_anchor": [self.ground.0, self.ground.1],
+            "body": self.body,
+        });
+        if !self.parts.is_empty() {
+            pose["parts"] = Json::Array(
+                self.parts
+                    .iter()
+                    .map(|p| {
+                        let mut part = json!({
+                            "type": p.kind.name(),
+                            "image": p.image,
+                            "pivot": [p.pivot.0, p.pivot.1],
+                            "layer": if p.behind { "back" } else { "front" },
+                            "motion": {
+                                "preset": p.motion.preset.name(),
+                                "strength": p.motion.strength,
+                                "speed": p.motion.speed,
+                            },
+                        });
+                        if p.parent.is_some() {
+                            part["parent"] = json!("head");
+                        }
+                        let faces: serde_json::Map<String, Json> = FACES
+                            .iter()
+                            .zip(&p.faces)
+                            .filter_map(|(k, v)| Some(((*k).to_owned(), json!(v.as_ref()?))))
+                            .collect();
+                        if !faces.is_empty() {
+                            part["expressions"] = Json::Object(faces);
+                        }
+                        part
+                    })
+                    .collect(),
+            );
+        }
+        if !self.eyes.is_empty() {
+            pose["eyes"] = Json::Array(
+                self.eyes
+                    .iter()
+                    .map(|e| {
+                        let mut eye = json!({
+                            "white": e.white,
+                            "pupil": e.pupil,
+                            "mask": e.mask,
+                            "max_offset": [e.max_offset.0, e.max_offset.1],
+                        });
+                        if let Some(b) = &e.blink {
+                            eye["blink"] = json!(b);
+                        }
+                        eye
+                    })
+                    .collect(),
+            );
+        }
+        pose
+    }
+}
+
+fn fraction_pair(v: &Json) -> Option<(f32, f32)> {
+    match v.as_array()?.as_slice() {
+        [x, y] => Some((x.as_f64()? as f32, y.as_f64()? as f32))
+            .filter(|(x, y)| (0.0..=1.0).contains(x) && (0.0..=1.0).contains(y)),
+        _ => None,
+    }
+}
+
+fn asset_field(v: &Json, what: &str) -> Result<String, String> {
+    v.as_str()
+        .filter(|a| valid_asset(a))
+        .map(str::to_owned)
+        .ok_or(format!("{what} must be a PNG inside the pack folder"))
+}
+
+/// One part, from `parts` or the `head`/`tail` shorthand. `parent` is
+/// resolved later, once every part is known.
+fn parse_part(v: &Json, kind: Option<PartType>, n: usize) -> Result<(PartDef, bool), String> {
+    let kind = match kind {
+        Some(k) => k,
+        None => v["type"]
+            .as_str()
+            .and_then(PartType::parse)
+            .ok_or(format!(
+                "part {n} needs a type: head, tail, ear, wing, hair or other"
+            ))?,
+    };
+    let what = format!("the {} part", kind.name());
+    let image = asset_field(&v["image"], &format!("{what}'s image"))?;
+    let pivot = fraction_pair(&v["pivot"]).ok_or(format!("{what} needs a pivot of two fractions"))?;
+    let behind = match v["layer"].as_str() {
+        None => kind.behind_by_default(),
+        Some("back") => true,
+        Some("front") => false,
+        Some(other) => return Err(format!("{what}'s layer `{other}` must be back or front")),
+    };
+    let mut motion = MotionSpec::default_for(kind);
+    let m = &v["motion"];
+    if let Some(name) = m["preset"].as_str() {
+        motion.preset = Preset::parse(name)
+            .filter(|p| kind.presets().contains(p))
+            .ok_or(format!("{what} can't use the `{name}` motion"))?;
+    }
+    for (field, value) in [("strength", &mut motion.strength), ("speed", &mut motion.speed)] {
+        if let Some(x) = m[field].as_f64() {
+            if !(0.0..=2.0).contains(&x) {
+                return Err(format!("{what}'s {field} must be between 0 and 2"));
+            }
+            *value = x as f32;
+        }
+    }
+    let mut faces = [None, None, None];
+    if let Some(map) = v["expressions"].as_object() {
+        if kind != PartType::Head {
+            return Err(format!("only the head can have expressions, not {what}"));
+        }
+        for (key, value) in map {
+            let slot = FACES
+                .iter()
+                .position(|f| f == key)
+                .ok_or(format!("unknown expression `{key}`; use blink, pressed or dragging"))?;
+            faces[slot] = Some(asset_field(value, &format!("the {key} face"))?);
+        }
+    }
+    let on_head = match v["parent"].as_str() {
+        None | Some("body") => false,
+        Some("head") if kind != PartType::Head => true,
+        Some(other) => return Err(format!("{what} can't ride on `{other}`; use head or body")),
+    };
+    Ok((
+        PartDef {
+            kind,
+            image,
+            pivot,
+            parent: None,
+            behind,
+            motion,
+            faces,
+        },
+        on_head,
+    ))
+}
+
+fn parse_eye(v: &Json, n: usize) -> Result<EyeDef, String> {
+    let what = format!("eye {n}");
+    let max_offset = match v["max_offset"].as_array().map(Vec::as_slice) {
+        None => (0.012, 0.009),
+        Some([x, y]) => (x.as_f64().unwrap_or(-1.0) as f32, y.as_f64().unwrap_or(-1.0) as f32),
+        Some(_) => (-1.0, -1.0),
+    };
+    if !(0.0..=MAX_GAZE).contains(&max_offset.0) || !(0.0..=MAX_GAZE).contains(&max_offset.1) {
+        return Err(format!("{what}'s max_offset must be two fractions up to {MAX_GAZE}"));
+    }
+    Ok(EyeDef {
+        white: asset_field(&v["white"], &format!("{what}'s white"))?,
+        pupil: asset_field(&v["pupil"], &format!("{what}'s pupil"))?,
+        mask: asset_field(&v["mask"], &format!("{what}'s mask"))?,
+        blink: match &v["blink"] {
+            Json::Null => None,
+            b => Some(asset_field(b, &format!("{what}'s blink"))?),
+        },
+        max_offset,
+    })
+}
+
+/// Parts, eyes and their links for one pose.
+fn parse_layers(pose: &Json, pose_name: &str) -> Result<(Vec<PartDef>, Vec<EyeDef>), String> {
+    let mut found: Vec<(PartDef, bool)> = Vec::new();
+    for (key, kind) in [("head", PartType::Head), ("tail", PartType::Tail)] {
+        if !pose[key].is_null() {
+            found.push(parse_part(&pose[key], Some(kind), found.len() + 1)?);
+        }
+    }
+    if let Some(list) = pose["parts"].as_array() {
+        for v in list {
+            found.push(parse_part(v, None, found.len() + 1)?);
+        }
+    } else if !pose["parts"].is_null() {
+        return Err(format!("the {pose_name} pose's parts must be a list"));
+    }
+    if found.len() > MAX_PARTS {
+        return Err(format!("a pose can have at most {MAX_PARTS} parts"));
+    }
+    let heads: Vec<usize> = found
+        .iter()
+        .enumerate()
+        .filter(|(_, (p, _))| p.kind == PartType::Head)
+        .map(|(i, _)| i)
+        .collect();
+    if heads.len() > 1 {
+        return Err(format!("the {pose_name} pose has more than one head"));
+    }
+    let head = heads.first().copied();
+    let mut parts = Vec::new();
+    for (mut part, on_head) in found {
+        if on_head {
+            part.parent = Some(head.ok_or(format!(
+                "the {} part rides on the head, but there is no head part",
+                part.kind.name()
+            ))?);
+        }
+        parts.push(part);
+    }
+    let eyes = match &pose["eyes"] {
+        Json::Null => Vec::new(),
+        Json::Array(list) => list
+            .iter()
+            .enumerate()
+            .map(|(n, v)| parse_eye(v, n + 1))
+            .collect::<Result<_, _>>()?,
+        _ => return Err(format!("the {pose_name} pose's eyes must be a list")),
+    };
+    if eyes.len() > MAX_EYES {
+        return Err(format!("a pose can have at most {MAX_EYES} eyes"));
+    }
+    if !eyes.is_empty() && head.is_none() {
+        return Err("eyes need a head part to ride on".into());
+    }
+    Ok((parts, eyes))
 }
 
 impl Manifest {
@@ -126,13 +430,23 @@ impl Manifest {
             .expect("validated default pose")
     }
 
+    /// Every image the pack names, each once.
+    fn assets(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::new();
+        for p in &self.poses {
+            for a in p.assets() {
+                if !out.contains(&a) {
+                    out.push(a);
+                }
+            }
+        }
+        out
+    }
+
     fn to_json(&self) -> Json {
         let mut poses = serde_json::Map::new();
         for p in &self.poses {
-            poses.insert(
-                p.name.clone(),
-                json!({ "ground_anchor": [p.ground.0, p.ground.1], "body": p.body }),
-            );
+            poses.insert(p.name.clone(), p.to_json());
         }
         let mut m = json!({
             "schema_version": 1,
@@ -203,12 +517,6 @@ fn parse_manifest(text: &str) -> Result<Manifest, String> {
         if !POSES.contains(&pose_name.as_str()) {
             return Err(format!("unknown pose `{pose_name}`; use sit or stand"));
         }
-        if let Some(field) = LAYERED.iter().find(|f| !pose[**f].is_null()) {
-            return Err(format!(
-                "the {pose_name} pose has a separate {field}. Moving parts arrive in a later \
-                 update; for now import the whole character as its body image"
-            ));
-        }
         let ground = pose["ground_anchor"]
             .as_array()
             .and_then(|a| match a.as_slice() {
@@ -225,24 +533,31 @@ fn parse_manifest(text: &str) -> Result<Manifest, String> {
             .ok_or(format!(
                 "the {pose_name} pose needs a body PNG inside the pack folder"
             ))?;
+        let (parts, eyes) = parse_layers(pose, pose_name)?;
         poses.push(Pose {
             name: pose_name.clone(),
             ground,
             body: body.to_owned(),
+            parts,
+            eyes,
         });
     }
     let default_pose = m["default_pose"].as_str().unwrap_or_default();
     if !poses.iter().any(|p| p.name == default_pose) {
         return Err("default_pose must name one of the poses".into());
     }
-    Ok(Manifest {
+    let manifest = Manifest {
         id: id.to_owned(),
         name: name.to_owned(),
         author,
         canvas: (w, h),
         default_pose: default_pose.to_owned(),
         poses,
-    })
+    };
+    if manifest.assets().len() > MAX_IMAGES {
+        return Err(format!("a character can use at most {MAX_IMAGES} images"));
+    }
+    Ok(manifest)
 }
 
 fn read_manifest(folder: &Path) -> Result<Manifest, String> {
@@ -509,6 +824,8 @@ fn install_into(root: &Path, draft: &Draft, taken: &[&str]) -> Result<Character,
             name: "sit".into(),
             ground: draft.ground,
             body: "sit/body.png".into(),
+            parts: Vec::new(),
+            eyes: Vec::new(),
         }],
     };
     let art = draft.art.clone();
@@ -538,8 +855,8 @@ fn stage_and_install(
         fs::write(stage.join(MANIFEST), text).map_err(|e| e.to_string())?;
         // Validate exactly what will be installed, every pose.
         let checked = read_manifest(&stage)?;
-        for pose in &checked.poses {
-            read_png(&stage, &pose.body, checked.canvas)?;
+        for asset in checked.assets() {
+            read_png(&stage, asset, checked.canvas)?;
         }
         let art = read_png(&stage, &checked.default_pose().body, checked.canvas)?;
         thumbnail(&art)
@@ -599,8 +916,8 @@ fn import_folder_into(
 ) -> Result<Imported, String> {
     let mut m = read_manifest(source)?;
     // Check the art before asking anything.
-    for pose in &m.poses {
-        read_png(source, &pose.body, m.canvas)?;
+    for asset in m.assets() {
+        read_png(source, asset, m.canvas)?;
     }
     let exists = m.id == BUILTIN || taken.contains(&m.id.as_str()) || root.join(&m.id).exists();
     let mut replace = None;
@@ -613,18 +930,21 @@ fn import_folder_into(
             OnDuplicate::Replace => replace = Some(m.id.clone()),
         }
     }
-    let bodies: Vec<String> = m.poses.iter().map(|p| p.body.clone()).collect();
-    stage_and_install(root, &m, replace.as_deref(), |stage| {
-        for body in &bodies {
-            let to = stage.join(body);
-            if let Some(parent) = to.parent() {
-                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            }
-            fs::copy(source.join(body), to).map_err(|e| e.to_string())?;
-        }
-        Ok(())
-    })
+    let assets: Vec<String> = m.assets().into_iter().map(str::to_owned).collect();
+    stage_and_install(root, &m, replace.as_deref(), |stage| copy_assets(source, stage, &assets))
     .map(Imported::Installed)
+}
+
+/// Copies the named images, and nothing else, keeping their sub-folders.
+fn copy_assets(from: &Path, to: &Path, assets: &[String]) -> Result<(), String> {
+    for asset in assets {
+        let target = to.join(asset);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        fs::copy(from.join(asset), target).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// The installed folder, checked to sit directly in the characters folder.
@@ -668,14 +988,11 @@ pub fn export(c: &Character, into: &Path) -> Result<PathBuf, String> {
     }
     fs::create_dir_all(&target).map_err(|e| e.to_string())?;
     let result = (|| {
-        for pose in &m.poses {
-            read_png(folder, &pose.body, m.canvas)?;
-            let to = target.join(&pose.body);
-            if let Some(parent) = to.parent() {
-                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            }
-            fs::copy(folder.join(&pose.body), to).map_err(|e| e.to_string())?;
+        let assets: Vec<String> = m.assets().into_iter().map(str::to_owned).collect();
+        for asset in &assets {
+            read_png(folder, asset, m.canvas)?;
         }
+        copy_assets(folder, &target, &assets)?;
         let text = serde_json::to_string_pretty(&m.to_json()).map_err(|e| e.to_string())?;
         fs::write(target.join(MANIFEST), text).map_err(|e| e.to_string())
     })();
@@ -731,8 +1048,42 @@ mod tests {
         for m in &bad {
             assert!(parse_manifest(m).is_err(), "{m}");
         }
-        let layered = ok.replace("\"body\"", "\"head\":{\"image\":\"h.png\"},\"body\"");
-        assert!(parse_manifest(&layered).unwrap_err().contains("later update"));
+        // The original spec's head/tail shorthand, and a part riding on it.
+        let layered = ok.replace(
+            "\"body\":\"sit/body.png\"",
+            r#""body":"sit/body.png","head":{"image":"sit/head.png","pivot":[0.5,0.6],
+               "expressions":{"pressed":"sit/head-pressed.png"}},
+               "parts":[{"type":"ear","image":"sit/ear.png","pivot":[0.4,0.3],"parent":"head",
+                 "motion":{"preset":"floppy","strength":1.5}}],
+               "eyes":[{"white":"sit/w.png","pupil":"sit/p.png","mask":"sit/m.png"}]"#,
+        );
+        let m = parse_manifest(&layered).unwrap();
+        let pose = m.default_pose();
+        assert_eq!(pose.parts.len(), 2);
+        assert_eq!(pose.parts[1].parent, Some(0), "the ear rides on the head");
+        assert!(pose.parts[1].behind, "ears default behind the head");
+        assert_eq!(pose.parts[1].motion.preset, Preset::Floppy);
+        assert_eq!(m.assets().len(), 7);
+        // And it survives a round trip through to_json.
+        let again = parse_manifest(&m.to_json().to_string()).unwrap();
+        assert_eq!(again.assets(), m.assets());
+        assert_eq!(again.default_pose().parts[1].parent, Some(0));
+
+        let broken = [
+            // A preset the type doesn't offer.
+            layered.replace("\"floppy\"", "\"wag\""),
+            // Strength out of range.
+            layered.replace("1.5", "3.0"),
+            // Riding on a head that isn't there.
+            layered.replace(r#""head":{"#, r#""tail":{"#),
+            // Faces on something other than the head.
+            layered.replace("\"type\":\"ear\"", "\"type\":\"ear\",\"expressions\":{\"pressed\":\"x.png\"}"),
+            // An unknown face.
+            layered.replace("\"pressed\":\"sit/head-pressed.png\"", "\"sleepy\":\"s.png\""),
+        ];
+        for m in &broken {
+            assert!(parse_manifest(m).is_err(), "{m}");
+        }
     }
 
     #[test]
@@ -785,6 +1136,56 @@ mod tests {
             panic!("installed");
         };
         assert_eq!(same.id, c.id);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn layered_folder_imports_and_renders() {
+        let dir = scratch("layered");
+        let src = dir.join("src");
+        fs::create_dir_all(src.join("sit")).unwrap();
+        let block = |x0: u32, y0: u32, x1: u32, y1: u32| {
+            RgbaImage::from_fn(100, 100, |x, y| {
+                let on = (x0..x1).contains(&x) && (y0..y1).contains(&y);
+                image::Rgba(if on { [90, 120, 200, 255] } else { [0, 0, 0, 0] })
+            })
+        };
+        for (name, img) in [
+            ("body", block(30, 50, 70, 95)),
+            ("head", block(20, 10, 80, 55)),
+            ("tail", block(65, 60, 95, 70)),
+            ("white", block(40, 25, 50, 35)),
+            ("pupil", block(44, 29, 46, 31)),
+            ("mask", block(40, 25, 50, 35)),
+        ] {
+            img.save(src.join(format!("sit/{name}.png"))).unwrap();
+        }
+        fs::write(
+            src.join(MANIFEST),
+            r#"{"schema_version":1,"id":"cat","name":"Cat","canvas":[100,100],"default_pose":"sit",
+              "poses":{"sit":{"ground_anchor":[0.5,0.95],"body":"sit/body.png",
+                "head":{"image":"sit/head.png","pivot":[0.5,0.5]},
+                "tail":{"image":"sit/tail.png","pivot":[0.66,0.65],"motion":{"preset":"wag"}},
+                "eyes":[{"white":"sit/white.png","pupil":"sit/pupil.png","mask":"sit/mask.png"}]}}}"#,
+        )
+        .unwrap();
+        let root = dir.join("characters");
+        let Imported::Installed(c) =
+            import_folder_into(&root, &src, &[], OnDuplicate::Ask).unwrap()
+        else {
+            panic!("installed");
+        };
+        let rig = c.rig().unwrap();
+        assert!(rig.eye_point().is_some());
+        assert_eq!(rig.motion_parts().len(), 2);
+        // Every named image was copied, and nothing else.
+        assert_eq!(fs::read_dir(root.join("cat/sit")).unwrap().count(), 6);
+        // A missing part image fails the import cleanly.
+        fs::remove_file(src.join("sit/tail.png")).unwrap();
+        let err = import_folder_into(&root, &src, &[], OnDuplicate::KeepBoth)
+            .err()
+            .unwrap();
+        assert!(err.contains("tail.png"), "{err}");
         fs::remove_dir_all(&dir).unwrap();
     }
 

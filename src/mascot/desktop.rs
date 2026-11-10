@@ -18,6 +18,7 @@ use iced::{
 };
 
 use super::Msg;
+use super::motion::{Animator, Inputs, PartMotion, Pose};
 use super::rig::Rig;
 use crate::app::Message;
 use crate::features::mascot as feature;
@@ -30,11 +31,11 @@ const MENU_PAD: f32 = 6.0;
 const GAP: f32 = 8.0;
 /// Logical pixels the cursor must travel before a press becomes a drag.
 const DRAG_START: f32 = 5.0;
-/// Gaze reaches its limit this far from the eyes, in rig pixels.
-const GAZE_REACH: f32 = 420.0;
-/// The rig point between the eyes.
-const EYES: Point = Point::new(232.0, 360.0);
+/// Gaze reaches its limit this far from the eyes, as a share of the
+/// character's height (Yohta: about 420 rig pixels).
+const GAZE_REACH: f32 = 0.49;
 const VK_LBUTTON: i32 = 0x01;
+const VK_RBUTTON: i32 = 0x02;
 const VK_ESCAPE: i32 = 0x1B;
 
 fn menu_height(rows: usize) -> f32 {
@@ -184,8 +185,14 @@ pub struct Desktop {
     rig: Rig,
     /// The selected character this rig was loaded for.
     character: &'static str,
-    /// Press feedback, 0 (none) to 1 (fully squashed).
-    squash: f32,
+    /// The rig's moving parts, for the animator.
+    parts: Vec<PartMotion>,
+    animator: Animator,
+    /// The latest frame of motion.
+    pose: Pose,
+    /// When motion last stepped, and where the feet were then.
+    stepped: f32,
+    last_anchor: (f32, f32),
     size: f32,
     rows: usize,
     layout: Layout,
@@ -204,6 +211,7 @@ pub struct Desktop {
     /// The window is placed and showing.
     shown: bool,
     left_down: bool,
+    right_down: bool,
 }
 
 impl Desktop {
@@ -220,6 +228,7 @@ impl Desktop {
         hidden: bool,
     ) -> (Self, Task<window::Id>) {
         let layout = layout(size, rig.size(), rig.anchor(), rows);
+        let parts = rig.motion_parts();
         let (id, task) = window::open(window::Settings {
             size: layout.window,
             position: window::Position::Specific(Point::new(-32000.0, -32000.0)),
@@ -243,7 +252,11 @@ impl Desktop {
             hwnd: 0,
             rig,
             character,
-            squash: 0.0,
+            parts,
+            animator: Animator::default(),
+            pose: Pose::default(),
+            stepped: 0.0,
+            last_anchor: (anchor.0 as f32, anchor.1 as f32),
             size,
             rows,
             layout,
@@ -258,6 +271,7 @@ impl Desktop {
             hidden,
             shown: false,
             left_down: false,
+            right_down: false,
         };
         (desktop, task)
     }
@@ -270,6 +284,8 @@ impl Desktop {
     /// Shows another character, keeping its feet where these were.
     pub fn set_rig(&mut self, character: &'static str, rig: Rig) {
         self.character = character;
+        self.parts = rig.motion_parts();
+        self.animator = Animator::default();
         self.rig = rig;
         self.menu = None;
         self.press = None;
@@ -317,6 +333,13 @@ impl Desktop {
                 (Task::none(), None)
             }
             Msg::Released => (Task::none(), self.release()),
+            Msg::Menu => {
+                self.menu = match self.menu {
+                    Some(_) => None,
+                    None => Some(self.side()),
+                };
+                (Task::none(), None)
+            }
             Msg::Poll => self.poll(o),
             Msg::Command(_) | Msg::CharacterSettings => (Task::none(), None),
         }
@@ -337,8 +360,10 @@ impl Desktop {
             (cursor.1 - rect.1) as f32 / k,
         );
         let left = native::key_down(VK_LBUTTON);
-        let clicked = left && !self.left_down;
+        let right = native::key_down(VK_RBUTTON);
+        let clicked = (left && !self.left_down) || (right && !self.right_down);
         self.left_down = left;
+        self.right_down = right;
         let mut save = None;
 
         if let Some(press) = &mut self.press {
@@ -383,40 +408,63 @@ impl Desktop {
             Task::none()
         };
 
-        // A short press squashes the character around its feet.
-        let pressing = self.press.as_ref().is_some_and(|p| !p.dragging) && !o.reduced;
-        let squash = if pressing { 1.0 } else { 0.0 };
-        self.squash = if o.reduced {
-            0.0
-        } else {
-            self.squash + (squash - self.squash) * 0.45
-        };
-
-        let eyes =
-            self.layout.character.position() + Vector::new(EYES.x, EYES.y) * self.layout.scale;
-        self.target = if o.eyes && self.rig.has_eyes() {
-            gaze_toward(local, eyes, GAZE_REACH * self.layout.scale)
-        } else {
-            Vector::ZERO
+        self.target = match self.rig.eye_point() {
+            Some(eye) if o.eyes => {
+                let eyes = self.layout.character.position() + Vector::new(eye.x, eye.y) * self.layout.scale;
+                gaze_toward(local, eyes, GAZE_REACH * self.layout.character.height)
+            }
+            _ => Vector::ZERO,
         };
         self.gaze = if o.reduced {
             self.target
         } else {
             self.gaze + (self.target - self.gaze) * 0.3
         };
+        self.step_motion(o, k);
         (task, save)
     }
 
-    /// Ends a press: a short one toggles the menu, a drag saves the spot.
+    /// Advances idle motion and reactions to now.
+    fn step_motion(&mut self, o: &Options, k: f32) {
+        let dt = (self.now - self.stepped).max(0.0);
+        self.stepped = self.now;
+        let dragging = self.press.as_ref().is_some_and(|p| p.dragging);
+        let moved = (self.anchor.0 - self.last_anchor.0, self.anchor.1 - self.last_anchor.1);
+        self.last_anchor = self.anchor;
+        let velocity = if dt > 0.0 {
+            Vector::new(moved.0 / k / dt, moved.1 / k / dt)
+        } else {
+            Vector::ZERO
+        };
+        let mut pose = self.animator.step(
+            &self.parts,
+            &Inputs {
+                now: self.now,
+                dt,
+                idle: o.idle && !o.reduced,
+                reduced: o.reduced,
+                pressed: self.press.as_ref().is_some_and(|p| !p.dragging),
+                dragging,
+                velocity,
+            },
+        );
+        // Counter-rotate the gaze into the head's space so it stays
+        // directional while the head tilts.
+        let (s, c) = (-self.rig.head_angle(&pose)).sin_cos();
+        let g = self.gaze;
+        pose.gaze = Vector::new(g.x * c - g.y * s, g.x * s + g.y * c);
+        self.pose = pose;
+    }
+
+    /// Ends a press: a short one is a click the character reacts to, a drag
+    /// saves the spot. The menu is on the right button.
     fn release(&mut self) -> Option<(f64, f64)> {
         let press = self.press.take()?;
         if press.dragging {
             return Some((self.anchor.0 as f64, self.anchor.1 as f64));
         }
-        self.menu = match self.menu {
-            Some(_) => None,
-            None => Some(self.side()),
-        };
+        self.menu = None;
+        self.animator.clicked(self.now);
         None
     }
 
@@ -521,7 +569,7 @@ impl Desktop {
         }
         let settling = {
             let d = self.target - self.gaze;
-            d.x.hypot(d.y) > 0.01 || self.squash > 0.01
+            d.x.hypot(d.y) > 0.01 || self.animator.settling()
         };
         Some(Duration::from_millis(if self.press.is_some() {
             16
@@ -573,10 +621,8 @@ impl Desktop {
             }
         };
         let mut items = Some(items);
-        let stage = canvas_widget(Stage {
-            desktop: self,
-            motion: super::motion(self.now, o.idle && !o.reduced, false, 0.0),
-        })
+        let _ = o;
+        let stage = canvas_widget(Stage { desktop: self })
         .width(l.character.width)
         .height(Length::Fill);
         row![
@@ -612,7 +658,6 @@ fn menu_row(item: Item) -> Element<'static, Message> {
 
 struct Stage<'a> {
     desktop: &'a Desktop,
-    motion: super::Motion,
 }
 
 impl Stage<'_> {
@@ -639,6 +684,11 @@ impl canvas::Program<Message> for Stage<'_> {
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) if over => {
                 Some(canvas::Action::publish(Message::Mascot(Msg::Pressed)).and_capture())
             }
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right))
+                if over && self.desktop.press.is_none() =>
+            {
+                Some(canvas::Action::publish(Message::Mascot(Msg::Menu)).and_capture())
+            }
             canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
                 if self.desktop.press.is_some() =>
             {
@@ -658,23 +708,23 @@ impl canvas::Program<Message> for Stage<'_> {
     ) -> Vec<Geometry> {
         let d = self.desktop;
         let l = &d.layout;
-        let m = &self.motion;
+        let pose = &d.pose;
         let mut frame = Frame::new(renderer, bounds.size());
-        frame.translate(Vector::new(0.0, l.character.y + m.bounce * l.scale));
+        frame.translate(Vector::new(0.0, l.character.y));
         frame.scale(l.scale);
-        if d.squash > 0.001 {
-            // Wider and shorter, with the feet still on the ground.
+        if pose.squash > 0.001 || pose.lean.abs() > 0.0005 {
+            // Lean while carried, squash when pressed: both around the
+            // feet, so they stay on the ground.
             let feet = d.rig.anchor();
             frame.translate(Vector::new(feet.x, feet.y));
-            frame.scale_nonuniform(Vector::new(1.0 + 0.06 * d.squash, 1.0 - 0.08 * d.squash));
+            frame.rotate(pose.lean);
+            frame.scale_nonuniform(Vector::new(
+                1.0 + 0.06 * pose.squash,
+                1.0 - 0.08 * pose.squash,
+            ));
             frame.translate(Vector::new(-feet.x, -feet.y));
         }
-        // Counter-rotate the gaze into the head's space so it stays
-        // directional while the neck tilts.
-        let (s, c) = (-m.head).sin_cos();
-        let g = d.gaze;
-        let gaze = Vector::new(g.x * c - g.y * s, g.x * s + g.y * c);
-        d.rig.draw(&mut frame, gaze, m.head, m.tail, m.blink);
+        d.rig.draw_pose(&mut frame, pose);
         vec![frame.into_geometry()]
     }
 

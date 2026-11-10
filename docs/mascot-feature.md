@@ -33,7 +33,7 @@ Custom art may use any style; the importer does not enforce Yohta's proportions.
 | Action | Behaviour |
 | --- | --- |
 | Enable | Show the selected character in a small transparent desktop window. Default disabled until the user chooses it. |
-| Click | A left click plays the character's click reaction and may show a speech line. Until click reactions exist (character creation step 2), left click opens the menu. |
+| Click | A left click plays the character's click reaction (pressed face and a squash) and, once lines exist, may show a speech line. |
 | Right click | Open a compact menu beside the character. Another right click, Escape or an outside click dismisses it. Closing the menu does not disable the character. |
 | Drag | Move after approximately 5 logical pixels of movement. A drag never also opens the menu. Keep the character reachable on a connected display. |
 | Menu | Offer the existing annotation On/Off, Settings and Mute controls, plus character/pose selection and Hide character. Dispatch app actions through the existing registry and respect their availability. |
@@ -305,9 +305,7 @@ Implemented on Windows, 11 November 2026 (step 1 of the
 
 - **Packs.** `src/mascot/pack.rs` loads `character.json` folders from
   `%APPDATA%\TinyPaw\characters\<id>` using the version 1 manifest above.
-  Each pose currently renders its `body` image only; a manifest declaring
-  `head`, `tail`, `eyes` or `parts` is rejected with a message that moving
-  parts arrive later. Every install is written to a hidden staging folder,
+  Every install is written to a hidden staging folder,
   validated there (canvas size, alpha, paths inside the folder, 64 MiB per
   file) and only then moved into place.
 - **Selection.** `mascot.character` (default `yohta`) chooses the character;
@@ -324,9 +322,72 @@ Implemented on Windows, 11 November 2026 (step 1 of the
 - **Desktop.** The window layout, hit test and placement use each character's
   own canvas and ground point. A single image sways gently and squashes on
   press; reduced motion turns both off.
-- **Not yet.** Yohta's own art still comes from the concept sheet rather than
-  a pack folder, so he can't be exported; that moves with layered parts in
-  step 2.
+
+### Stage 2 progress: moving parts and reactions
+
+Step 2a of the character creation plan, 11 November 2026. A pose can now
+name separate PNGs for moving parts, eyes and head faces, all on the pose's
+canvas. A body-only pose still renders as one image.
+
+```json
+"sit": {
+  "ground_anchor": [0.5, 0.95],
+  "body": "sit/body.png",
+  "parts": [
+    { "type": "head", "image": "sit/head.png", "pivot": [0.43, 0.61],
+      "motion": { "preset": "tilt", "strength": 1, "speed": 1 },
+      "expressions": { "blink": "sit/head-blink.png",
+                       "pressed": "sit/head-pressed.png",
+                       "dragging": "sit/head-drag.png" } },
+    { "type": "tail", "image": "sit/tail.png", "pivot": [0.65, 0.72],
+      "motion": { "preset": "wag" } },
+    { "type": "ear", "image": "sit/ear.png", "pivot": [0.38, 0.30],
+      "parent": "head", "layer": "back", "motion": { "preset": "floppy" } }
+  ],
+  "eyes": [
+    { "white": "sit/eye-white.png", "pupil": "sit/eye-pupil.png",
+      "mask": "sit/eye-mask.png", "blink": "sit/eye-blink.png",
+      "max_offset": [0.012, 0.009] }
+  ]
+}
+```
+
+| Field | Rule |
+| --- | --- |
+| `type` | `head`, `tail`, `ear`, `wing`, `hair` or `other`. At most one head. |
+| `pivot` | Attachment point, fractions of the canvas. The part rotates around it. |
+| `parent` | `head` makes the part ride on the head (one level only); omitted or `body` is top level. |
+| `layer` | `back` or `front` of its parent. Default: tails, wings and ears back; others front. |
+| `motion` | `preset` per type (below); `strength` and `speed` 0–2, default 1. |
+| `expressions` | Head only: `blink`, `pressed`, `dragging` faces. A missing face uses the head. Pressed and dragging faces have their eyes painted in, so tracking eyes hide under them. |
+| `eyes` | Need a head. The pupil is clipped to the mask's alpha and travels up to `max_offset` (at most 0.1 of the canvas). |
+
+The `head` and `tail` objects from the version 1 example above are accepted
+as shorthand for parts. Limits: 16 parts, 4 eyes, 32 images per pack.
+
+| Type | Presets (first is the default) |
+| --- | --- |
+| head | tilt, nod, still |
+| tail | sway, wag, hang, still |
+| ear | twitch, floppy, still |
+| wing | flap, fold |
+| hair | spring, still |
+| other | still, sway, spring |
+
+- **Motion.** `src/mascot/motion.rs` steps every part from elapsed time.
+  Floppy, spring and hang parts follow a damped spring, lag behind a turning
+  parent, and swing when the drag speeds up or stops.
+- **Reactions.** A left click shows the pressed face for about a third of a
+  second, with a squash while held. Dragging shows the dragging face; the
+  character leans against the motion, tails trail and ears droop, then
+  everything settles after the drop. Blinks use the blink face or eye blinks.
+- **Menu.** The right button opens the menu; Escape or any outside click closes
+  it. Left click no longer opens it.
+- **Reduced motion** stops idle motion, springs, lean and squash; faces still
+  change.
+- **Not yet.** Building a layered character inside Settings (step 2b), the
+  Motion tab (2c), and Yohta as a pack folder (2d). Until 2d, Yohta's art comes
+  from the concept sheet and he can't be exported.
 
 Completion checks:
 

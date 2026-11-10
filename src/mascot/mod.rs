@@ -3,6 +3,7 @@
 //! starts no hooks, capture, tray or audio device. Both share the rig.
 #[cfg(windows)]
 pub mod desktop;
+pub mod motion;
 pub mod pack;
 pub mod rig;
 
@@ -15,6 +16,8 @@ pub enum Msg {
     /// Cursor, drag and hit-test polling while visible.
     Poll,
     Native(isize),
+    /// Right button pressed on visible artwork: toggle the menu.
+    Menu,
     /// A menu entry that runs a registered command.
     Command(&'static str),
     /// Open Settings on the Character page.

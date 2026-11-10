@@ -1357,7 +1357,7 @@ fn character_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Ele
             h2("Characters"),
             cards.wrap().vertical_spacing(8).into(),
             manage.into(),
-            hint("Add character takes one transparent PNG. Import folder takes a character.json folder, like one made with Export."),
+            hint("Add character takes one transparent PNG. Import folder takes a character.json folder with a body and optional moving parts, like one made with Export."),
         ]),
     ]
     .spacing(22)
@@ -1403,7 +1403,7 @@ fn character_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Ele
                 mascot::ENABLED,
             ),
             hint(format!(
-                "Click {name} for a quick menu and drag to move. It stays while annotation is off and steps aside while you draw. The tray menu can show or hide it."
+                "Right-click {name} for its menu, click to see it react, and drag to move it. It stays while annotation is off and steps aside while you draw."
             )),
         ]))
         .push(section(vec![
@@ -1478,7 +1478,7 @@ fn new_character<'a>(draft: &'a crate::mascot::pack::Draft) -> Element<'a, Messa
                 value: theme::TEXT,
                 selection: theme::CYAN_BG,
             }),
-        hint("A single image clicks, drags and sways as one piece. Moving parts come later."),
+        hint("A single image reacts and sways as one piece. For moving parts, import a character folder with separate head, tail or ear PNGs."),
         row![
             button(text("Cancel").size(13).width(Length::Fill).center())
                 .width(Length::Fill)
