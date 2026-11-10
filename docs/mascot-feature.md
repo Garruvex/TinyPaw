@@ -6,6 +6,9 @@ implemented on Windows as of 11 November 2026; see
 the standing pose and music (stage 3) do not exist yet. The
 [Yohta prototype](mascot-prototype.md) preview window remains for rig work.
 
+See [MateEngine/BUG Clicker research and the Yohta artwork plan](mascot-engine-study-2026-11-11.md)
+for the source review, Windows input strategy and production asset checklist.
+
 ## Goal
 
 Add a small optional character to the desktop that animates, reacts to simple
@@ -385,9 +388,26 @@ as shorthand for parts. Limits: 16 parts, 4 eyes, 32 images per pack.
   it. Left click no longer opens it.
 - **Reduced motion** stops idle motion, springs, lean and squash; faces still
   change.
-- **Not yet.** Building a layered character inside Settings (step 2b), the
-  Motion tab (2c), and Yohta as a pack folder (2d). Until 2d, Yohta's art comes
-  from the concept sheet and he can't be exported.
+- **Art tab (2b).** **Edit art** on an installed character opens it in
+  Settings: replace the body, add part PNGs (the type is guessed from the file
+  name), set each part's type, *On head* and Back/Front, add the head's blink,
+  pressed and dragging faces, and add eyes (white, pupil, mask, optional
+  blink, pupil travel). A pinned preview shows the character at rest with the
+  ground and numbered pivot markers; clicking moves the selected one. **Save**
+  writes a fresh pack through the staged install and replaces the old copy
+  only after it validates; the desktop reloads it at once.
+- **Lining up parts.** Quick import records how it cut the canvas from the
+  original PNG (`"source": {"size": [w, h], "visible": [x, y, w, h]}`), so a
+  part drawn on that original canvas is cut and scaled the same way. Parts at
+  the character's own canvas size are used as they are; other sizes are
+  refused with both sizes named.
+- **Planned import improvement.** The matching-canvas rule above describes the
+  current editor and remains the prepared pack format. The
+  [cropped-parts improvement plan](character-creation-plan.md#improvement-import-and-arrange-cropped-parts)
+  adds differently sized PNG inputs, visual arrangement and automatic canvas
+  preparation on Save, with complete eyes supported as static head layers.
+- **Not yet.** The Motion tab (2c) and Yohta as a pack folder (2d). Until 2d,
+  Yohta's art comes from the concept sheet and he can't be edited or exported.
 
 Completion checks:
 
