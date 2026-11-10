@@ -233,6 +233,285 @@ impl Drop for Lens {
     }
 }
 
+/// Magnifies the desktop under the cursor, whichever app is there. It is a
+/// small round click-through window that never activates, holding a Windows
+/// Magnifier control. It follows the cursor across monitors on its own timer,
+/// so it works with annotation on or off. TinyPaw's own surfaces are filtered
+/// out of the magnified image only, so a monitor share still shows the paw
+/// and ink.
+pub struct DesktopLens {
+    host: isize,
+    state: Box<LensState>,
+    excluded: Vec<isize>,
+}
+
+/// What the lens window's timer reads each frame.
+struct LensState {
+    magnifier: isize,
+    /// Logical diameter and zoom, set by the app.
+    size: f32,
+    zoom: f32,
+    /// What the native control currently has, to skip redundant calls.
+    applied_zoom: f32,
+    shaped: i32,
+}
+
+/// Lens frame thickness in logical pixels, drawn by the host's background.
+const LENS_BORDER: f32 = 2.0;
+/// Gap between the cursor and the lens, in logical pixels.
+const LENS_GAP: f32 = 24.0;
+const LENS_TIMER: usize = 1;
+/// Refresh period: the magnifier only repaints when invalidated.
+const LENS_FRAME_MS: u32 = 16;
+
+impl DesktopLens {
+    pub fn new(size: f32, zoom: f32) -> Result<Self, String> {
+        use std::sync::OnceLock;
+        use windows_sys::Win32::Graphics::Gdi::CreateSolidBrush;
+        use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows_sys::Win32::UI::Magnification::{MagInitialize, WC_MAGNIFIER};
+        use windows_sys::Win32::UI::WindowsAndMessaging::*;
+        const CLASS: windows_sys::core::PCWSTR = windows_sys::core::w!("TinyPawDesktopLens");
+        // Initialised once per process; the windows below are per activation.
+        static READY: OnceLock<Result<(), String>> = OnceLock::new();
+        READY
+            .get_or_init(|| unsafe {
+                if MagInitialize() == 0 {
+                    return Err("the Windows magnifier could not start".into());
+                }
+                let class = WNDCLASSW {
+                    lpfnWndProc: Some(lens_proc),
+                    hInstance: GetModuleHandleW(std::ptr::null()),
+                    lpszClassName: CLASS,
+                    // The frame colour shows as a ring around the magnifier.
+                    hbrBackground: CreateSolidBrush(0x0050_4A46),
+                    ..std::mem::zeroed()
+                };
+                if RegisterClassW(&class) == 0 {
+                    return Err("the lens window class could not be registered".into());
+                }
+                Ok(())
+            })
+            .clone()?;
+        unsafe {
+            let instance = GetModuleHandleW(std::ptr::null());
+            let host = CreateWindowExW(
+                WS_EX_TOPMOST
+                    | WS_EX_LAYERED
+                    | WS_EX_TRANSPARENT
+                    | WS_EX_TOOLWINDOW
+                    | WS_EX_NOACTIVATE,
+                CLASS,
+                std::ptr::null(),
+                WS_POPUP,
+                0,
+                0,
+                1,
+                1,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                instance,
+                std::ptr::null(),
+            );
+            if host.is_null() {
+                return Err("the lens window could not be created".into());
+            }
+            // The magnifier needs a layered host; fully opaque.
+            SetLayeredWindowAttributes(host, 0, 255, LWA_ALPHA);
+            let magnifier = CreateWindowExW(
+                0,
+                WC_MAGNIFIER,
+                std::ptr::null(),
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                1,
+                1,
+                host,
+                std::ptr::null_mut(),
+                instance,
+                std::ptr::null(),
+            );
+            if magnifier.is_null() {
+                DestroyWindow(host);
+                return Err("the magnifier control could not be created".into());
+            }
+            let mut state = Box::new(LensState {
+                magnifier: magnifier as isize,
+                size,
+                zoom,
+                applied_zoom: 0.0,
+                shaped: 0,
+            });
+            SetWindowLongPtrW(host, GWLP_USERDATA, &mut *state as *mut LensState as isize);
+            let mut lens = Self {
+                host: host as isize,
+                state,
+                excluded: Vec::new(),
+            };
+            lens.set_excluded(&[])?;
+            lens_tick(host, &mut lens.state);
+            SetTimer(host, LENS_TIMER, LENS_FRAME_MS, None);
+            Ok(lens)
+        }
+    }
+
+    /// Updates size and zoom, and the TinyPaw windows to leave out of the
+    /// magnified image. Placement follows the cursor by itself.
+    pub fn configure(&mut self, size: f32, zoom: f32, exclude: &[isize]) -> Result<(), String> {
+        self.state.size = size;
+        self.state.zoom = zoom;
+        if exclude != self.excluded.as_slice() {
+            self.set_excluded(exclude)?;
+        }
+        Ok(())
+    }
+
+    fn set_excluded(&mut self, exclude: &[isize]) -> Result<(), String> {
+        use windows_sys::Win32::Foundation::HWND;
+        use windows_sys::Win32::UI::Magnification::*;
+        let mut list: Vec<HWND> = exclude
+            .iter()
+            .chain(std::iter::once(&self.host))
+            .map(|&h| h as HWND)
+            .collect();
+        let ok = unsafe {
+            MagSetWindowFilterList(
+                self.state.magnifier as HWND,
+                MW_FILTERMODE_EXCLUDE,
+                list.len() as i32,
+                list.as_mut_ptr(),
+            )
+        };
+        if ok == 0 {
+            return Err("TinyPaw could not keep itself out of the lens".into());
+        }
+        self.excluded = exclude.to_vec();
+        Ok(())
+    }
+}
+
+impl Drop for DesktopLens {
+    fn drop(&mut self) {
+        use windows_sys::Win32::UI::WindowsAndMessaging::*;
+        unsafe {
+            KillTimer(self.host as _, LENS_TIMER);
+            // The timer no longer reads the state once this is cleared.
+            SetWindowLongPtrW(self.host as _, GWLP_USERDATA, 0);
+            // Destroys the magnifier child with it.
+            DestroyWindow(self.host as _);
+        }
+    }
+}
+
+/// One frame: centre the source on the cursor, place the round lens beside
+/// it on the cursor's monitor, and repaint.
+fn lens_tick(host: windows_sys::Win32::Foundation::HWND, state: &mut LensState) {
+    use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
+    use windows_sys::Win32::Graphics::Gdi::*;
+    use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+    use windows_sys::Win32::UI::Magnification::*;
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+    unsafe {
+        let mut cursor: POINT = std::mem::zeroed();
+        if GetCursorPos(&mut cursor) == 0 {
+            return;
+        }
+        let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = size_of::<MONITORINFO>() as u32;
+        if GetMonitorInfoW(monitor, &mut info) == 0 {
+            return;
+        }
+        let (mut dpi, mut dpi_y) = (96u32, 96u32);
+        GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi, &mut dpi_y);
+        let k = dpi.max(96) as f32 / 96.0;
+        let side = (state.size * k).round().max(8.0) as i32;
+        let border = (LENS_BORDER * k).round() as i32;
+        let inner = (side - 2 * border).max(1);
+        let area = info.rcMonitor;
+
+        // Beside the cursor, flipping to stay on its monitor.
+        let gap = (LENS_GAP * k) as i32;
+        let x = if cursor.x + gap + side <= area.right {
+            cursor.x + gap
+        } else {
+            cursor.x - gap - side
+        }
+        .clamp(area.left, (area.right - side).max(area.left));
+        let y = if cursor.y + gap + side <= area.bottom {
+            cursor.y + gap
+        } else {
+            cursor.y - gap - side
+        }
+        .clamp(area.top, (area.bottom - side).max(area.top));
+        let magnifier = state.magnifier as HWND;
+        SetWindowPos(host, HWND_TOPMOST, x, y, side, side, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        SetWindowPos(
+            magnifier,
+            std::ptr::null_mut(),
+            border,
+            border,
+            inner,
+            inner,
+            SWP_NOACTIVATE | SWP_NOZORDER,
+        );
+        // Round: the host is clipped to a circle and the magnifier to a
+        // smaller one, so the host's background shows as a ring. Each window
+        // owns the region it is given.
+        if side != state.shaped {
+            SetWindowRgn(host, CreateEllipticRgn(0, 0, side + 1, side + 1), 1);
+            SetWindowRgn(magnifier, CreateEllipticRgn(0, 0, inner + 1, inner + 1), 1);
+            state.shaped = side;
+        }
+        if (state.zoom - state.applied_zoom).abs() > f32::EPSILON {
+            let mut transform = MAGTRANSFORM {
+                v: [state.zoom, 0.0, 0.0, 0.0, state.zoom, 0.0, 0.0, 0.0, 1.0],
+            };
+            if MagSetWindowTransform(magnifier, &mut transform) != 0 {
+                state.applied_zoom = state.zoom;
+            }
+        }
+        // Source: the area under the cursor, scaled into the inner circle.
+        let crop = ((inner as f32 / state.zoom.max(1.0)).round() as i32).max(1);
+        let left = cursor.x - crop / 2;
+        let top = cursor.y - crop / 2;
+        MagSetWindowSource(
+            magnifier,
+            RECT {
+                left,
+                top,
+                right: left + crop,
+                bottom: top + crop,
+            },
+        );
+        InvalidateRect(magnifier, std::ptr::null(), 0);
+    }
+}
+
+unsafe extern "system" fn lens_proc(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    msg: u32,
+    w: usize,
+    l: isize,
+) -> isize {
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+    unsafe {
+        match msg {
+            WM_TIMER if w == LENS_TIMER => {
+                let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut LensState;
+                if let Some(state) = state.as_mut() {
+                    lens_tick(hwnd, state);
+                }
+                0
+            }
+            WM_MOUSEACTIVATE => MA_NOACTIVATE as isize,
+            WM_NCHITTEST => HTTRANSPARENT as isize,
+            _ => DefWindowProcW(hwnd, msg, w, l),
+        }
+    }
+}
+
 /// A hidden top-level notification window survives click-through sessions with
 /// no marks. Message-only windows do not receive power/display broadcasts.
 pub fn start_notifications() {

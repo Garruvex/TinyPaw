@@ -563,37 +563,65 @@ fn annotation_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         ink_row = ink_row.push(super::match_pointer(accent, current_ink));
     }
     #[cfg(windows)]
-    let source_picker: Element<'a, Message> = column![
-        h2("Lens source window"),
-        pick_list(
-            v.sources.to_vec(),
-            v.sources
-                .iter()
-                .find(|source| source.id == s.choice(crate::features::upcoming::SOURCE))
-                .cloned(),
-            |source| Message::Set(crate::features::upcoming::SOURCE, Value::Choice(source.id))
-        )
-        .placeholder("Window active before TinyPaw")
-        .padding([8, 12])
-        .text_size(13)
-        .width(Length::Fill)
-        .style(theme::select),
-        row![
-            button("Refresh windows")
-                .style(theme::secondary)
-                .on_press(Message::Ui(UiMsg::RefreshSources)),
-            button("Use foreground")
-                .style(theme::secondary)
-                .on_press(Message::Set(
-                    crate::features::upcoming::SOURCE,
-                    Value::Choice("foreground")
-                ))
+    let source_picker: Element<'a, Message> = {
+        use crate::features::upcoming::{DESKTOP, FOREGROUND, SOURCE};
+        let source = s.choice(SOURCE);
+        let desktop = source == DESKTOP;
+        let mode = |label: &'static str, on: bool, value: &'static str| {
+            button(text(label).size(13))
+                .padding([7, 12])
+                .style(theme::segment(on))
+                .on_press(Message::Set(SOURCE, Value::Choice(value)))
+        };
+        let mut picker = column![
+            h2("Lens source"),
+            container(
+                row![
+                    mode("Desktop under pointer", desktop, DESKTOP),
+                    // Locking starts from the window you were using.
+                    mode("Lock to a window", !desktop, if desktop { FOREGROUND } else { source }),
+                ]
+                .spacing(4)
+            )
+            .padding(4)
+            .style(theme::fill(theme::WELL, 10.0)),
         ]
-        .spacing(8),
-        hint("Window capture keeps TinyPaw out of the lens. Use a borderless or windowed game."),
-    ]
-    .spacing(8)
-    .into();
+        .spacing(8);
+        picker = if desktop {
+            picker.push(hint(
+                "Magnifies whatever app is under the paw. TinyPaw stays out of the lens but still shows in a screen share.",
+            ))
+        } else {
+            picker
+                .push(
+                    pick_list(
+                        v.sources.to_vec(),
+                        v.sources.iter().find(|w| w.id == source).cloned(),
+                        |w| Message::Set(SOURCE, Value::Choice(w.id)),
+                    )
+                    .placeholder("Window active before TinyPaw")
+                    .padding([8, 12])
+                    .text_size(13)
+                    .width(Length::Fill)
+                    .style(theme::select),
+                )
+                .push(
+                    row![
+                        button("Refresh windows")
+                            .style(theme::secondary)
+                            .on_press(Message::Ui(UiMsg::RefreshSources)),
+                        button("Use foreground")
+                            .style(theme::secondary)
+                            .on_press(Message::Set(SOURCE, Value::Choice(FOREGROUND))),
+                    ]
+                    .spacing(8),
+                )
+                .push(hint(
+                    "Shows one window wherever the paw is. Use a borderless or windowed game.",
+                ))
+        };
+        picker.into()
+    };
     #[cfg(not(windows))]
     let source_picker: Element<'a, Message> = hint("Lens capture is available on Windows.");
     let label_swatches = row([

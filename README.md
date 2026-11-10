@@ -12,7 +12,7 @@ Working on Windows:
 - **Quick bar and wheel:** the Graphite quick bar holds Pointer, Text, Pin, ink, Undo and End annotation, with Spotlight, Lens, Freeze, Clear marks and tap mute under **More**. Tooltips show shortcuts. The quick wheel opens with a held **Ctrl+Alt+W**; its up-left wedge is Undo, so a mis-flick can't wipe your marks.
 - **Settings window:** Pointer (with a live preview that stays in view), Character, Annotation, Controls, Display and Tap sounds pages, and an Annotation switch in the header. Choices are saved to `%APPDATA%\TinyPaw\preferences.json`.
 - **Activation:** Toggle and Hold-to-draw styles, a tray menu, a first-run card, and a CLI that forwards to the running instance.
-- **Tools:** Text labels (IME-aware: the first Enter accepts a candidate, the next places the label), numbered Pins, Spotlight, and Freeze (**Ctrl+Alt+F**) to draw on a still of the screen, with Return Live. Lens shows a live 2× or 4× window crop; choose its source under Annotation → Lens → Advanced or activate from the target game window.
+- **Tools:** Text labels (IME-aware: the first Enter accepts a candidate, the next places the label), numbered Pins, Spotlight, and Freeze (**Ctrl+Alt+F**) to draw on a still of the screen, with Return Live. Lens magnifies 2× or 4× in a round lens beside the pointer. Under Annotation → Lens → Advanced choose **Desktop under pointer** (whatever app is under the paw; TinyPaw stays out of the lens but not out of a screen share) or **Lock to a window**. **Ctrl+Alt+L** shows the desktop lens anywhere, with annotation on or off.
 
 - **Pointer packs:** built-in packs ship inside the executable. **Add yours** (Settings > Pointer) imports a transparent paw PNG. Click the tip, adjust the amber wrist marker with the position sliders, and optionally add a matching forearm PNG. Click its upper wrist joint, adjust the forearm width, and move or press in the pair preview before saving. Both images and their alignment are saved together in `%APPDATA%\TinyPaw\packs`. Copyable art prompts are on the Pointer page. To build a pack from large source art, run `python tools/prepare_pack.py`.
 
@@ -41,12 +41,16 @@ TinyPaw starts Off in the tray. Left-click the tray icon, tick **Annotation enab
 | Ctrl+Alt+P | Master On/Off |
 | Click | Tap with the paw |
 | Drag | Draw |
-| Ctrl+Z / X | Undo / Clear |
-| Escape | Exit (switches Off and clears marks) |
+| Ctrl+Z / X | Undo / Clear marks |
+| P / R | Paw / Laser |
+| T / N / S / L | Text / Pin / Spotlight / Lens |
+| M | Mute or unmute the tap sound |
+| Escape | End annotation (switches Off and clears marks) |
 | Alt (held, from Point) | Interact with the app underneath; marks stay visible |
 | Ctrl+Alt+D (held) | Point and draw in Hold-to-draw mode |
 | Ctrl+Alt+W (held) | Quick wheel: point at a tool, release to pick |
 | Ctrl+Alt+F | Freeze the screen and draw on the still; again to return live |
+| Ctrl+Alt+L | Lens anywhere: show or hide the desktop lens, annotating or not |
 
 ## CLI
 

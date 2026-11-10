@@ -95,6 +95,15 @@ pub struct App {
     alt_down: bool,
     #[cfg(windows)]
     lens: Option<platform::windows::Lens>,
+    /// The desktop lens while it is in use.
+    #[cfg(windows)]
+    desktop_lens: Option<platform::windows::DesktopLens>,
+    /// Why the desktop lens failed this activation; the window lens is used
+    /// until Lens is next selected.
+    #[cfg(windows)]
+    desktop_lens_failed: bool,
+    /// The lens is on by its global shortcut, with annotation on or off.
+    lens_anywhere: bool,
     /// The desktop character window, while enabled.
     #[cfg(windows)]
     mascot: Option<crate::mascot::desktop::Desktop>,
@@ -207,6 +216,11 @@ impl App {
             alt_down: false,
             #[cfg(windows)]
             lens: None,
+            #[cfg(windows)]
+            desktop_lens: None,
+            #[cfg(windows)]
+            desktop_lens_failed: false,
+            lens_anywhere: false,
             #[cfg(windows)]
             mascot: None,
             #[cfg(windows)]
@@ -336,12 +350,12 @@ impl App {
             }
             Message::External(External::Hotkey { id, pressed }) => {
                 if let Some(cmd) = self.hotkeys.as_ref().and_then(|h| h.command(id)) {
-                    let result = if pressed {
-                        self.registry.dispatch(cmd, &mut self.session, now).ok()
+                    if pressed {
+                        self.run(cmd, now, &mut out);
                     } else {
-                        self.registry.dispatch_release(cmd, &mut self.session, now)
-                    };
-                    out.collect(result);
+                        let result = self.registry.dispatch_release(cmd, &mut self.session, now);
+                        out.collect(result);
+                    }
                 }
             }
             Message::External(External::Menu(id)) => {
@@ -357,10 +371,7 @@ impl App {
             }
             Message::Command(id) => {
                 self.ui.close_menus();
-                out.collect(self.dispatch(id, now).ok());
-                if id == point::USE_PAW || id == point::USE_LASER {
-                    out.collect(self.dispatch(point::SELECT, now).ok());
-                }
+                self.run(id, now, &mut out);
             }
             Message::Set(id, value) => out.sets.push((id, value)),
             Message::Mascot(msg) => self.mascot_message(msg, now, &mut out, &mut tasks),
@@ -508,7 +519,8 @@ impl App {
                     } else if escape && (self.ui.wheel.take().is_some() || self.ui.close_menus()) {
                         // Escape closes the wheel or a menu before it exits.
                     } else if let Some(cmd) = self.overlay_shortcut(&key, modifiers) {
-                        out.collect(self.dispatch(cmd, now).ok());
+                        self.ui.close_menus();
+                        self.run(cmd, now, &mut out);
                     }
                 }
             }
@@ -651,6 +663,7 @@ impl App {
                 ShellAction::OpenSettings => tasks.push(self.open_settings()),
                 ShellAction::WheelOpen => self.open_wheel(now),
                 ShellAction::WheelClose => self.close_wheel(now, &mut out),
+                ShellAction::ToggleLens => self.lens_anywhere = !self.lens_anywhere,
             }
         }
         for (id, value) in std::mem::take(&mut out.sets) {
@@ -1110,11 +1123,7 @@ impl App {
             return;
         };
         if let Some(i) = state.hover {
-            let cmd = wheel::ITEMS[i].command;
-            out.collect(self.dispatch(cmd, now).ok());
-            if cmd == point::USE_PAW || cmd == point::USE_LASER {
-                out.collect(self.dispatch(point::SELECT, now).ok());
-            }
+            self.run(wheel::ITEMS[i].command, now, out);
         }
     }
 
@@ -1148,6 +1157,8 @@ impl App {
         #[cfg(windows)]
         if id == crate::features::upcoming::SOURCE {
             self.lens = None;
+            self.desktop_lens = None;
+            self.desktop_lens_failed = false;
         }
         #[cfg(not(windows))]
         if id == character::ENABLED && value == Value::Bool(true) {
@@ -1221,6 +1232,15 @@ impl App {
         // Renderer teardown can hang on Windows after the overlay closed
         // (seen with iced 0.14); nothing else needs flushing.
         std::process::exit(0);
+    }
+
+    /// Runs a command the way every surface does: picking the paw or laser
+    /// also switches to Point, so a key behaves like a click.
+    fn run(&mut self, id: &str, now: Millis, out: &mut Outcomes) {
+        out.collect(self.dispatch(id, now).ok());
+        if id == point::USE_PAW || id == point::USE_LASER {
+            out.collect(self.dispatch(point::SELECT, now).ok());
+        }
     }
 
     fn dispatch(&mut self, id: &str, now: Millis) -> Result<Dispatched, Unavailable> {
@@ -1393,14 +1413,75 @@ impl App {
     }
 
     fn update_lens(&mut self, now: Millis, out: &mut Outcomes) {
-        let wanted = self.session.is_pointing()
+        // The still covers the desktop while frozen, and capture must not
+        // see the lens, so neither lens shows then.
+        let clear = !self.session.capturing() && self.session.frozen_frame().is_none();
+        let tool = self.session.is_pointing()
             && self.session.active_tool() == crate::features::upcoming::TOOL
-            && !self.session.capturing()
-            && self.session.frozen_frame().is_none();
+            && clear;
+        let anywhere = self.lens_anywhere && clear;
         #[cfg(windows)]
         {
-            if !wanted {
+            use crate::features::upcoming;
+            if !tool {
                 self.lens = None;
+            }
+            if !tool && !anywhere {
+                self.desktop_lens = None;
+                self.desktop_lens_failed = false;
+                return;
+            }
+            let s = self.session.settings();
+            let size = s.float(upcoming::SIZE) as f32;
+            let zoom = if s.choice(upcoming::ZOOM) == "4" { 4.0 } else { 2.0 };
+
+            // The desktop lens follows the cursor by itself. It serves Lens
+            // anywhere, and the Lens tool when its source is the desktop.
+            let desktop = anywhere || s.choice(upcoming::SOURCE) == upcoming::DESKTOP;
+            if desktop && !self.desktop_lens_failed {
+                // TinyPaw's overlays and character stay out of the lens.
+                let mut exclude: Vec<isize> = self
+                    .overlays
+                    .iter()
+                    .map(|o| o.hwnd)
+                    .filter(|&h| h != 0)
+                    .collect();
+                if let Some(h) = self.mascot.as_ref().map(|m| m.hwnd()).filter(|&h| h != 0) {
+                    exclude.push(h);
+                }
+                let result = match self.desktop_lens.as_mut() {
+                    Some(lens) => lens.configure(size, zoom, &exclude),
+                    None => platform::windows::DesktopLens::new(size, zoom).and_then(|mut lens| {
+                        let r = lens.configure(size, zoom, &exclude);
+                        self.desktop_lens = Some(lens);
+                        r
+                    }),
+                };
+                match result {
+                    Ok(()) => {
+                        self.lens = None;
+                        return;
+                    }
+                    Err(why) => {
+                        self.desktop_lens = None;
+                        self.desktop_lens_failed = true;
+                        if anywhere && !tool {
+                            // Nothing to fall back to without the overlay.
+                            self.lens_anywhere = false;
+                            self.notice = Some(format!("Lens unavailable: {why}"));
+                            self.overlay_notice = Some((format!("Lens unavailable: {why}"), now));
+                            return;
+                        }
+                        // Offer the window lens with the reason.
+                        self.overlay_notice = Some((
+                            format!("Desktop lens unavailable: {why}. Using the window lens."),
+                            now,
+                        ));
+                    }
+                }
+            }
+            self.desktop_lens = None;
+            if !tool {
                 return;
             }
             let output = self.session.pointer().map(|(o, _)| o);
@@ -1423,28 +1504,17 @@ impl App {
                 if self.lens.is_none() {
                     self.lens = Some(platform::windows::Lens::new(
                         o.hwnd,
-                        if self
-                            .session
-                            .settings()
-                            .choice(crate::features::upcoming::SOURCE)
-                            == "foreground"
-                        {
+                        if matches!(
+                            self.session.settings().choice(upcoming::SOURCE),
+                            upcoming::FOREGROUND | upcoming::DESKTOP
+                        ) {
                             self.previous_focus.ok_or("Select a game window before turning on TinyPaw, or choose a Lens source in Settings")?
                         } else {
-                            self.sources.iter().find(|s| s.id == self.session.settings().choice(crate::features::upcoming::SOURCE)).map(|s| s.handle).ok_or("Lens source is no longer available; refresh the source list in Settings")?
+                            self.sources.iter().find(|s| s.id == self.session.settings().choice(upcoming::SOURCE)).map(|s| s.handle).ok_or("Lens source is no longer available; refresh the source list in Settings")?
                         },
                     )?);
                 }
-                let s = self.session.settings();
-                self.lens.as_ref().unwrap().update(
-                    &o.display,
-                    s.float(crate::features::upcoming::SIZE) as f32,
-                    if s.choice(crate::features::upcoming::ZOOM) == "4" {
-                        4.0
-                    } else {
-                        2.0
-                    },
-                )
+                self.lens.as_ref().unwrap().update(&o.display, size, zoom)
             })();
             if let Err(e) = result {
                 self.lens = None;
@@ -1453,9 +1523,15 @@ impl App {
             }
         }
         #[cfg(not(windows))]
-        if wanted {
-            self.overlay_notice = Some(("Lens is unavailable on this desktop".into(), now));
-            out.collect(self.dispatch(point::SELECT, now).ok());
+        {
+            if self.lens_anywhere {
+                self.lens_anywhere = false;
+                self.notice = Some("Lens is available on Windows".into());
+            }
+            if tool {
+                self.overlay_notice = Some(("Lens is unavailable on this desktop".into(), now));
+                out.collect(self.dispatch(point::SELECT, now).ok());
+            }
         }
     }
 

@@ -3,7 +3,9 @@
 
 use crate::features::point::PointTool;
 use crate::features::system::INK_COLOR;
-use crate::registry::{CommandDef, Outcome, Registrar, SettingValues, Surfaces, ToolDef, when_enabled};
+use crate::registry::{
+    CommandDef, Outcome, Registrar, SettingValues, ShortcutContext, Surfaces, ToolDef, when_enabled,
+};
 use crate::session::{
     Effect, Event, Mark, Millis, Pin, PointerEvent, PointerKind, Pt, Rgba, Tip, ToolCx, ToolState,
 };
@@ -25,7 +27,7 @@ pub fn register(r: &mut Registrar) {
         surfaces: Surfaces::PICKER.with(Surfaces::CLI),
         group: "tools",
         order: 3,
-        shortcut: None,
+        shortcut: Some((ShortcutContext::Overlay, "N")),
         available: when_enabled,
         handler: |_| {
             Outcome::Session(Event::SelectTool {

@@ -1,7 +1,8 @@
 //! Tap sound settings and the Mute control.
 
 use crate::registry::{
-    CommandDef, Constraint, Outcome, Registrar, SettingDef, Surfaces, Value, always,
+    CommandDef, Constraint, Outcome, Registrar, SettingDef, ShortcutContext, Surfaces, Value,
+    always,
 };
 
 pub const TAP: &str = "sound.tap";
@@ -65,7 +66,7 @@ pub fn register(r: &mut Registrar) {
         surfaces: Surfaces::TOOLBAR.with(Surfaces::CLI),
         group: "2-edit",
         order: 5,
-        shortcut: None,
+        shortcut: Some((ShortcutContext::Overlay, "M")),
         available: always,
         handler: |s| Outcome::Set(MUTE, Value::Bool(!s.settings().bool(MUTE))),
         on_release: None,

@@ -3,8 +3,8 @@
 //! the editor before Enter or Escape reach TinyPaw.
 
 use crate::registry::{
-    CommandDef, Constraint, Outcome, Registrar, SettingDef, SettingValues, Surfaces, ToolDef,
-    Value, when_enabled,
+    CommandDef, Constraint, Outcome, Registrar, SettingDef, SettingValues, ShortcutContext,
+    Surfaces, ToolDef, Value, when_enabled,
 };
 use crate::session::{
     Event, Label, Mark, Millis, OutputId, PointerEvent, PointerKind, Pt, TextDraft, TextInput, Tip,
@@ -34,7 +34,7 @@ pub fn register(r: &mut Registrar) {
         surfaces: Surfaces::PICKER.with(Surfaces::CLI),
         group: "tools",
         order: 2,
-        shortcut: None,
+        shortcut: Some((ShortcutContext::Overlay, "T")),
         available: when_enabled,
         handler: |_| {
             Outcome::Session(Event::SelectTool {

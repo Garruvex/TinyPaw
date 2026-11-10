@@ -3,7 +3,8 @@
 use crate::features::system::{INK_COLOR, INK_WIDTH};
 use crate::registry::SettingValues;
 use crate::registry::{
-    CommandDef, Constraint, Outcome, Registrar, SettingDef, Surfaces, ToolDef, Value, when_enabled,
+    CommandDef, Constraint, Outcome, Registrar, SettingDef, ShortcutContext, Surfaces, ToolDef,
+    Value, when_enabled,
 };
 use crate::session::{
     Effect, Event, Mark, Millis, OutputId, PointerEvent, PointerKind, Pt, Rgba, Stroke, Tip,
@@ -65,7 +66,7 @@ pub fn register(r: &mut Registrar) {
         surfaces: Surfaces::PICKER.with(Surfaces::CLI),
         group: "tools",
         order: 0,
-        shortcut: None,
+        shortcut: Some((ShortcutContext::Overlay, "P")),
         available: |_| Ok(()),
         handler: |_| Outcome::Set(STYLE, Value::Choice("paw")),
         on_release: None,
@@ -77,7 +78,7 @@ pub fn register(r: &mut Registrar) {
         surfaces: Surfaces::PICKER.with(Surfaces::CLI),
         group: "tools",
         order: 1,
-        shortcut: None,
+        shortcut: Some((ShortcutContext::Overlay, "R")),
         available: |_| Ok(()),
         handler: |_| Outcome::Set(STYLE, Value::Choice("laser")),
         on_release: None,

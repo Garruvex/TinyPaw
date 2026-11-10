@@ -254,6 +254,11 @@ impl Desktop {
         (desktop, task)
     }
 
+    /// The native window, once known; 0 before then.
+    pub fn hwnd(&self) -> isize {
+        self.hwnd
+    }
+
     pub fn close_menu(&mut self) {
         self.menu = None;
     }
