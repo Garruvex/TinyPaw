@@ -290,6 +290,13 @@ impl App {
             system::SYSTEM_REDUCED,
             Value::Bool(platform::windows::reduced_motion()),
         );
+        // The Run key may have been changed outside TinyPaw; show what it says.
+        #[cfg(windows)]
+        let _ = registry.set(
+            &mut loaded.values,
+            system::START_AT_SIGN_IN,
+            Value::Bool(platform::autostart::enabled()),
+        );
         let tool = registry.default_tool();
         let session = Session::new(tool.id, tool.factory, loaded.values);
         let hotkeys = match platform::hotkeys::register(&registry) {
@@ -1094,6 +1101,14 @@ impl App {
             && !self.packs.iter().any(|p| p.id == *pack)
         {
             self.notice = Some(format!("{id}: no installed pointer pack `{pack}`"));
+            return;
+        }
+        #[cfg(windows)]
+        if id == system::START_AT_SIGN_IN
+            && let Value::Bool(on) = &value
+            && let Err(e) = platform::autostart::set(*on)
+        {
+            self.notice = Some(format!("Could not change start at sign-in: {e}"));
             return;
         }
         let mut values = self.session.settings().clone();

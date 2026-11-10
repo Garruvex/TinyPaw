@@ -3,6 +3,8 @@
 //! they forward into one channel that the Iced subscription drains, so the UI
 //! thread stays the only writer of session state and idles without polling.
 
+#[cfg(windows)]
+pub mod autostart;
 pub mod capture;
 pub mod displays;
 pub mod hotkeys;
