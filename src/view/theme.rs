@@ -1,7 +1,7 @@
 //! Graphite design tokens and shared widget styles.
 
 use iced::widget::{button, container, pick_list, slider, toggler};
-use iced::{Background, Border, Color, Font, Shadow, Theme, Vector, font};
+use iced::{Background, Border, Color, Font, Shadow, Theme, font};
 
 pub const SURFACE: Color = Color::from_rgb8(0x17, 0x18, 0x1C);
 pub const SURFACE_A: Color = Color::from_rgba8(0x17, 0x18, 0x1C, 0.94);
@@ -71,12 +71,12 @@ fn border(radius: f32, width: f32, color: Color) -> Border {
 pub fn panel(radius: f32) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
         background: Some(SURFACE_A.into()),
-        border: border(radius, 1.0, LINE),
-        shadow: Shadow {
-            color: Color::from_rgba8(0, 0, 0, 0.35),
-            offset: Vector::new(0.0, 8.0),
-            blur_radius: 24.0,
-        },
+        border: border(radius, 1.0, LINE_STRONG),
+        // No drop shadow. On the transparent overlay, tiny-skia's partial
+        // repaints stacked the 35 % black shadow onto itself whenever the
+        // cursor moved along the bar's edge, until the bar became a solid
+        // black block covering its icons.
+        shadow: Shadow::default(),
         text_color: Some(TEXT),
         ..container::Style::default()
     }

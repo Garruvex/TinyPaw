@@ -518,7 +518,11 @@ impl Desktop {
                         .padding(MENU_PAD)
                         .width(MENU_W)
                         .height(r.height)
-                        .style(theme::panel(12.0));
+                        // No drop shadow: it paints outside the panel's
+                        // bounds, which the renderer's damage tracking does
+                        // not repaint on this transparent window, so a closed
+                        // menu left a stale shadow behind.
+                        .style(theme::outlined(theme::SURFACE_A, 12.0, theme::LINE_STRONG));
                     let menu = container(menu).width(width).align_x(match side {
                         Side::Left => Alignment::Start,
                         Side::Right => Alignment::End,
