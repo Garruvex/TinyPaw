@@ -49,6 +49,8 @@ pub enum Message {
     TextSubmit,
     Still(Ticket, Result<Vec<(OutputId, image::Handle)>, String>),
     Mascot(crate::mascot::Msg),
+    /// An overlay just started taking input: keep it from occluding apps.
+    Unoccluding(window::Id),
     Frame,
     Tick,
 }
@@ -264,7 +266,20 @@ impl App {
                     {
                         platform::windows::observe(hwnd);
                         platform::windows::place(hwnd, &o.display);
+                        if o.applied == Some(true) {
+                            platform::windows::unoccluding(hwnd);
+                        }
                     }
+                }
+            }
+            Message::Unoccluding(id) => {
+                #[cfg(windows)]
+                if let Some(o) = self
+                    .overlays
+                    .iter()
+                    .find(|o| o.id == id && o.hwnd != 0 && o.applied == Some(true))
+                {
+                    platform::windows::unoccluding(o.hwnd);
                 }
             }
             Message::External(External::DisplaysChanged) => {
@@ -1305,7 +1320,10 @@ impl App {
             if o.applied != Some(interactive) {
                 o.applied = Some(interactive);
                 tasks.push(if interactive {
+                    // winit drops the layered style with passthrough; put
+                    // it back so apps underneath keep rendering.
                     window::disable_mouse_passthrough(o.id)
+                        .chain(Task::done(Message::Unoccluding(o.id)))
                 } else {
                     window::enable_mouse_passthrough(o.id)
                 });

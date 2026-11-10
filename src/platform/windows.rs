@@ -498,3 +498,31 @@ unsafe extern "system" fn no_activate(
     }
     unsafe { windows_sys::Win32::UI::Shell::DefSubclassProc(hwnd, msg, w, l) }
 }
+
+/// Keeps a full-screen overlay that is taking input from counting as an
+/// opaque window. Chromium, Electron (Discord, browsers) and other apps with
+/// occlusion tracking stop rendering when a visible, non-layered window covers
+/// them, so the screen froze under TinyPaw while annotating. A layered window
+/// at 254/255 opacity is treated as see-through, still receives mouse input,
+/// and keeps per-pixel transparency.
+pub fn unoccluding(hwnd: isize) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd as _, GWL_EXSTYLE);
+        let layered = ex | WS_EX_LAYERED as isize;
+        if layered != ex {
+            SetWindowLongPtrW(hwnd as _, GWL_EXSTYLE, layered);
+        }
+        SetLayeredWindowAttributes(hwnd as _, 0, 254, LWA_ALPHA);
+        // Occlusion trackers re-check on window events, not style changes.
+        SetWindowPos(
+            hwnd as _,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+    }
+}
