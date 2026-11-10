@@ -9,6 +9,12 @@ pub mod settings;
 pub mod theme;
 pub mod wheel;
 
+#[cfg(all(test, not(feature = "gpu")))]
+mod interaction_tests;
+
+#[cfg(all(test, not(feature = "gpu")))]
+mod pointer_performance_tests;
+
 use std::cell::Cell;
 
 use iced::advanced::image;
@@ -83,6 +89,7 @@ pub enum UiMsg {
     CopyForearmPrompt,
     DraftHotspot(f32, f32),
     DraftName(String),
+    ForearmColor([u8; 4]),
     SaveDraft,
     CancelDraft,
     ResetMascotPosition,
@@ -98,13 +105,44 @@ pub enum UiMsg {
     /// A folder import's ID is taken: `true` keeps both, `false` replaces.
     ResolveCharacter(bool),
     CancelCharacterImport,
+    /// Open the selected character in the Art tab.
+    EditArt,
+    ArtFromParts,
+    ArtMode(crate::mascot::editor::Mode),
+    ArtField(usize, String),
+    ArtCanvas(usize, String),
+    ArtDragStart(crate::mascot::editor::Selected),
+    ArtDrag(f32, f32),
+    ArtNudge(f32, f32),
+    ArtOrder(usize, bool),
+    ArtUndo,
+    ArtRedo,
+    ArtZoom(f32),
+    ArtBackground(crate::mascot::editor::Background),
+    ArtSelect(crate::mascot::editor::Selected),
+    /// Choose a PNG for this slot.
+    ArtPick(crate::mascot::editor::Target),
+    ArtKind(usize, crate::mascot::motion::PartType),
+    ArtOnHead(usize, bool),
+    ArtBehind(usize, bool),
+    ArtRemovePart(usize),
+    ArtRemoveFace(usize, usize),
+    ArtAddEye,
+    ArtStaticEye(usize),
+    ArtRemoveEye(usize),
+    ArtRemoveBlink(usize),
+    ArtTravel(usize, f32),
+    ArtClick(f32, f32),
+    ArtName(String),
+    ArtSave,
+    ArtCancel,
 }
 
-/// Cached committed ink, invalidated by scene revision.
+/// Each live or frozen scene has its own revision counter.
 #[derive(Default)]
 pub struct InkCache {
     cache: Cache,
-    revision: Cell<Option<u64>>,
+    revision: Cell<Option<(Option<u64>, u64)>>,
 }
 
 pub struct Overlay<'a> {
@@ -125,7 +163,7 @@ pub struct Overlay<'a> {
 /// Why a command can't run right now, or `None` when it can.
 fn unavailable(registry: &Registry, session: &Session, id: &str) -> Option<&'static str> {
     match registry.command(id) {
-        Some(d) => (d.available)(session).err().map(|why| why.0),
+        Some(d) => registry.availability(d.id, session).err().map(|why| why.0),
         None => Some("Not available"),
     }
 }
@@ -362,7 +400,7 @@ fn command_button<'a>(
     tone: Tone,
 ) -> Element<'a, Message> {
     let def = registry.command(id);
-    let reason = def.and_then(|d| (d.available)(session).err());
+    let reason = def.and_then(|d| registry.availability(d.id, session).err());
     let msg = reason.is_none().then_some(Message::Command(id));
     let mut label = def.map_or(id, |d| d.label).to_owned();
     if let Some(why) = reason {
@@ -385,7 +423,10 @@ fn tool_tone(session: &Session, tool: &str) -> Tone {
 
 /// Tools that live in the More panel, with the glyph the More button borrows
 /// while one of them is active.
-const MORE_TOOLS: [(&str, Glyph); 2] = [(spotlight::TOOL, Glyph::Spotlight), (upcoming::TOOL, Glyph::Lens)];
+const MORE_TOOLS: [(&str, Glyph); 2] = [
+    (spotlight::TOOL, Glyph::Spotlight),
+    (upcoming::TOOL, Glyph::Lens),
+];
 
 fn quick_bar<'a>(
     registry: &'a Registry,
@@ -450,7 +491,14 @@ fn quick_bar<'a>(
     let held = MORE_TOOLS
         .iter()
         .find(|(tool, _)| session.active_tool() == *tool)
-        .map(|&(tool, glyph)| (registry.command(tool_command(tool)).map_or(tool, |d| d.label), glyph));
+        .map(|&(tool, glyph)| {
+            (
+                registry
+                    .command(tool_command(tool))
+                    .map_or(tool, |d| d.label),
+                glyph,
+            )
+        });
     let more_on = more_open || held.is_some();
     let more_color = if more_on {
         theme::CYAN_TEXT
@@ -549,7 +597,7 @@ fn tool_command(tool: &str) -> &'static str {
 fn more_menu<'a>(registry: &'a Registry, session: &'a Session) -> Element<'a, Message> {
     let entry = |id: &'static str, glyph: Glyph, tone: Tone, label: Option<String>| {
         let def = registry.command(id);
-        let reason = def.and_then(|d| (d.available)(session).err());
+        let reason = def.and_then(|d| registry.availability(d.id, session).err());
         let label = label.unwrap_or_else(|| def.map_or(id, |d| d.label).to_owned());
         let color = match tone {
             _ if reason.is_some() => theme::DISABLED,
@@ -611,13 +659,24 @@ fn more_menu<'a>(registry: &'a Registry, session: &'a Session) -> Element<'a, Me
             sound::TOGGLE_MUTE,
             if muted { Glyph::Mute } else { Glyph::Sound },
             if muted { Tone::Warm } else { Tone::Plain },
-            Some(if muted { "Unmute tap sound" } else { "Mute tap sound" }.into()),
+            Some(
+                if muted {
+                    "Unmute tap sound"
+                } else {
+                    "Mute tap sound"
+                }
+                .into(),
+            ),
         ),
     ];
     mouse_area(
-        container(iced::widget::Column::with_children(items).spacing(2).width(248))
-            .padding(6)
-            .style(theme::panel(12.0)),
+        container(
+            iced::widget::Column::with_children(items)
+                .spacing(2)
+                .width(248),
+        )
+        .padding(6)
+        .style(theme::panel(12.0)),
     )
     .interaction(mouse::Interaction::Idle)
     .into()
@@ -625,7 +684,13 @@ fn more_menu<'a>(registry: &'a Registry, session: &'a Session) -> Element<'a, Me
 
 fn pointer_menu<'a>(session: &Session, pack: Option<&crate::packs::Pack>) -> Element<'a, Message> {
     let laser = session.settings().choice(point::STYLE) == "laser";
-    let tint = |on: bool| if on { theme::CYAN_TEXT } else { theme::TEXT_SOFT };
+    let tint = |on: bool| {
+        if on {
+            theme::CYAN_TEXT
+        } else {
+            theme::TEXT_SOFT
+        }
+    };
     let choice = |art: Element<'a, Message>, label: String, on: bool, id: &'static str| {
         button(
             row![
@@ -831,6 +896,7 @@ pub fn match_pointer<'a>(accent: [u8; 4], current: [u8; 4]) -> Element<'a, Messa
 fn draw_mark(frame: &mut Frame, mark: &Mark, alpha: f32) {
     let s = match mark {
         Mark::Stroke(s) => s,
+        Mark::PawPrint(p) => return paw::draw_print(frame, p, alpha),
         Mark::Label(l) => return draw_label(frame, l),
         Mark::Pin(p) => return draw_pin(frame, p),
     };
@@ -939,9 +1005,10 @@ impl canvas::Program<Message> for OverlayCanvas<'_> {
                 draw_mark(&mut live, mark, self.session.mark_alpha(mark, self.now));
             }
         } else {
-            if self.ink.revision.get() != Some(scene.revision()) {
+            let revision = (self.session.frozen_frame(), scene.revision());
+            if self.ink.revision.get() != Some(revision) {
                 self.ink.cache.clear();
-                self.ink.revision.set(Some(scene.revision()));
+                self.ink.revision.set(Some(revision));
             }
             layers.push(self.ink.cache.draw(renderer, bounds.size(), |frame| {
                 for mark in scene.marks().iter().filter(mine) {
@@ -954,12 +1021,24 @@ impl canvas::Program<Message> for OverlayCanvas<'_> {
             draw_mark(&mut live, draft, 1.0);
         }
         match &self.wheel {
-            Some(state) => wheel::draw(&mut live, bounds, state, &self.wheel_blocked, self.lens_hint),
+            Some(state) => wheel::draw(
+                &mut live,
+                bounds,
+                state,
+                &self.wheel_blocked,
+                self.lens_hint,
+            ),
             None => {
                 if let Some((output, tip)) = self.session.tip(self.now)
                     && output == self.output
                 {
-                    paw::draw_tip(&mut live, tip, bounds.size(), self.pack);
+                    paw::draw_tip(
+                        &mut live,
+                        tip,
+                        bounds.size(),
+                        self.pack,
+                        point::forearm_color(self.session.settings()),
+                    );
                 }
             }
         }
@@ -992,6 +1071,7 @@ impl canvas::Program<Message> for OverlayCanvas<'_> {
 
 /// Preview tile shared by settings: one stroke and the pointer on a backdrop.
 pub struct PreviewTile {
+    pub forearm_color: Option<[u8; 4]>,
     pub background: Color,
     pub ink: Color,
     pub width: f32,
@@ -1045,7 +1125,13 @@ impl<Message> canvas::Program<Message> for PreviewTile {
                 grip_x: tip.x,
             }
         };
-        paw::draw_tip(&mut frame, pose, size, self.pack.as_ref());
+        paw::draw_tip(
+            &mut frame,
+            pose,
+            size,
+            self.pack.as_ref(),
+            self.forearm_color,
+        );
         vec![frame.into_geometry()]
     }
 }

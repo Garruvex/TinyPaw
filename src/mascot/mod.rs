@@ -3,8 +3,10 @@
 //! starts no hooks, capture, tray or audio device. Both share the rig.
 #[cfg(windows)]
 pub mod desktop;
+pub mod editor;
 pub mod motion;
 pub mod pack;
+pub mod placement;
 pub mod rig;
 
 /// Messages from the desktop character window.

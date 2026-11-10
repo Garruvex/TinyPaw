@@ -3,14 +3,17 @@ A paw version pointer to point and draw for presentation
 
 TinyPaw is a desktop helper for pointing and drawing over presentations and game streams. See the [scope](docs/scope.md), [architecture](docs/architecture.md) and [measurements](docs/measurements.md).
 
+The [next-phase plan](docs/next-phase.md) covers the menu redesign, desktop Lens, character imports, interaction and music response.
+
 ## Status: alpha (Windows)
 
 Working on Windows:
 
 - **Overlay:** transparent overlays on the primary display, a named display or all displays with your Yohta, Moro, Moro Crayon or Zaeri pointer art (Furry Paw, Stretch Paw or Classic Stick) or a laser dot, ink in six colours and four widths, optional fade after 3 seconds, and a tap animation. Stretch Paw bends the pack's forearm PNG, preserving a short wrist section. Packs without forearm art use a curved limb in their accent colour.
-- **Sound:** three synthesized tap sounds (Blackboard Knock, Bubble Pop, Rubber Bonk) a pack-provided tap or an imported WAV, with volume and mute.
+- **Paw-print stamps:** Settings > Pointer > Tap stamp offers Off, Cat or Dog. Tap with any paw pointer to leave a print in your ink colour; dragging still draws. Prints follow ink fading and support Undo and Clear.
 - **Quick bar and wheel:** the Graphite quick bar holds Pointer, Text, Pin, ink, Undo and End annotation, with Spotlight, Lens, Freeze, Clear marks and tap mute under **More**. Tooltips show shortcuts. The quick wheel opens with a held **Ctrl+Alt+W**; its up-left wedge is Undo, so a mis-flick can't wipe your marks.
 - **Settings window:** Pointer (with a live preview that stays in view), Character, Annotation, Controls, Display and Tap sounds pages, and an Annotation switch in the header. Choices are saved to `%APPDATA%\TinyPaw\preferences.json`.
+- **Sound:** Blackboard Knock, Bubble Pop, Rubber Bonk, Duck Toy, Mac Quack, Bonk and Dry Fart, plus a pack-provided tap or an imported WAV, with preview, volume and mute. All built-in sounds ship inside the executable.
 - **Activation:** Toggle and Hold-to-draw styles, a tray menu, a first-run card, and a CLI that forwards to the running instance.
 - **Tools:** Text labels (IME-aware: the first Enter accepts a candidate, the next places the label), numbered Pins, Spotlight, and Freeze (**Ctrl+Alt+F**) to draw on a still of the screen, with Return Live. Lens magnifies 2× or 4× in a round lens beside the pointer. Under Annotation → Lens → Advanced choose **Desktop under pointer** (whatever app is under the paw; TinyPaw stays out of the lens but not out of a screen share) or **Lock to a window**. Hold **Ctrl+Alt+Z** to show the desktop lens anywhere, with annotation on or off; release to hide it.
 

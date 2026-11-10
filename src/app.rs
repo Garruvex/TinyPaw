@@ -3,6 +3,10 @@
 //! the session.
 
 use std::path::PathBuf;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU8, Ordering},
+};
 use std::time::{Duration, Instant};
 
 use iced::advanced::image;
@@ -47,7 +51,10 @@ pub enum Message {
     PackTapPicked(Option<PathBuf>),
     CharacterPicked(Option<PathBuf>),
     CharacterFolderPicked(Option<PathBuf>),
+    CharacterWorked(u64, Result<CharacterWork, String>),
     CharacterExportPicked(Option<PathBuf>),
+    ArtFilesPicked(u64, crate::mascot::editor::Target, Vec<PathBuf>),
+    ArtBodyPicked(u64, Option<PathBuf>),
     Acquired(Ticket),
     TextChanged(String),
     TextSubmit,
@@ -57,6 +64,14 @@ pub enum Message {
     Unoccluding(window::Id),
     Frame,
     Tick,
+}
+
+#[derive(Debug, Clone)]
+pub enum CharacterWork {
+    Draft(characters::Draft),
+    Editor(Box<crate::mascot::editor::Editor>, Vec<String>),
+    Prepared(Arc<characters::PreparedFolder>),
+    Imported(characters::Imported, bool),
 }
 
 struct Overlay {
@@ -70,6 +85,7 @@ struct Overlay {
 }
 
 pub struct App {
+    preference_writer: preferences::Writer,
     registry: Registry,
     session: Session,
     started: Instant,
@@ -78,6 +94,7 @@ pub struct App {
     settings_window: Option<window::Id>,
     /// Whether Settings uses the merged Windows header.
     settings_framed: bool,
+    helper_hwnds: std::collections::BTreeMap<window::Id, isize>,
     first_run_window: Option<window::Id>,
     page: Page,
     notice: Option<String>,
@@ -98,20 +115,20 @@ pub struct App {
     characters: Vec<Character>,
     /// "Add character" in progress.
     character_draft: Option<characters::Draft>,
-    /// A folder import waiting on Keep both or Replace: its source and name.
-    character_conflict: Option<(PathBuf, String)>,
+    /// A folder import waiting on Keep both or Replace: its display name.
+    character_conflict: Option<String>,
+    prepared_character: Option<Arc<characters::PreparedFolder>>,
+    character_request: u64,
+    character_job: Option<Arc<AtomicU8>>,
+    character_jobs: std::collections::BTreeMap<u64, Arc<AtomicU8>>,
+    quit_pending: bool,
+    /// The Art tab's open character, while editing.
+    art: Option<crate::mascot::editor::Editor>,
     editing_pack: Option<&'static str>,
     rebinding: Option<&'static str>,
     alt_down: bool,
     #[cfg(windows)]
-    lens: Option<platform::windows::Lens>,
-    /// The desktop lens while it is in use.
-    #[cfg(windows)]
-    desktop_lens: Option<platform::windows::DesktopLens>,
-    /// Why the desktop lens failed this activation; the window lens is used
-    /// until Lens is next selected.
-    #[cfg(windows)]
-    desktop_lens_failed: bool,
+    lens: platform::lens::Controller,
     /// The lens shortcut is held, with annotation on or off.
     lens_anywhere: bool,
     /// The desktop character window, while enabled.
@@ -158,6 +175,7 @@ fn overlay_settings() -> window::Settings {
 
 fn panel_settings(size: Size, min: Option<Size>, resizable: bool) -> window::Settings {
     window::Settings {
+        icon: Some(crate::branding::window_icon()),
         size,
         min_size: min,
         position: window::Position::Centered,
@@ -200,6 +218,7 @@ impl App {
             .inspect_err(|e| eprintln!("tinypaw: tray unavailable: {e}"))
             .ok();
         let mut app = Self {
+            preference_writer: preferences::Writer::new(),
             registry,
             session,
             started: Instant::now(),
@@ -207,6 +226,7 @@ impl App {
             displays: displays::list(),
             settings_window: None,
             settings_framed: false,
+            helper_hwnds: std::collections::BTreeMap::new(),
             first_run_window: None,
             page: Page::default(),
             notice: None,
@@ -223,16 +243,18 @@ impl App {
             characters: Vec::new(),
             character_draft: None,
             character_conflict: None,
+            prepared_character: None,
+            character_request: 0,
+            character_job: None,
+            character_jobs: std::collections::BTreeMap::new(),
+            quit_pending: false,
+            art: None,
             pointer_draft: None,
             editing_pack: None,
             rebinding: None,
             alt_down: false,
             #[cfg(windows)]
-            lens: None,
-            #[cfg(windows)]
-            desktop_lens: None,
-            #[cfg(windows)]
-            desktop_lens_failed: false,
+            lens: platform::lens::Controller::default(),
             lens_anywhere: false,
             #[cfg(windows)]
             mascot: None,
@@ -254,11 +276,17 @@ impl App {
         for problem in &problems {
             eprintln!("tinypaw: character skipped: {problem}");
         }
+        if !problems.is_empty() {
+            app.notice = Some(format!(
+                "Character recovery or loading failed: {}",
+                problems.join("; ")
+            ));
+        }
         app.characters = loaded_characters;
         app.sync_tray();
         let task = if loaded.first_run {
             // Saving now means the card shows once.
-            let _ = preferences::save(app.session.settings());
+            app.preference_writer.schedule(app.session.settings());
             let (id, open) = window::open(panel_settings(Size::new(420.0, 330.0), None, false));
             app.first_run_window = Some(id);
             open.map(Message::WindowOpened)
@@ -293,7 +321,26 @@ impl App {
         let mut out = Outcomes::default();
         let mut tasks = Vec::new();
 
+        if let Message::NativeReady(id, hwnd) = &message
+            && (Some(*id) == self.settings_window || Some(*id) == self.first_run_window)
+        {
+            self.helper_hwnds.insert(*id, *hwnd);
+        }
         match message {
+            Message::External(External::PreferencesSaved(result)) => match result {
+                Err(e) => {
+                    self.notice = Some(format!("Settings could not be saved (retrying): {e}"))
+                }
+                Ok(())
+                    if self
+                        .notice
+                        .as_deref()
+                        .is_some_and(|n| n.starts_with("Settings could not be saved")) =>
+                {
+                    self.notice = None
+                }
+                Ok(()) => {}
+            },
             Message::NativeReady(id, hwnd) if Some(id) == self.settings_window => {
                 #[cfg(windows)]
                 {
@@ -437,25 +484,126 @@ impl App {
                     }
                 }
             }
-            Message::CharacterPicked(Some(path)) => match characters::draft_from_png(&path) {
-                Ok(draft) => {
-                    self.character_draft = Some(draft);
-                    self.character_conflict = None;
-                    self.page = Page::Character;
-                    self.notice = None;
-                }
-                Err(e) => self.notice = Some(format!("Could not use that image: {e}")),
-            },
+            Message::CharacterPicked(Some(path)) => {
+                self.character_draft = None;
+                self.prepared_character = None;
+                self.character_conflict = None;
+                self.page = Page::Character;
+                let id = self.begin_character_job();
+                tasks.push(character_work(id, move || {
+                    characters::draft_from_png(&path).map(CharacterWork::Draft)
+                }));
+            }
             Message::CharacterFolderPicked(Some(path)) => {
-                self.import_character(path, characters::OnDuplicate::Ask, &mut out);
+                self.character_draft = None;
+                self.prepared_character = None;
+                self.character_conflict = None;
+                self.page = Page::Character;
+                let id = self.begin_character_job();
+                tasks.push(character_work(id, move || {
+                    characters::prepare_folder(&path).map(CharacterWork::Prepared)
+                }));
+            }
+            Message::CharacterWorked(id, result) => {
+                self.character_jobs.remove(&id);
+                if id != self.character_request
+                    && let Err(e) = &result
+                    && e != "Import cancelled"
+                {
+                    self.notice = Some(format!("Background character import failed: {e}"));
+                }
+                // A completed commit always updates the catalog, even after cancellation.
+                if let Ok(CharacterWork::Imported(characters::Imported::Installed(c), show)) =
+                    &result
+                {
+                    if !self.session.settings().bool(character::ENABLED)
+                        && (!show || id != self.character_request)
+                    {
+                        c.release_prepared_rig();
+                    }
+                    self.add_character(c.clone());
+                    #[cfg(windows)]
+                    if self.mascot.as_ref().is_some_and(|m| m.character() == c.id) {
+                        let rig = self.character_rig(c.id);
+                        if let Some(m) = &mut self.mascot {
+                            m.set_rig(c.id, rig);
+                        }
+                    }
+                }
+                if id == self.character_request {
+                    self.character_job = None;
+                    self.notice = None;
+                    match result {
+                        Ok(CharacterWork::Draft(draft)) => self.character_draft = Some(draft),
+                        Ok(CharacterWork::Editor(editor, errors)) => {
+                            self.art = Some(*editor);
+                            if !errors.is_empty() {
+                                self.notice = Some(errors.join("; "));
+                            }
+                        }
+                        Ok(CharacterWork::Prepared(prepared)) => {
+                            self.prepared_character = Some(prepared);
+                            tasks.push(self.import_character(characters::OnDuplicate::Ask));
+                        }
+                        Ok(CharacterWork::Imported(
+                            characters::Imported::Duplicate { name },
+                            _,
+                        )) => {
+                            self.character_conflict = Some(name);
+                        }
+                        Ok(CharacterWork::Imported(characters::Imported::Installed(c), show)) => {
+                            self.character_conflict = None;
+                            self.prepared_character = None;
+                            self.character_draft = None;
+                            self.art = None;
+                            out.sets.push((character::CHARACTER, Value::Choice(c.id)));
+                            if show {
+                                out.sets.push((character::ENABLED, Value::Bool(true)));
+                            }
+                        }
+                        Err(e) => {
+                            self.notice = Some(format!("Could not import that character: {e}"))
+                        }
+                    }
+                }
             }
             Message::CharacterExportPicked(Some(into)) => {
+                if !self.character_jobs.is_empty() {
+                    self.notice = Some(
+                        "Character work is still finishing. Try Export when it completes.".into(),
+                    );
+                    return Task::none();
+                }
                 let c = self.current_character().clone();
                 self.notice = Some(match characters::export(&c, &into) {
                     Ok(folder) => format!("Exported {} to {}", c.name, folder.display()),
                     Err(e) => format!("Could not export {}: {e}", c.name),
                 });
             }
+            Message::ArtBodyPicked(generation, Some(path))
+                if generation == self.character_request =>
+            {
+                let id = self.begin_character_job();
+                let taken: Vec<_> = self.characters.iter().map(|c| c.id).collect();
+                tasks.push(character_work(id, move || {
+                    crate::mascot::editor::Editor::from_body(&path, &taken)
+                        .map(|e| CharacterWork::Editor(Box::new(e), Vec::new()))
+                }));
+            }
+            Message::ArtFilesPicked(generation, target, paths)
+                if generation == self.character_request =>
+            {
+                if !paths.is_empty()
+                    && let Some(mut editor) = self.art.clone()
+                {
+                    let id = self.begin_character_job();
+                    tasks.push(character_work(id, move || {
+                        let errors = editor.set_images(target, paths);
+                        Ok(CharacterWork::Editor(Box::new(editor), errors))
+                    }));
+                }
+            }
+            Message::ArtBodyPicked(_, _) | Message::ArtFilesPicked(_, _, _) => {}
             Message::CharacterPicked(None)
             | Message::CharacterFolderPicked(None)
             | Message::CharacterExportPicked(None) => {}
@@ -542,6 +690,24 @@ impl App {
                             }
                         }
                     }
+                } else if Some(window) == self.settings_window
+                    && self.character_job.is_none()
+                    && self.art.is_some()
+                {
+                    let delta = match key.as_ref() {
+                        keyboard::Key::Named(Named::ArrowLeft) => Some((-1.0, 0.0)),
+                        keyboard::Key::Named(Named::ArrowRight) => Some((1.0, 0.0)),
+                        keyboard::Key::Named(Named::ArrowUp) => Some((0.0, -1.0)),
+                        keyboard::Key::Named(Named::ArrowDown) => Some((0.0, 1.0)),
+                        _ => None,
+                    };
+                    if let Some((x, y)) = delta
+                        && let Some(e) = &mut self.art
+                    {
+                        let step = if modifiers.shift() { 10.0 } else { 1.0 };
+                        e.checkpoint();
+                        e.nudge(x * step, y * step);
+                    }
                 } else if self.overlays.iter().any(|o| o.id == window) {
                     let escape = matches!(key.as_ref(), keyboard::Key::Named(Named::Escape));
                     if self.session.text_draft().is_some() {
@@ -600,7 +766,7 @@ impl App {
             }
             Message::WindowOpened(id) => {
                 #[cfg(windows)]
-                if Some(id) == self.settings_window {
+                if Some(id) == self.settings_window || Some(id) == self.first_run_window {
                     tasks.push(window::run(id, move |w| {
                         use iced::window::raw_window_handle::RawWindowHandle;
                         let hwnd = match w.window_handle().map(|h| h.as_raw()) {
@@ -635,11 +801,15 @@ impl App {
                 }
             }
             Message::CloseRequested(id) => {
+                self.helper_hwnds.remove(&id);
                 if self.overlays.iter().any(|o| o.id == id) {
                     out.effects
                         .extend(self.session.handle(Event::MasterOff, now));
                 } else if Some(id) == self.settings_window {
                     self.settings_window = None;
+                    self.cancel_character_job();
+                    self.prepared_character = None;
+                    self.character_conflict = None;
                     self.settings_framed = false;
                     self.notice = None;
                     tasks.push(window::close(id));
@@ -751,6 +921,9 @@ impl App {
         }
         tasks.push(self.reconcile());
         tasks.push(self.reconcile_mascot());
+        if self.quit_pending && self.character_jobs.is_empty() {
+            self.quit(now);
+        }
         Task::batch(tasks)
     }
 
@@ -832,7 +1005,10 @@ impl App {
             let rows = self.mascot_menu().len();
             let selected = s.choice(character::CHARACTER);
             let anchor = (s.float(character::X), s.float(character::Y));
-            let stale = self.mascot.as_ref().is_some_and(|m| m.character() != selected);
+            let stale = self
+                .mascot
+                .as_ref()
+                .is_some_and(|m| m.character() != selected);
             if want && (self.mascot.is_none() || stale) {
                 let rig = self.character_rig(selected);
                 match &mut self.mascot {
@@ -892,36 +1068,36 @@ impl App {
         self.characters[1..].sort_by_key(|c| c.name.to_lowercase());
     }
 
-    fn import_character(
-        &mut self,
-        source: PathBuf,
-        choice: characters::OnDuplicate,
-        out: &mut Outcomes,
-    ) {
-        let taken: Vec<&str> = self.characters.iter().map(|c| c.id).collect();
-        match characters::import_folder(&source, &taken, choice) {
-            Ok(characters::Imported::Installed(c)) => {
-                let id = c.id;
-                self.add_character(c);
-                self.character_conflict = None;
-                self.notice = None;
-                self.page = Page::Character;
-                // A replaced character that is showing reloads its art.
-                #[cfg(windows)]
-                if self.mascot.as_ref().is_some_and(|m| m.character() == id) {
-                    let rig = self.character_rig(id);
-                    if let Some(m) = &mut self.mascot {
-                        m.set_rig(id, rig);
-                    }
-                }
-                out.sets.push((character::CHARACTER, Value::Choice(id)));
-            }
-            Ok(characters::Imported::Duplicate { name }) => {
-                self.character_conflict = Some((source, name));
-                self.page = Page::Character;
-            }
-            Err(e) => self.notice = Some(format!("Could not import that character: {e}")),
+    fn cancel_character_job(&mut self) {
+        self.character_request += 1;
+        if let Some(job) = self.character_job.take() {
+            let _ = job.compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst);
         }
+    }
+
+    fn begin_character_job(&mut self) -> u64 {
+        self.cancel_character_job();
+        self.character_job = Some(Arc::new(AtomicU8::new(0)));
+        self.character_jobs.insert(
+            self.character_request,
+            self.character_job.as_ref().unwrap().clone(),
+        );
+        self.notice = Some("Preparing character…".into());
+        self.character_request
+    }
+
+    fn import_character(&mut self, choice: characters::OnDuplicate) -> Task<Message> {
+        let Some(prepared) = self.prepared_character.clone() else {
+            return Task::none();
+        };
+        let id = self.begin_character_job();
+        let job = self.character_job.as_ref().unwrap().clone();
+        let taken: Vec<_> = self.characters.iter().map(|c| c.id).collect();
+        character_work(id, move || {
+            prepared
+                .install(&taken, choice, &job)
+                .map(|r| CharacterWork::Imported(r, false))
+        })
     }
 
     /// The character's menu: annotation, its own settings and Hide. Commands
@@ -937,7 +1113,7 @@ impl App {
             on_press: self
                 .registry
                 .command(id)
-                .filter(|d| (d.available)(&self.session).is_ok())
+                .filter(|d| self.registry.availability(d.id, &self.session).is_ok())
                 .map(|_| Msg::Command(id)),
         };
         vec![
@@ -956,6 +1132,18 @@ impl App {
     }
 
     fn ui_message(&mut self, ui: UiMsg, now: Millis, out: &mut Outcomes) -> Task<Message> {
+        if matches!(
+            &ui,
+            UiMsg::ArtOnHead(..)
+                | UiMsg::ArtBehind(..)
+                | UiMsg::ArtRemoveFace(..)
+                | UiMsg::ArtRemoveEye(..)
+                | UiMsg::ArtRemoveBlink(..)
+                | UiMsg::ArtTravel(..)
+        ) && let Some(e) = &mut self.art
+        {
+            e.checkpoint();
+        }
         match ui {
             UiMsg::RefreshSources => {
                 #[cfg(windows)]
@@ -1023,9 +1211,20 @@ impl App {
                 self.ui.more_menu = false;
                 self.ui.ink_menu = !self.ui.ink_menu;
             }
-            UiMsg::Nav(page) => self.page = page,
+            UiMsg::Nav(page) => {
+                if page != Page::Character {
+                    self.cancel_character_job();
+                    self.prepared_character = None;
+                    self.character_conflict = None;
+                }
+                self.page = page;
+            }
             UiMsg::PickCharacter(id) => {
+                self.cancel_character_job();
+                self.prepared_character = None;
+                self.character_conflict = None;
                 self.character_draft = None;
+                self.art = None;
                 out.sets.push((character::CHARACTER, Value::Choice(id)));
             }
             UiMsg::AddCharacter => {
@@ -1054,6 +1253,12 @@ impl App {
                 );
             }
             UiMsg::RemoveCharacter => {
+                if !self.character_jobs.is_empty() {
+                    self.notice = Some(
+                        "Character work is still finishing. Try Remove when it completes.".into(),
+                    );
+                    return Task::none();
+                }
                 let c = self.current_character().clone();
                 match characters::remove(&c) {
                     Ok(()) => {
@@ -1075,35 +1280,255 @@ impl App {
                     d.ground = (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
                 }
             }
-            UiMsg::CancelCharacter => self.character_draft = None,
+            UiMsg::CancelCharacter => {
+                self.cancel_character_job();
+                self.character_draft = None;
+            }
             UiMsg::SaveCharacter => {
-                if let Some(draft) = &self.character_draft {
-                    let taken: Vec<&str> = self.characters.iter().map(|c| c.id).collect();
-                    match characters::install(draft, &taken) {
-                        Ok(c) => {
-                            let id = c.id;
-                            self.add_character(c);
-                            self.character_draft = None;
-                            self.notice = None;
-                            // "Use character": select it and put it on the desktop.
-                            out.sets.push((character::CHARACTER, Value::Choice(id)));
-                            out.sets.push((character::ENABLED, Value::Bool(true)));
-                        }
-                        Err(e) => self.notice = Some(format!("Could not add the character: {e}")),
-                    }
+                if self.character_job.is_none()
+                    && let Some(draft) = self.character_draft.clone()
+                {
+                    let id = self.begin_character_job();
+                    let job = self.character_job.as_ref().unwrap().clone();
+                    let taken: Vec<_> = self.characters.iter().map(|c| c.id).collect();
+                    return character_work(id, move || {
+                        characters::install(&draft, &taken, &job).map(|c| {
+                            CharacterWork::Imported(characters::Imported::Installed(c), true)
+                        })
+                    });
                 }
             }
             UiMsg::ResolveCharacter(keep_both) => {
-                if let Some((path, _)) = self.character_conflict.take() {
-                    let choice = if keep_both {
+                if self.character_conflict.take().is_some() {
+                    return self.import_character(if keep_both {
                         characters::OnDuplicate::KeepBoth
                     } else {
                         characters::OnDuplicate::Replace
-                    };
-                    self.import_character(path, choice, out);
+                    });
                 }
             }
-            UiMsg::CancelCharacterImport => self.character_conflict = None,
+            UiMsg::CancelCharacterImport => {
+                self.cancel_character_job();
+                self.character_conflict = None;
+                self.prepared_character = None;
+            }
+            UiMsg::EditArt => {
+                let c = self.current_character().clone();
+                let id = self.begin_character_job();
+                self.character_draft = None;
+                return character_work(id, move || {
+                    crate::mascot::editor::Editor::open(&c)
+                        .map(|e| CharacterWork::Editor(Box::new(e), Vec::new()))
+                });
+            }
+            UiMsg::ArtFromParts => {
+                self.cancel_character_job();
+                let generation = self.character_request;
+                return Task::perform(
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Choose the body PNG, then add its separate parts")
+                        .add_filter("PNG image", &["png"])
+                        .pick_file(),
+                    move |f| Message::ArtBodyPicked(generation, f.map(|f| f.path().to_path_buf())),
+                );
+            }
+            UiMsg::ArtPick(target) => {
+                use crate::mascot::editor::{EyeSlot, FACE_NAMES, Target};
+                let title = match target {
+                    Target::Body => "Choose the body PNG".to_owned(),
+                    Target::NewPart => {
+                        "Choose a part PNG: head, tail, ear, wing or hair".to_owned()
+                    }
+                    Target::Face(_, slot) => {
+                        format!(
+                            "Choose the {} face PNG",
+                            FACE_NAMES[slot.min(2)].to_lowercase()
+                        )
+                    }
+                    Target::Eye(_, slot) => format!(
+                        "Choose the eye {} PNG",
+                        match slot {
+                            EyeSlot::White => "white",
+                            EyeSlot::Pupil => "pupil",
+                            EyeSlot::Mask => "mask",
+                            EyeSlot::Blink => "blink",
+                        }
+                    ),
+                };
+                let generation = self.character_request;
+                return Task::perform(
+                    async move {
+                        let picker = rfd::AsyncFileDialog::new()
+                            .set_title(title)
+                            .add_filter("PNG image", &["png"]);
+                        if target == Target::NewPart {
+                            picker
+                                .pick_files()
+                                .await
+                                .unwrap_or_default()
+                                .into_iter()
+                                .map(|f| f.path().to_path_buf())
+                                .collect()
+                        } else {
+                            picker
+                                .pick_file()
+                                .await
+                                .into_iter()
+                                .map(|f| f.path().to_path_buf())
+                                .collect()
+                        }
+                    },
+                    move |paths| Message::ArtFilesPicked(generation, target, paths),
+                );
+            }
+            UiMsg::ArtSelect(s) => {
+                if let Some(e) = &mut self.art {
+                    e.select(s);
+                }
+            }
+            UiMsg::ArtKind(i, kind) => {
+                if let Some(e) = &mut self.art {
+                    e.checkpoint();
+                    e.set_kind(i, kind);
+                }
+            }
+            UiMsg::ArtOnHead(i, on) => {
+                if let Some(p) = self.art.as_mut().and_then(|e| e.parts.get_mut(i)) {
+                    p.on_head = on;
+                }
+            }
+            UiMsg::ArtBehind(i, behind) => {
+                if let Some(p) = self.art.as_mut().and_then(|e| e.parts.get_mut(i)) {
+                    p.behind = behind;
+                }
+            }
+            UiMsg::ArtRemovePart(i) => {
+                if let Some(e) = &mut self.art {
+                    e.checkpoint();
+                    e.remove_part(i);
+                }
+            }
+            UiMsg::ArtRemoveFace(i, slot) => {
+                if let Some(p) = self.art.as_mut().and_then(|e| e.parts.get_mut(i)) {
+                    p.faces[slot.min(2)] = None;
+                }
+            }
+            UiMsg::ArtStaticEye(i) => {
+                if let Some(e) = &mut self.art {
+                    self.notice = e.keep_eye_static(i).err();
+                }
+            }
+            UiMsg::ArtAddEye => {
+                if let Some(e) = &mut self.art {
+                    e.checkpoint();
+                    e.add_eye();
+                }
+            }
+            UiMsg::ArtRemoveEye(i) => {
+                if let Some(e) = &mut self.art
+                    && i < e.eyes.len()
+                {
+                    e.eyes.remove(i);
+                }
+            }
+            UiMsg::ArtRemoveBlink(i) => {
+                if let Some(eye) = self.art.as_mut().and_then(|e| e.eyes.get_mut(i)) {
+                    eye.blink = None;
+                }
+            }
+            UiMsg::ArtTravel(i, travel) => {
+                if let Some(eye) = self.art.as_mut().and_then(|e| e.eyes.get_mut(i)) {
+                    eye.travel = travel.clamp(0.0, 0.05);
+                }
+            }
+            UiMsg::ArtClick(x, y) => {
+                if let Some(e) = &mut self.art {
+                    e.checkpoint();
+                    e.click(x, y);
+                }
+            }
+            UiMsg::ArtName(name) => {
+                if let Some(e) = &mut self.art {
+                    e.name = name.chars().take(60).collect();
+                }
+            }
+            UiMsg::ArtCancel => {
+                self.cancel_character_job();
+                self.art = None;
+            }
+            UiMsg::ArtSave => {
+                if self.character_job.is_none()
+                    && let Some(editor) = self.art.clone()
+                {
+                    let id = self.begin_character_job();
+                    let job = self.character_job.as_ref().unwrap().clone();
+                    return character_work(id, move || {
+                        editor.save(&job).map(|c| {
+                            CharacterWork::Imported(
+                                characters::Imported::Installed(c),
+                                editor.new_install,
+                            )
+                        })
+                    });
+                }
+            }
+            UiMsg::ArtMode(mode) => {
+                if let Some(e) = &mut self.art {
+                    e.mode = mode;
+                }
+            }
+            UiMsg::ArtField(i, text) => {
+                if let Some(e) = &mut self.art {
+                    e.field(i, text);
+                }
+            }
+            UiMsg::ArtCanvas(i, text) => {
+                if let Some(e) = &mut self.art {
+                    e.resize_canvas(i, text);
+                }
+            }
+            UiMsg::ArtDragStart(selected) => {
+                if let Some(e) = &mut self.art {
+                    e.select(selected);
+                    e.checkpoint();
+                }
+            }
+            UiMsg::ArtDrag(dx, dy) => {
+                if let Some(e) = &mut self.art {
+                    e.translate(dx, dy);
+                }
+            }
+            UiMsg::ArtNudge(dx, dy) => {
+                if let Some(e) = &mut self.art {
+                    e.checkpoint();
+                    e.nudge(dx, dy);
+                }
+            }
+            UiMsg::ArtOrder(i, up) => {
+                if let Some(e) = &mut self.art {
+                    e.reorder(i, up);
+                }
+            }
+            UiMsg::ArtUndo => {
+                if let Some(e) = &mut self.art {
+                    e.undo();
+                }
+            }
+            UiMsg::ArtRedo => {
+                if let Some(e) = &mut self.art {
+                    e.redo();
+                }
+            }
+            UiMsg::ArtZoom(zoom) => {
+                if let Some(e) = &mut self.art {
+                    e.zoom = zoom.clamp(0.5, 3.0);
+                }
+            }
+            UiMsg::ArtBackground(bg) => {
+                if let Some(e) = &mut self.art {
+                    e.background = bg;
+                }
+            }
             UiMsg::ResetMascotPosition => {
                 #[cfg(windows)]
                 if let Some(m) = &mut self.mascot {
@@ -1200,6 +1625,11 @@ impl App {
                 if let Some(d) = &mut self.pointer_draft {
                     d.name = name.chars().take(40).collect();
                 }
+            }
+            UiMsg::ForearmColor(color) => {
+                out.sets.push((point::FOREARM_COLOR, Value::Color(color)));
+                out.sets
+                    .push((point::FOREARM_AUTO_COLOR, Value::Bool(false)));
             }
             UiMsg::CancelDraft => {
                 self.pointer_draft = None;
@@ -1332,6 +1762,9 @@ impl App {
 
     /// The single update path for settings: validate, apply, persist.
     fn apply_setting(&mut self, id: &'static str, value: Value, now: Millis) {
+        if matches!(id, character::CHARACTER | character::ENABLED) && self.character_job.is_some() {
+            self.cancel_character_job();
+        }
         if id == crate::features::display::TARGET {
             if let Value::Choice(target) = &value
                 && displays::selected(&self.displays, target).is_empty()
@@ -1349,9 +1782,7 @@ impl App {
         }
         #[cfg(windows)]
         if id == crate::features::upcoming::SOURCE {
-            self.lens = None;
-            self.desktop_lens = None;
-            self.desktop_lens_failed = false;
+            self.lens.reset();
         }
         #[cfg(not(windows))]
         if id == character::ENABLED && value == Value::Bool(true) {
@@ -1370,9 +1801,7 @@ impl App {
         match self.registry.set(&mut values, id, value) {
             Ok(()) => {
                 self.session.handle(Event::SettingsChanged(values), now);
-                if let Err(e) = preferences::save(self.session.settings()) {
-                    self.notice = Some(format!("Settings could not be saved: {e}"));
-                }
+                self.preference_writer.schedule(self.session.settings());
             }
             Err(why) => self.notice = Some(format!("{id}: {why}")),
         }
@@ -1418,12 +1847,26 @@ impl App {
     }
 
     fn quit(&mut self, now: Millis) {
+        if !self.character_jobs.is_empty() {
+            self.quit_pending = true;
+            for job in self.character_jobs.values() {
+                let _ = job.compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst);
+            }
+            self.cancel_character_job();
+            self.notice = Some("Finishing character work before quitting…".into());
+            return;
+        }
+        self.quit_pending = false;
+        if let Err(e) = self.preference_writer.flush() {
+            self.notice = Some(format!("Settings could not be saved; try Quit again: {e}"));
+            return;
+        }
         self.session.handle(Event::MasterOff, now);
         platform::restore_foreground(self.previous_focus.take());
         // Remove the tray icon now rather than leaving a ghost entry.
         self.tray = None;
         // Renderer teardown can hang on Windows after the overlay closed
-        // (seen with iced 0.14); nothing else needs flushing.
+        // (seen with iced 0.14); pending writes and imports are already finished.
         std::process::exit(0);
     }
 
@@ -1616,102 +2059,65 @@ impl App {
         #[cfg(windows)]
         {
             use crate::features::upcoming;
-            if !tool {
-                self.lens = None;
-            }
-            if !tool && !anywhere {
-                self.desktop_lens = None;
-                self.desktop_lens_failed = false;
-                return;
-            }
             let s = self.session.settings();
-            let size = s.float(upcoming::SIZE) as f32;
-            let zoom = if s.choice(upcoming::ZOOM) == "4" { 4.0 } else { 2.0 };
-
-            // The desktop lens follows the cursor by itself. It serves Lens
-            // anywhere, and the Lens tool when its source is the desktop.
-            let desktop = anywhere || s.choice(upcoming::SOURCE) == upcoming::DESKTOP;
-            if desktop && !self.desktop_lens_failed {
-                // TinyPaw's overlays and character stay out of the lens.
-                let mut exclude: Vec<isize> = self
-                    .overlays
+            let source = s.choice_text(upcoming::SOURCE);
+            let source_window = if matches!(source, upcoming::FOREGROUND | upcoming::DESKTOP) {
+                self.previous_focus
+            } else {
+                self.sources
                     .iter()
-                    .map(|o| o.hwnd)
-                    .filter(|&h| h != 0)
-                    .collect();
-                if let Some(h) = self.mascot.as_ref().map(|m| m.hwnd()).filter(|&h| h != 0) {
-                    exclude.push(h);
-                }
-                let result = match self.desktop_lens.as_mut() {
-                    Some(lens) => lens.configure(size, zoom, &exclude),
-                    None => platform::windows::DesktopLens::new(size, zoom).and_then(|mut lens| {
-                        let r = lens.configure(size, zoom, &exclude);
-                        self.desktop_lens = Some(lens);
-                        r
-                    }),
-                };
-                match result {
-                    Ok(()) => {
-                        self.lens = None;
-                        return;
-                    }
-                    Err(why) => {
-                        self.desktop_lens = None;
-                        self.desktop_lens_failed = true;
-                        if anywhere && !tool {
-                            // Nothing to fall back to without the overlay.
-                            self.lens_anywhere = false;
-                            self.notice = Some(format!("Lens unavailable: {why}"));
-                            self.overlay_notice = Some((format!("Lens unavailable: {why}"), now));
-                            return;
-                        }
-                        // Offer the window lens with the reason.
-                        self.overlay_notice = Some((
-                            format!("Desktop lens unavailable: {why}. Using the window lens."),
-                            now,
-                        ));
-                    }
-                }
-            }
-            self.desktop_lens = None;
-            if !tool {
-                return;
-            }
+                    .find(|w| w.id == source)
+                    .map(|w| w.handle)
+            };
             let output = self.session.pointer().map(|(o, _)| o);
-            let Some(o) = self
+            let destination = self
                 .overlays
                 .iter()
                 .find(|o| Some(o.display.id) == output && o.hwnd != 0)
-            else {
-                self.lens = None;
-                return;
-            };
-            if self
-                .lens
-                .as_ref()
-                .is_some_and(|l| l.destination() != o.hwnd)
-            {
-                self.lens = None;
+                .map(|o| (o.hwnd, &o.display));
+            let mut exclude: Vec<_> = self
+                .overlays
+                .iter()
+                .map(|o| o.hwnd)
+                .filter(|h| *h != 0)
+                .collect();
+            if let Some(m) = &self.mascot {
+                exclude.push(m.hwnd());
             }
-            let result = (|| {
-                if self.lens.is_none() {
-                    self.lens = Some(platform::windows::Lens::new(
-                        o.hwnd,
-                        if matches!(
-                            self.session.settings().choice(upcoming::SOURCE),
-                            upcoming::FOREGROUND | upcoming::DESKTOP
-                        ) {
-                            self.previous_focus.ok_or("Select a game window before turning on TinyPaw, or choose a Lens source in Settings")?
-                        } else {
-                            self.sources.iter().find(|s| s.id == self.session.settings().choice(upcoming::SOURCE)).map(|s| s.handle).ok_or("Lens source is no longer available; refresh the source list in Settings")?
-                        },
-                    )?);
+            exclude.extend(
+                self.helper_hwnds
+                    .iter()
+                    .filter(|(id, hwnd)| {
+                        **hwnd != 0
+                            && (Some(**id) == self.settings_window
+                                || Some(**id) == self.first_run_window)
+                    })
+                    .map(|(_, hwnd)| *hwnd),
+            );
+            let result = self.lens.update(platform::lens::Input {
+                tool,
+                anywhere,
+                source,
+                source_window,
+                destination,
+                exclude: &exclude,
+                size: s.float(upcoming::SIZE) as f32,
+                zoom: if s.choice(upcoming::ZOOM) == "4" {
+                    4.0
+                } else {
+                    2.0
+                },
+            });
+            if let Some(notice) = result.notice {
+                self.overlay_notice = Some((notice.clone(), now));
+                if result.stop_anywhere {
+                    self.notice = Some(notice);
                 }
-                self.lens.as_ref().unwrap().update(&o.display, size, zoom)
-            })();
-            if let Err(e) = result {
-                self.lens = None;
-                self.overlay_notice = Some((e, now));
+            }
+            if result.stop_anywhere {
+                self.lens_anywhere = false;
+            }
+            if result.return_to_point {
                 out.collect(self.dispatch(point::SELECT, now).ok());
             }
         }
@@ -1770,7 +2176,9 @@ impl App {
                 characters: &self.characters,
                 character: self.current_character().id,
                 character_draft: self.character_draft.as_ref(),
-                character_conflict: self.character_conflict.as_ref().map(|(_, n)| n.as_str()),
+                character_busy: self.character_job.is_some(),
+                character_conflict: self.character_conflict.as_deref(),
+                art: self.art.as_ref(),
             });
         }
         #[cfg(windows)]
@@ -1838,9 +2246,7 @@ impl App {
             .as_ref()
             .and_then(|m| m.poll_interval(&self.mascot_options()))
         {
-            subs.push(
-                iced::time::every(every).map(|_| Message::Mascot(crate::mascot::Msg::Poll)),
-            );
+            subs.push(iced::time::every(every).map(|_| Message::Mascot(crate::mascot::Msg::Poll)));
         }
         // Frames only while something animates; otherwise the process sleeps.
         if self.session.animating(now) {
@@ -1904,3 +2310,20 @@ impl Outcomes {
 
 // Keep the wheel feature's command ID referenced for the registry lookup.
 const _: &str = wheel_feature::OPEN;
+
+/// Filesystem and PNG work runs independently of Iced's event executor.
+fn character_work(
+    id: u64,
+    work: impl FnOnce() -> Result<CharacterWork, String> + Send + 'static,
+) -> Task<Message> {
+    let (tx, rx) = iced::futures::channel::oneshot::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(work());
+    });
+    Task::perform(rx, move |r| {
+        Message::CharacterWorked(
+            id,
+            r.unwrap_or_else(|_| Err("Character worker ended unexpectedly".into())),
+        )
+    })
+}

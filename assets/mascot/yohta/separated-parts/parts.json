@@ -1,0 +1,138 @@
+{
+  "source": "C:\\Users\\Dream\\iCloudDrive\\Doodle\\Yohta\\avatar\\Separated chibi Yohta animation parts.png",
+  "source_size": [
+    1312,
+    1199
+  ],
+  "format": "RGBA PNG",
+  "padding": 8,
+  "naming": "Left/right refer to the viewer, not the character.",
+  "parts": [
+    {
+      "name": "head",
+      "file": "head.png",
+      "size": [
+        626,
+        565
+      ],
+      "source_bounds": [
+        95,
+        2,
+        705,
+        551
+      ],
+      "content_offset": [
+        8,
+        8
+      ]
+    },
+    {
+      "name": "body_with_paws",
+      "file": "body_with_paws.png",
+      "size": [
+        686,
+        638
+      ],
+      "source_bounds": [
+        11,
+        566,
+        681,
+        1188
+      ],
+      "content_offset": [
+        8,
+        8
+      ]
+    },
+    {
+      "name": "tail",
+      "file": "tail.png",
+      "size": [
+        513,
+        575
+      ],
+      "source_bounds": [
+        748,
+        48,
+        1245,
+        607
+      ],
+      "content_offset": [
+        8,
+        8
+      ]
+    },
+    {
+      "name": "eye_screen_left",
+      "file": "eye_screen_left.png",
+      "size": [
+        128,
+        130
+      ],
+      "source_bounds": [
+        801,
+        742,
+        913,
+        856
+      ],
+      "content_offset": [
+        8,
+        8
+      ]
+    },
+    {
+      "name": "eye_screen_right",
+      "file": "eye_screen_right.png",
+      "size": [
+        181,
+        151
+      ],
+      "source_bounds": [
+        993,
+        711,
+        1158,
+        846
+      ],
+      "content_offset": [
+        8,
+        8
+      ]
+    },
+    {
+      "name": "eyebrow_screen_left",
+      "file": "eyebrow_screen_left.png",
+      "size": [
+        176,
+        142
+      ],
+      "source_bounds": [
+        738,
+        935,
+        898,
+        1061
+      ],
+      "content_offset": [
+        8,
+        8
+      ]
+    },
+    {
+      "name": "eyebrow_screen_right",
+      "file": "eyebrow_screen_right.png",
+      "size": [
+        288,
+        163
+      ],
+      "source_bounds": [
+        957,
+        912,
+        1229,
+        1059
+      ],
+      "content_offset": [
+        8,
+        8
+      ]
+    }
+  ]
+}

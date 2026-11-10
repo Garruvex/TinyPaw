@@ -60,8 +60,8 @@ pub fn build(registry: &Registry) -> Result<Tray, String> {
         }
     }));
 
-    let off_icon = paw_icon(false)?;
-    let on_icon = paw_icon(true)?;
+    let off_icon = crate::branding::tray_icon(false)?;
+    let on_icon = crate::branding::tray_icon(true)?;
     let icon = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false)
@@ -93,7 +93,7 @@ impl Tray {
         }
         for (id, item) in &self.items {
             if let Some(def) = registry.command(id) {
-                item.set_enabled((def.available)(session).is_ok());
+                item.set_enabled(registry.availability(def.id, session).is_ok());
             }
         }
         if self.shown == Some(on) {
@@ -116,37 +116,4 @@ impl Tray {
             self.off_icon.clone()
         }));
     }
-}
-
-/// A 32×32 placeholder paw print: warm when On, grey when Off.
-fn paw_icon(on: bool) -> Result<Icon, String> {
-    const N: usize = 32;
-    let color: [u8; 3] = if on {
-        [0xF2, 0x8C, 0x28]
-    } else {
-        [0x9A, 0x9A, 0x9A]
-    };
-    let blobs: [(f32, f32, f32); 5] = [
-        (16.0, 21.0, 8.0),
-        (7.0, 12.0, 3.6),
-        (12.5, 7.0, 3.6),
-        (19.5, 7.0, 3.6),
-        (25.0, 12.0, 3.6),
-    ];
-    let mut rgba = vec![0u8; N * N * 4];
-    for y in 0..N {
-        for x in 0..N {
-            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
-            let coverage = blobs
-                .iter()
-                .map(|&(cx, cy, r)| {
-                    (r + 0.5 - ((px - cx).powi(2) + (py - cy).powi(2)).sqrt()).clamp(0.0, 1.0)
-                })
-                .fold(0.0f32, f32::max);
-            let i = (y * N + x) * 4;
-            rgba[i..i + 3].copy_from_slice(&color);
-            rgba[i + 3] = (coverage * 255.0) as u8;
-        }
-    }
-    Icon::from_rgba(rgba, N as u32, N as u32).map_err(|e| e.to_string())
 }

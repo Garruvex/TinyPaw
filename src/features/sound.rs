@@ -13,7 +13,9 @@ pub const TOGGLE_MUTE: &str = "sound.toggle_mute";
 
 /// Stable sound IDs. `pack` follows the active pointer's own tap, falling back
 /// to Blackboard Knock; `custom` is the imported WAV.
-pub const CHOICES: &[&str] = &["pack", "knock", "pop", "bonk", "custom"];
+pub const CHOICES: &[&str] = &[
+    "pack", "knock", "pop", "bonk", "duck-toy", "mac-quack", "bonk-clip", "dry-fart", "custom",
+];
 
 pub fn label(id: &str) -> &'static str {
     match id {
@@ -21,6 +23,10 @@ pub fn label(id: &str) -> &'static str {
         "knock" => "Blackboard Knock",
         "pop" => "Bubble Pop",
         "bonk" => "Rubber Bonk",
+        "duck-toy" => "Duck Toy",
+        "mac-quack" => "Mac Quack",
+        "bonk-clip" => "Bonk",
+        "dry-fart" => "Dry Fart",
         "custom" => "Imported WAV",
         _ => "Unknown",
     }

@@ -60,10 +60,29 @@ pub struct Pin {
     pub color: Rgba,
 }
 
+/// A paw-pad impression left by a tap, using the ink colour at placement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PawPrintKind {
+    Cat,
+    Dog,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PawPrint {
+    pub output: OutputId,
+    pub at: Pt,
+    pub kind: PawPrintKind,
+    pub color: Rgba,
+    pub size: f32,
+    pub angle: f32,
+    pub born: u64,
+}
+
 /// Anything that undo and clear operate on.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mark {
     Stroke(Stroke),
+    PawPrint(PawPrint),
     Label(Label),
     Pin(Pin),
 }
@@ -72,22 +91,26 @@ impl Mark {
     pub fn output(&self) -> OutputId {
         match self {
             Mark::Stroke(s) => s.output,
+            Mark::PawPrint(p) => p.output,
             Mark::Label(l) => l.output,
             Mark::Pin(p) => p.output,
         }
     }
 
-    /// Commit time for strokes; labels and pins never fade.
+    /// Commit time for ink and paw prints; labels and pins never fade.
     pub fn born(&self) -> Option<u64> {
         match self {
             Mark::Stroke(s) => Some(s.born),
+            Mark::PawPrint(p) => Some(p.born),
             _ => None,
         }
     }
 
     pub fn set_born(&mut self, at: u64) {
-        if let Mark::Stroke(s) = self {
-            s.born = at;
+        match self {
+            Mark::Stroke(s) => s.born = at,
+            Mark::PawPrint(p) => p.born = at,
+            _ => {}
         }
     }
 }

@@ -78,8 +78,11 @@ pub struct SettingsView<'a> {
     pub character: &'static str,
     /// "Add character" in progress.
     pub character_draft: Option<&'a crate::mascot::pack::Draft>,
+    pub character_busy: bool,
     /// A folder import waiting on Keep both or Replace: the character's name.
     pub character_conflict: Option<&'a str>,
+    /// The Art tab's open character, while editing.
+    pub art: Option<&'a crate::mascot::editor::Editor>,
 }
 
 fn h1<'a>(label: &'a str) -> Element<'a, Message> {
@@ -135,12 +138,15 @@ pub fn view(v: SettingsView<'_>) -> Element<'_, Message> {
 
 fn header<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     let on = v.session.is_enabled();
-    let logo = container(icon(Glyph::PawSolid, 18.0, theme::AMBER))
-        .width(30)
-        .height(30)
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Center)
-        .style(theme::fill(theme::AMBER_BG, 8.0));
+    let logo = container(
+        iced::widget::image(crate::branding::logo())
+            .width(30)
+            .height(30),
+    )
+    .width(30)
+    .height(30)
+    .align_x(Alignment::Center)
+    .align_y(Alignment::Center);
     let switch = toggler(on)
         .label("Annotation")
         .text_size(14)
@@ -426,13 +432,23 @@ fn pointer_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Eleme
         _ => "A compact paw at the pointer.",
     };
 
+    let mut stamps = row![].spacing(4);
+    for (id, label) in [("off", "Off"), ("cat", "Cat"), ("dog", "Dog")] {
+        stamps = stamps.push(
+            button(text(label).size(13))
+                .padding([7, 12])
+                .style(theme::segment(s.choice(point::TAP_STAMP) == id))
+                .on_press(Message::Set(point::TAP_STAMP, Value::Choice(id))),
+        );
+    }
+
     let size = s.float(point::SIZE);
     let size_row = row![
         h2("Size"),
         space().width(Length::Fill),
         text(format!("{size:.0} px")).size(13).color(theme::TEXT),
     ];
-    let size_slider = slider(32.0..=96.0, size, |x| {
+    let size_slider = slider(v.registry.range(point::SIZE), size, |x| {
         Message::Set(point::SIZE, Value::Float(x))
     })
     .step(4.0)
@@ -447,7 +463,7 @@ fn pointer_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Eleme
             text(format!("{angle:.0}°")).size(13).color(theme::TEXT),
         ]
         .into(),
-        slider(-60.0..=60.0, angle, |x| {
+        slider(v.registry.range(point::ANGLE), angle, |x| {
             Message::Set(point::ANGLE, Value::Float(x))
         })
         .step(5.0)
@@ -480,6 +496,16 @@ fn pointer_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Eleme
             hint("Use Add yours to import the paw, then optionally attach a matching forearm and align the wrist."),
         ]),
         section(vec![h2("Presentation"), presentation.into(), hint(pres_hint)]),
+        if !laser && pres == "stretch" && v.pack.is_none_or(|p| p.forearm.is_none()) {
+            forearm_colors(s, v.pack.and_then(|p| p.accent))
+        } else {
+            space().into()
+        },
+        section(vec![
+            h2("Tap stamp"),
+            stamps.into(),
+            hint("Leave a little paw print when you tap with a paw pointer. Uses your ink colour and fade setting; drag to draw as usual."),
+        ]),
         section(vec![size_row.into(), size_slider.into()]),
         if !laser && pres == "furry" { angle_control } else { space().into() },
         hint("Ink, labels, Spotlight and Lens are under Annotation."),
@@ -490,6 +516,7 @@ fn pointer_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Eleme
     let ink = theme::rgba(current_ink);
     let tile = |bg: Color| {
         canvas(PreviewTile {
+            forearm_color: point::forearm_color(s),
             background: bg,
             ink,
             width: width as f32,
@@ -504,7 +531,7 @@ fn pointer_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Eleme
         .height(150)
     };
     if let Some(draft) = v.draft {
-        return (left.into(), Some(new_pointer(draft, v.editing)));
+        return (left.into(), Some(new_pointer(draft, v.editing, s)));
     }
     let preview = column![
         h2("Preview"),
@@ -526,6 +553,65 @@ fn pointer_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Eleme
     .width(260);
 
     (left.into(), Some(preview.into()))
+}
+
+/// Colour controls apply only to the generated forearm, leaving paw art intact.
+fn forearm_colors<'a>(
+    s: &'a crate::registry::SettingValues,
+    accent: Option<[u8; 4]>,
+) -> Element<'a, Message> {
+    let automatic = s.bool(point::FOREARM_AUTO_COLOR);
+    let color = if automatic {
+        accent.unwrap_or([0xF2, 0xA6, 0x5A, 255])
+    } else {
+        s.color(point::FOREARM_COLOR)
+    };
+    let palette = [
+        [36, 39, 60, 255],
+        [52, 54, 130, 255],
+        [91, 155, 255, 255],
+        [255, 255, 255, 255],
+        [90, 90, 98, 255],
+        [242, 166, 90, 255],
+        [170, 100, 64, 255],
+        [244, 154, 168, 255],
+        [164, 112, 220, 255],
+        [104, 184, 128, 255],
+    ];
+    let swatches = row(palette.into_iter().map(|c| {
+        button(space().width(24).height(24))
+            .padding(0)
+            .style(theme::swatch(theme::rgba(c), c == color))
+            .on_press(Message::Ui(UiMsg::ForearmColor(c)))
+            .into()
+    }))
+    .spacing(6)
+    .wrap();
+    let mut controls = column![
+        h2("Forearm colour"),
+        hint("Used by Stretch Paw when no forearm PNG is attached."),
+        check("Use pointer colour", automatic, point::FOREARM_AUTO_COLOR),
+        swatches,
+    ]
+    .spacing(8);
+    for (channel, label) in ["Red", "Green", "Blue"].into_iter().enumerate() {
+        controls = controls.push(
+            row![
+                container(hint(label)).width(42),
+                slider(0.0..=255.0, color[channel] as f32, move |value| {
+                    let mut next = color;
+                    next[channel] = value.round() as u8;
+                    Message::Ui(UiMsg::ForearmColor(next))
+                })
+                .step(1.0_f32)
+                .style(theme::range),
+                text(color[channel].to_string()).size(12).width(28),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        );
+    }
+    section(vec![controls.into()])
 }
 
 /// Ink, then each tool's options: what the quick bar's tools draw with.
@@ -573,13 +659,13 @@ fn annotation_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     #[cfg(windows)]
     let source_picker: Element<'a, Message> = {
         use crate::features::upcoming::{DESKTOP, FOREGROUND, SOURCE};
-        let source = s.choice(SOURCE);
+        let source = s.choice_text(SOURCE);
         let desktop = source == DESKTOP;
-        let mode = |label: &'static str, on: bool, value: &'static str| {
+        let mode = |label: &'static str, on: bool, value: &str| {
             button(text(label).size(13))
                 .padding([7, 12])
                 .style(theme::segment(on))
-                .on_press(Message::Set(SOURCE, Value::Choice(value)))
+                .on_press(Message::Set(SOURCE, Value::DynamicChoice(value.to_owned())))
         };
         let mut picker = column![
             h2("Lens source"),
@@ -587,7 +673,11 @@ fn annotation_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
                 row![
                     mode("Desktop under pointer", desktop, DESKTOP),
                     // Locking starts from the window you were using.
-                    mode("Lock to a window", !desktop, if desktop { FOREGROUND } else { source }),
+                    mode(
+                        "Lock to a window",
+                        !desktop,
+                        if desktop { FOREGROUND } else { source }
+                    ),
                 ]
                 .spacing(4)
             )
@@ -605,7 +695,7 @@ fn annotation_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
                     pick_list(
                         v.sources.to_vec(),
                         v.sources.iter().find(|w| w.id == source).cloned(),
-                        |w| Message::Set(SOURCE, Value::Choice(w.id)),
+                        |w| Message::Set(SOURCE, Value::DynamicChoice(w.id)),
                     )
                     .placeholder("Window active before TinyPaw")
                     .padding([8, 12])
@@ -655,18 +745,25 @@ fn annotation_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         section(vec![
             h2("Ink"),
             ink_row.into(),
-            row![widths, row![hint("Fade"), fade].spacing(8).align_y(Alignment::Center)]
-                .spacing(16)
-                .align_y(Alignment::Center)
-                .into(),
+            row![
+                widths,
+                row![hint("Fade"), fade]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+            ]
+            .spacing(16)
+            .align_y(Alignment::Center)
+            .into(),
             hint("The quick bar's ink button edits these same values."),
         ]),
         section(vec![
             h2("Text labels"),
             hint("Size"),
-            slider(12.0..=48.0, s.float(crate::features::text::SIZE), |x| {
-                Message::Set(crate::features::text::SIZE, Value::Float(x))
-            })
+            slider(
+                v.registry.range(crate::features::text::SIZE),
+                s.float(crate::features::text::SIZE),
+                |x| { Message::Set(crate::features::text::SIZE, Value::Float(x)) }
+            )
             .step(1.0)
             .style(theme::range)
             .into(),
@@ -680,9 +777,11 @@ fn annotation_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         ]),
         section(vec![
             h2("Spotlight radius"),
-            slider(60.0..=400.0, s.float(crate::features::spotlight::RADIUS), |x| {
-                Message::Set(crate::features::spotlight::RADIUS, Value::Float(x))
-            })
+            slider(
+                v.registry.range(crate::features::spotlight::RADIUS),
+                s.float(crate::features::spotlight::RADIUS),
+                |x| { Message::Set(crate::features::spotlight::RADIUS, Value::Float(x)) }
+            )
             .step(5.0)
             .style(theme::range)
             .into(),
@@ -692,7 +791,7 @@ fn annotation_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
             row![
                 hint("Magnification"),
                 pick_list(
-                    ["2", "4"],
+                    v.registry.choices(crate::features::upcoming::ZOOM),
                     Some(s.choice(crate::features::upcoming::ZOOM)),
                     |z| Message::Set(crate::features::upcoming::ZOOM, Value::Choice(z))
                 )
@@ -703,9 +802,11 @@ fn annotation_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
             .align_y(Alignment::Center)
             .into(),
             hint("Size"),
-            slider(120.0..=480.0, s.float(crate::features::upcoming::SIZE), |x| {
-                Message::Set(crate::features::upcoming::SIZE, Value::Float(x))
-            })
+            slider(
+                v.registry.range(crate::features::upcoming::SIZE),
+                s.float(crate::features::upcoming::SIZE),
+                |x| { Message::Set(crate::features::upcoming::SIZE, Value::Float(x)) }
+            )
             .step(10.0)
             .style(theme::range)
             .into(),
@@ -719,7 +820,11 @@ fn annotation_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
 }
 
 /// "Add your pointer": click the exact tip, name it, save.
-fn new_pointer<'a>(draft: &'a Draft, editing: bool) -> Element<'a, Message> {
+fn new_pointer<'a>(
+    draft: &'a Draft,
+    editing: bool,
+    settings: &'a crate::registry::SettingValues,
+) -> Element<'a, Message> {
     if editing {
         return column![
             h2("Re-aim pointer"),
@@ -813,9 +918,15 @@ fn new_pointer<'a>(draft: &'a Draft, editing: bool) -> Element<'a, Message> {
         ))
         .step(0.01_f32),
         arm,
+        if draft.forearm.is_none() {
+            forearm_colors(settings, None)
+        } else {
+            space().into()
+        },
         h2("Test the pair"),
         canvas(PairPreview {
-            pack: draft.preview()
+            pack: draft.preview(),
+            forearm_color: point::forearm_color(settings),
         })
         .width(Length::Fill)
         .height(220),
@@ -997,11 +1108,14 @@ impl canvas::Program<Message> for HotspotPicker<'_> {
 
 struct PairPreview {
     pack: Pack,
+    forearm_color: Option<[u8; 4]>,
 }
 
 struct PairPreviewState {
     session: Session,
     started: std::time::Instant,
+    // Only a press begun in this canvas owns the matching release.
+    pressed: bool,
 }
 
 impl Default for PairPreviewState {
@@ -1018,6 +1132,7 @@ impl Default for PairPreviewState {
         Self {
             session,
             started: std::time::Instant::now(),
+            pressed: false,
         }
     }
 }
@@ -1035,27 +1150,33 @@ impl canvas::Program<Message> for PairPreview {
         use crate::session::{Event, OutputId, PointerEvent, PointerKind, Pt};
         let now = state.started.elapsed().as_millis() as u64;
         let position = cursor.position_in(bounds);
-        let kind = match event {
-            iced::Event::Mouse(iced::mouse::Event::CursorMoved { .. }) if position.is_some() => {
-                Some(PointerKind::Moved)
-            }
-            iced::Event::Mouse(iced::mouse::Event::CursorMoved { .. })
-                if state.session.pointer().is_some() =>
-            {
-                Some(PointerKind::Left)
-            }
-            iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left))
-                if position.is_some() =>
-            {
-                Some(PointerKind::Down)
-            }
-            iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
-                Some(PointerKind::Up)
-            }
-            iced::Event::Mouse(iced::mouse::Event::CursorLeft) => Some(PointerKind::Left),
-            _ => None,
-        };
+        let kind =
+            match event {
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { .. })
+                    if position.is_some() =>
+                {
+                    Some(PointerKind::Moved)
+                }
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { .. })
+                    if state.session.pointer().is_some() =>
+                {
+                    Some(PointerKind::Left)
+                }
+                iced::Event::Mouse(iced::mouse::Event::ButtonPressed(
+                    iced::mouse::Button::Left,
+                )) if position.is_some() => Some(PointerKind::Down),
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+                    iced::mouse::Button::Left,
+                )) if state.pressed => Some(PointerKind::Up),
+                iced::Event::Mouse(iced::mouse::Event::CursorLeft) => Some(PointerKind::Left),
+                _ => None,
+            };
         if let Some(kind) = kind {
+            match kind {
+                PointerKind::Down => state.pressed = true,
+                PointerKind::Up | PointerKind::Left => state.pressed = false,
+                _ => {}
+            }
             let p = position.unwrap_or(iced::Point::new(bounds.width * 0.4, 30.0));
             state.session.handle(
                 Event::Pointer(PointerEvent {
@@ -1101,8 +1222,61 @@ impl canvas::Program<Message> for PairPreview {
                 stretch: true,
                 grip_x: bounds.width * 0.4,
             });
-        super::paw::draw_tip(&mut frame, tip, bounds.size(), Some(&self.pack));
+        super::paw::draw_tip(
+            &mut frame,
+            tip,
+            bounds.size(),
+            Some(&self.pack),
+            self.forearm_color,
+        );
         vec![frame.into_geometry()]
+    }
+}
+
+#[cfg(test)]
+mod pointer_preview_tests {
+    use super::*;
+    use iced::widget::canvas::Program;
+
+    #[test]
+    fn preview_leaves_button_clicks_alone_but_finishes_its_own_press() {
+        let preview = PairPreview {
+            pack: crate::packs::load_all().0.remove(0),
+            forearm_color: None,
+        };
+        let mut state = PairPreviewState::default();
+        let bounds = iced::Rectangle::new(iced::Point::ORIGIN, iced::Size::new(260.0, 220.0));
+        let outside = iced::mouse::Cursor::Available(iced::Point::new(150.0, 300.0));
+        let inside = iced::mouse::Cursor::Available(iced::Point::new(100.0, 100.0));
+        let down = iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left));
+        let up = iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+            iced::mouse::Button::Left,
+        ));
+        let status = |action: Option<canvas::Action<Message>>| {
+            action.map_or(iced::event::Status::Ignored, |a| a.into_inner().2)
+        };
+
+        // Save and Cancel are outside the preview and must get both events.
+        assert_eq!(
+            status(preview.update(&mut state, &down, bounds, outside)),
+            iced::event::Status::Ignored
+        );
+        assert_eq!(
+            status(preview.update(&mut state, &up, bounds, outside)),
+            iced::event::Status::Ignored
+        );
+        assert_eq!(
+            status(preview.update(&mut state, &down, bounds, inside)),
+            iced::event::Status::Captured
+        );
+        assert_eq!(
+            status(preview.update(&mut state, &up, bounds, outside)),
+            iced::event::Status::Captured
+        );
+        assert_eq!(
+            status(preview.update(&mut state, &up, bounds, outside)),
+            iced::event::Status::Ignored
+        );
     }
 }
 
@@ -1282,7 +1456,15 @@ fn check<'a>(label: &'a str, on: bool, id: &'static str) -> Element<'a, Message>
 
 /// The characters, the selected one's desktop options, and the Add
 /// character draft beside them while one is in progress.
-fn character_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Element<'a, Message>>) {
+fn character_page<'a>(
+    v: &SettingsView<'a>,
+) -> (Element<'a, Message>, Option<Element<'a, Message>>) {
+    if let Some(e) = v.art {
+        return (
+            art_page(e, v.character_busy),
+            Some(art_preview(e, v.character_busy)),
+        );
+    }
     let s = v.session.settings();
     let size = s.float(mascot::SIZE);
     let selected = v
@@ -1331,7 +1513,11 @@ fn character_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Ele
             .height(40)
             .align_x(Alignment::Center)
             .align_y(Alignment::Center)
-            .style(theme::outlined(Color::TRANSPARENT, 20.0, theme::LINE_STRONG))
+            .style(theme::outlined(
+                Color::TRANSPARENT,
+                20.0,
+                theme::LINE_STRONG,
+            ))
             .into(),
         "Add character".into(),
         v.character_draft.is_some(),
@@ -1339,9 +1525,15 @@ fn character_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Ele
     ));
     let custom = selected.filter(|c| !c.is_builtin());
     let manage = row![
+        button("From parts…")
+            .style(theme::secondary)
+            .on_press(Message::Ui(UiMsg::ArtFromParts)),
         button("Import folder")
             .style(theme::secondary)
             .on_press(Message::Ui(UiMsg::ImportCharacter)),
+        button("Edit art")
+            .style(theme::secondary)
+            .on_press_maybe(custom.map(|_| Message::Ui(UiMsg::EditArt))),
         button("Export…")
             .style(theme::secondary)
             .on_press_maybe(custom.map(|_| Message::Ui(UiMsg::ExportCharacter))),
@@ -1413,7 +1605,7 @@ fn character_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Ele
                 text(format!("{size:.0} px tall")).size(13)
             ]
             .into(),
-            slider(mascot::MIN_SIZE..=mascot::MAX_SIZE, size, |x| {
+            slider(v.registry.range(mascot::SIZE), size, |x| {
                 Message::Set(mascot::SIZE, Value::Float(x))
             })
             .step(4.0)
@@ -1447,11 +1639,618 @@ fn character_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Ele
                 ),
         );
 
-    (page.into(), v.character_draft.map(new_character))
+    (
+        page.into(),
+        v.character_draft
+            .map(|d| new_character(d, v.character_busy)),
+    )
+}
+
+/// The Art tab: a character's body, moving parts, head faces and eyes.
+fn art_page<'a>(e: &'a crate::mascot::editor::Editor, busy: bool) -> Element<'a, Message> {
+    if busy {
+        return column![
+            h1("Preparing artwork…"),
+            hint("Your draft stays available if preparation fails."),
+            button("Cancel")
+                .style(theme::secondary)
+                .on_press(Message::Ui(UiMsg::ArtCancel))
+        ]
+        .spacing(12)
+        .into();
+    }
+    use crate::mascot::editor::{EyeSlot, FACE_NAMES, Selected, Target};
+    use crate::mascot::motion::PartType;
+    let small = |label: String, msg: Message| {
+        button(text(label).size(12))
+            .padding([5, 10])
+            .style(theme::secondary)
+            .on_press(msg)
+    };
+    let thumb = |h: &iced::advanced::image::Handle| -> Element<'a, Message> {
+        container(iced::widget::image(h.clone()).height(40).width(40))
+            .width(48)
+            .height(48)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .style(theme::fill(theme::WELL, 8.0))
+            .into()
+    };
+    let seg = |label: &'static str, on: bool, msg: Message| -> Element<'a, Message> {
+        button(text(label).size(12))
+            .padding([5, 10])
+            .style(theme::segment(on))
+            .on_press(msg)
+            .into()
+    };
+
+    // What the preview's clicks move.
+    let mut targets = vec![
+        seg(
+            "Body",
+            e.selected == Selected::Body,
+            Message::Ui(UiMsg::ArtSelect(Selected::Body)),
+        ),
+        seg(
+            "Ground",
+            e.selected == Selected::Ground,
+            Message::Ui(UiMsg::ArtSelect(Selected::Ground)),
+        ),
+    ];
+    for (i, p) in e.parts.iter().enumerate() {
+        targets.push(
+            button(text(format!("{} {}", i + 1, p.kind)).size(12))
+                .padding([5, 10])
+                .style(theme::segment(e.selected == Selected::Part(i)))
+                .on_press(Message::Ui(UiMsg::ArtSelect(Selected::Part(i))))
+                .into(),
+        );
+    }
+    let targets = container(row(targets).spacing(4).wrap().vertical_spacing(4))
+        .padding(4)
+        .style(theme::fill(theme::WELL, 10.0));
+
+    let head = e.head();
+    let mut parts = column![].spacing(12);
+    for (i, p) in e.parts.iter().enumerate() {
+        let mut line = row![
+            text(format!("{}", i + 1))
+                .size(13)
+                .color(theme::MUTED)
+                .width(16),
+            thumb(&p.layer.handle),
+            pick_list(PartType::ALL, Some(p.kind), move |k| Message::Ui(
+                UiMsg::ArtKind(i, k)
+            ))
+            .text_size(13)
+            .padding([6, 10])
+            .style(theme::select),
+            container(
+                row![
+                    seg("Back", p.behind, Message::Ui(UiMsg::ArtBehind(i, true))),
+                    seg("Front", !p.behind, Message::Ui(UiMsg::ArtBehind(i, false))),
+                ]
+                .spacing(2)
+            )
+            .padding(2)
+            .style(theme::fill(theme::WELL, 8.0)),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center);
+        if head.is_some() && p.kind != PartType::Head {
+            line = line.push(
+                checkbox(p.on_head)
+                    .label("On head")
+                    .text_size(13)
+                    .size(15)
+                    .on_toggle(move |on| Message::Ui(UiMsg::ArtOnHead(i, on))),
+            );
+        }
+        line = line
+            .push(space().width(Length::Fill))
+            .push(small("Remove".into(), Message::Ui(UiMsg::ArtRemovePart(i))));
+        line = line
+            .push(small(
+                "Lower".into(),
+                Message::Ui(UiMsg::ArtOrder(i, false)),
+            ))
+            .push(small("Raise".into(), Message::Ui(UiMsg::ArtOrder(i, true))));
+        let mut block = column![line.wrap()].spacing(8);
+        if p.kind == PartType::Head {
+            let mut faces = row![hint("Faces:")].spacing(6).align_y(Alignment::Center);
+            for (slot, name) in FACE_NAMES.iter().enumerate() {
+                faces = faces.push(small(
+                    if p.faces[slot].is_some() {
+                        format!("{name} ✓")
+                    } else {
+                        format!("{name}…")
+                    },
+                    Message::Ui(UiMsg::ArtPick(Target::Face(i, slot))),
+                ));
+                if p.faces[slot].is_some() {
+                    faces = faces.push(small(
+                        format!("Arrange {name}"),
+                        Message::Ui(UiMsg::ArtSelect(Selected::Face(i, slot))),
+                    ));
+                    faces = faces.push(
+                        button(text("×").size(12))
+                            .padding([5, 8])
+                            .style(theme::tool_button(theme::Tone::Plain))
+                            .on_press(Message::Ui(UiMsg::ArtRemoveFace(i, slot))),
+                    );
+                }
+            }
+            block = block.push(faces.wrap());
+        }
+        parts = parts.push(block);
+    }
+
+    let mut eyes = column![].spacing(10);
+    for (i, eye) in e.eyes.iter().enumerate() {
+        let slot = |label: &str, set: bool, which: EyeSlot| {
+            small(
+                if set {
+                    format!("{label} ✓")
+                } else {
+                    format!("{label}…")
+                },
+                Message::Ui(UiMsg::ArtPick(Target::Eye(i, which))),
+            )
+        };
+        let mut images = row![
+            text(format!("Eye {}", i + 1)).size(13).width(48),
+            slot("White", eye.white.is_some(), EyeSlot::White),
+            slot("Pupil", eye.pupil.is_some(), EyeSlot::Pupil),
+            slot("Mask", eye.mask.is_some(), EyeSlot::Mask),
+            slot("Blink", eye.blink.is_some(), EyeSlot::Blink),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center);
+        if eye.blink.is_some() {
+            images = images.push(
+                button(text("×").size(12))
+                    .padding([5, 8])
+                    .style(theme::tool_button(theme::Tone::Plain))
+                    .on_press(Message::Ui(UiMsg::ArtRemoveBlink(i))),
+            );
+        }
+        images = images
+            .push(space().width(Length::Fill))
+            .push(small("Remove".into(), Message::Ui(UiMsg::ArtRemoveEye(i))));
+        eyes = eyes.push(
+            column![
+                images.wrap(),
+                small("Keep static layers".into(),Message::Ui(UiMsg::ArtStaticEye(i))),
+                hint("Static conversion keeps the white and pupil artwork as head layers; the tracking mask and blink are removed."),
+                row![
+                    hint("Pupil travel"),
+                    slider(0.0..=0.05, eye.travel, move |x| Message::Ui(
+                        UiMsg::ArtTravel(i, x)
+                    ))
+                    .step(0.001_f32)
+                    .style(theme::range),
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center),
+            ]
+            .spacing(6),
+        );
+    }
+
+    let eyes_section: Element<'a, Message> = if head.is_some() || !e.eyes.is_empty() {
+        section(vec![
+            h2("Eyes"),
+            hint(
+                "Complete eyes and eyebrows work as ordinary parts: choose Other, Still, and On head. Tracking is optional; it requires separate white, pupil and mask images. Blink is optional. Remove an unfinished tracking eye to keep using static layers.",
+            ),
+            eyes.into(),
+            small("Add eye".into(), Message::Ui(UiMsg::ArtAddEye))
+                .padding([7, 12])
+                .into(),
+        ])
+    } else {
+        hint(
+            "Add a head part to give the character eyes that follow the cursor and faces for reactions.",
+        )
+    };
+
+    column![
+        row![
+            h1(if e.new_install { "Create from parts" } else { "Edit art" }),
+            space().width(Length::Fill),
+            button("Undo").style(theme::secondary).on_press_maybe(e.can_undo().then_some(Message::Ui(UiMsg::ArtUndo))),
+            button("Redo").style(theme::secondary).on_press_maybe(e.can_redo().then_some(Message::Ui(UiMsg::ArtRedo))),
+            button("Cancel")
+                .style(theme::secondary)
+                .on_press(Message::Ui(UiMsg::ArtCancel)),
+            button(text("Save").font(theme::HEADING).size(13))
+                .padding([8, 16])
+                .style(theme::primary)
+                .on_press_maybe(
+                    (!e.name.trim().is_empty() && e.validation_error().is_none()).then_some(Message::Ui(UiMsg::ArtSave))
+                ),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+        iced::widget::text_input("Name", &e.name)
+            .on_input(|n| Message::Ui(UiMsg::ArtName(n)))
+            .size(14)
+            .padding([9, 10])
+            .style(|_, status| iced::widget::text_input::Style {
+                background: theme::CONTROL.into(),
+                border: iced::Border {
+                    radius: 8.0.into(),
+                    width: 1.0,
+                    color: if matches!(status, iced::widget::text_input::Status::Focused { .. }) {
+                        theme::CYAN_RING
+                    } else {
+                        theme::LINE_STRONG
+                    },
+                },
+                icon: theme::MUTED,
+                placeholder: theme::FAINT,
+                value: theme::TEXT,
+                selection: theme::CYAN_BG,
+            }),
+        section(vec![
+            h2("Body"),
+            row![
+                thumb(&e.body.handle),
+                small("Replace body…".into(), Message::Ui(UiMsg::ArtPick(Target::Body))),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center)
+            .into(),
+            hint(e.canvas_hint()),
+            canvas_controls(e),
+            hint("To give it a moving tail, use a body with the painted tail removed and add the tail as a part."),
+        ]),
+        section(vec![
+            h2("Arrange and attach"),
+            row![seg("Arrange artwork",e.mode==crate::mascot::editor::Mode::Arrange,Message::Ui(UiMsg::ArtMode(crate::mascot::editor::Mode::Arrange))),
+                seg("Set attachment point",e.mode==crate::mascot::editor::Mode::Pivot,Message::Ui(UiMsg::ArtMode(crate::mascot::editor::Mode::Pivot)))].spacing(4).into(),
+            targets.into(),
+            placement_controls(e),
+            hint("Ground is where the feet stand. A part turns around its pivot: the neck for a head, the root for a tail or ear."),
+        ]),
+        section(vec![
+            h2("Moving parts"),
+            parts.into(),
+            small(
+                "Add part PNGs…".into(),
+                Message::Ui(UiMsg::ArtPick(Target::NewPart))
+            )
+            .padding([7, 12])
+            .into(),
+            hint("Ears and hair ride on the head. Back draws behind the body (or behind the head when on it)."),
+        ]),
+        eyes_section,
+        hint(e.validation_error().unwrap_or_else(||"Drag to arrange; arrow keys nudge one pixel, Shift nudges ten. Artwork is resampled from its original source only when saved.".into())),
+        hint("Motion presets, strength and speed come in the Motion tab, next."),
+    ]
+    .spacing(22)
+    .max_width(640)
+    .into()
+}
+
+fn canvas_controls<'a>(e: &'a crate::mascot::editor::Editor) -> Element<'a, Message> {
+    if !e.can_resize_canvas() {
+        return hint(
+            "Canvas size is shared with other poses; resize is available for single-pose packs.",
+        );
+    }
+    row![
+        hint("Stage (1–2048 px)"),
+        iced::widget::text_input("Width", &e.canvas_fields[0])
+            .on_input(|s| Message::Ui(UiMsg::ArtCanvas(0, s)))
+            .width(90)
+            .padding(6)
+            .size(13),
+        text("×").size(13),
+        iced::widget::text_input("Height", &e.canvas_fields[1])
+            .on_input(|s| Message::Ui(UiMsg::ArtCanvas(1, s)))
+            .width(90)
+            .padding(6)
+            .size(13)
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+fn placement_controls<'a>(e: &'a crate::mascot::editor::Editor) -> Element<'a, Message> {
+    if e.mode != crate::mascot::editor::Mode::Arrange || e.selected_layer().is_none() {
+        return hint("Choose a layer and Arrange artwork to move, scale or rotate it.");
+    }
+    let fields = row(["X (px)", "Y (px)", "Scale (%)", "Angle (°)"]
+        .into_iter()
+        .enumerate()
+        .map(|(i, label)| {
+            column![
+                hint(label),
+                iced::widget::text_input("0", &e.fields[i])
+                    .on_input(move |s| Message::Ui(UiMsg::ArtField(i, s)))
+                    .padding(6)
+                    .size(13)
+            ]
+            .width(100)
+            .into()
+        }))
+    .spacing(8)
+    .wrap();
+    column![
+        fields,
+        row![
+            button("←").on_press(Message::Ui(UiMsg::ArtNudge(-1.0, 0.0))),
+            button("↑").on_press(Message::Ui(UiMsg::ArtNudge(0.0, -1.0))),
+            button("↓").on_press(Message::Ui(UiMsg::ArtNudge(0.0, 1.0))),
+            button("→").on_press(Message::Ui(UiMsg::ArtNudge(1.0, 0.0))),
+            hint("Nudge one canvas pixel")
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center)
+    ]
+    .spacing(8)
+    .into()
+}
+
+/// The assembled character at rest, with the ground and pivot markers.
+fn art_preview<'a>(e: &'a crate::mascot::editor::Editor, busy: bool) -> Element<'a, Message> {
+    use crate::mascot::editor::Selected;
+    let placing = match e.selected {
+        Selected::Ground => "Placing: ground".to_owned(),
+        Selected::Body => "Selected: body".to_owned(),
+        Selected::Face(i, slot) => format!(
+            "Selected: head {} {}",
+            i + 1,
+            crate::mascot::editor::FACE_NAMES[slot]
+        ),
+        Selected::Part(i) => format!(
+            "Placing: pivot of {} {}",
+            i + 1,
+            e.parts.get(i).map_or("part".into(), |p| p.kind.to_string())
+        ),
+    };
+    column![
+        h2("Preview"),
+        row![button("Light").style(theme::segment(e.background==crate::mascot::editor::Background::Light)).on_press(Message::Ui(UiMsg::ArtBackground(crate::mascot::editor::Background::Light))),
+            button("Dark").style(theme::segment(e.background==crate::mascot::editor::Background::Dark)).on_press(Message::Ui(UiMsg::ArtBackground(crate::mascot::editor::Background::Dark))),
+            button("Grid").style(theme::segment(e.background==crate::mascot::editor::Background::Checker)).on_press(Message::Ui(UiMsg::ArtBackground(crate::mascot::editor::Background::Checker)))].spacing(4),
+        row![hint(format!("Zoom {:.0}%",e.zoom*100.0)),slider(0.5..=3.0,e.zoom,|z|Message::Ui(UiMsg::ArtZoom(z))).step(0.1_f32).style(theme::range)].spacing(8),
+        canvas(ArtPreview { editor: e,busy })
+            .width(Length::Fill)
+            .height(340),
+        hint(placing),
+        hint("Drag visible artwork to arrange it. Attachment mode moves only the joint. Selecting a face previews that replacement."),
+        hint(if e.clipped() { "Some source images extend outside the stage and will be clipped when saved." } else { "Artwork fits inside the stage." }),
+    ]
+    .spacing(10)
+    .width(300)
+    .into()
+}
+
+struct ArtPreview<'a> {
+    editor: &'a crate::mascot::editor::Editor,
+    busy: bool,
+}
+
+#[derive(Default)]
+struct ArtPreviewState {
+    drag: Option<iced::Point>,
+}
+
+impl ArtPreview<'_> {
+    fn image_rect(&self, bounds: iced::Size) -> iced::Rectangle {
+        let pad = 14.0;
+        let (w, h) = (self.editor.canvas.0 as f32, self.editor.canvas.1 as f32);
+        let fit = ((bounds.width - pad * 2.0) / w).min((bounds.height - pad * 2.0) / h)
+            * self.editor.zoom;
+        let size = iced::Size::new(w * fit, h * fit);
+        iced::Rectangle::new(
+            iced::Point::new(
+                (bounds.width - size.width) / 2.0,
+                (bounds.height - size.height) / 2.0,
+            ),
+            size,
+        )
+    }
+}
+
+impl canvas::Program<Message> for ArtPreview<'_> {
+    type State = ArtPreviewState;
+
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: &iced::Event,
+        bounds: iced::Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        use crate::mascot::editor::{Mode, Selected};
+        use iced::mouse::{Button, Event};
+        if self.busy {
+            state.drag = None;
+            return None;
+        }
+        let r = self.image_rect(bounds.size());
+        match event {
+            iced::Event::Mouse(Event::ButtonReleased(Button::Left))
+                if state.drag.take().is_some() =>
+            {
+                Some(canvas::Action::capture())
+            }
+            iced::Event::Mouse(Event::CursorMoved { .. }) if state.drag.is_some() => {
+                let p = cursor.position()?;
+                let local = iced::Point::new(p.x - bounds.x, p.y - bounds.y);
+                let old = state.drag.replace(local)?;
+                let scale = self.editor.canvas.0 as f32 / r.width;
+                Some(
+                    canvas::Action::publish(Message::Ui(UiMsg::ArtDrag(
+                        (local.x - old.x) * scale,
+                        (local.y - old.y) * scale,
+                    )))
+                    .and_capture(),
+                )
+            }
+            iced::Event::Mouse(Event::ButtonPressed(Button::Left)) => {
+                let p = cursor.position_in(bounds)?;
+                if !r.contains(p) {
+                    return Some(canvas::Action::capture());
+                }
+                let (x, y) = ((p.x - r.x) / r.width, (p.y - r.y) / r.height);
+                let msg = if self.editor.mode == Mode::Pivot
+                    || self.editor.selected == Selected::Ground
+                {
+                    UiMsg::ArtClick(x, y)
+                } else {
+                    let target = self.editor.hit_target(x, y)?;
+                    state.drag = Some(p);
+                    UiMsg::ArtDragStart(target)
+                };
+                Some(canvas::Action::publish(Message::Ui(msg)).and_capture())
+            }
+            _ => None,
+        }
+    }
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced::Renderer,
+        _theme: &Theme,
+        bounds: iced::Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        use crate::mascot::editor::Selected;
+        use iced::widget::canvas::{Frame, Path, Stroke};
+        let e = self.editor;
+        let size = bounds.size();
+        let mut frame = Frame::new(renderer, size);
+        use crate::mascot::editor::Background;
+        let base = match e.background {
+            Background::Light => Color::from_rgb8(244, 244, 245),
+            Background::Dark => Color::from_rgb8(27, 38, 33),
+            Background::Checker => Color::from_rgb8(190, 190, 196),
+        };
+        frame.fill_rectangle(iced::Point::ORIGIN, size, base);
+        if e.background == Background::Checker {
+            for y in 0..(size.height / 16.0).ceil() as u32 {
+                for x in 0..(size.width / 16.0).ceil() as u32 {
+                    if (x + y) % 2 == 0 {
+                        frame.fill_rectangle(
+                            iced::Point::new(x as f32 * 16.0, y as f32 * 16.0),
+                            iced::Size::new(16.0, 16.0),
+                            Color::from_rgb8(225, 225, 230),
+                        );
+                    }
+                }
+            }
+        }
+        let r = self.image_rect(size);
+        let clip = r
+            .intersection(&iced::Rectangle::new(iced::Point::ORIGIN, size))
+            .unwrap_or_default();
+        frame.with_clip(clip, |frame| {
+            let fit = r.width / e.canvas.0 as f32;
+            for (_, layer) in e.draw_layers() {
+                let d = layer.image.dimensions();
+                let p = layer.placement;
+                frame.with_save(|f| {
+                    f.translate(iced::Vector::new(
+                        r.x + (p.x + d.0 as f32 * p.scale / 2.0) * fit,
+                        r.y + (p.y + d.1 as f32 * p.scale / 2.0) * fit,
+                    ));
+                    f.rotate(iced::Radians(p.angle.to_radians()));
+                    f.scale(fit * p.scale);
+                    f.draw_image(
+                        iced::Rectangle::new(
+                            iced::Point::new(-(d.0 as f32) / 2.0, -(d.1 as f32) / 2.0),
+                            iced::Size::new(d.0 as f32, d.1 as f32),
+                        ),
+                        canvas::Image::new(layer.handle.clone()),
+                    );
+                });
+            }
+        });
+        frame.stroke(
+            &Path::rectangle(r.position(), r.size()),
+            Stroke::default().with_color(theme::MUTED).with_width(1.0),
+        );
+        if let Some(layer) = e.selected_layer() {
+            let d = layer.image.dimensions();
+            let corners = [
+                (0.0, 0.0),
+                (d.0 as f32, 0.0),
+                (d.0 as f32, d.1 as f32),
+                (0.0, d.1 as f32),
+            ];
+            let outline = Path::new(|path| {
+                for (i, p) in corners.into_iter().enumerate() {
+                    let p = layer.placement.map(p, d);
+                    let p = iced::Point::new(
+                        r.x + p.0 * r.width / e.canvas.0 as f32,
+                        r.y + p.1 * r.height / e.canvas.1 as f32,
+                    );
+                    if i == 0 {
+                        path.move_to(p);
+                    } else {
+                        path.line_to(p);
+                    }
+                }
+                path.close();
+            });
+            frame.stroke(
+                &outline,
+                Stroke::default()
+                    .with_color(theme::CYAN_TEXT)
+                    .with_width(1.5),
+            );
+        }
+        let at = |(x, y): (f32, f32)| iced::Point::new(r.x + x * r.width, r.y + y * r.height);
+        let ring = Stroke::default().with_color(Color::WHITE).with_width(1.5);
+        let ground = at(e.ground);
+        let amber = Color::from_rgb8(0xF5, 0x9E, 0x0B);
+        frame.stroke(
+            &Path::line(
+                iced::Point::new(r.x, ground.y),
+                iced::Point::new(r.x + r.width, ground.y),
+            ),
+            Stroke::default()
+                .with_color(Color { a: 0.7, ..amber })
+                .with_width(1.0),
+        );
+        let ground_r = if e.selected == Selected::Ground {
+            7.0
+        } else {
+            5.0
+        };
+        frame.fill(&Path::circle(ground, ground_r), amber);
+        frame.stroke(&Path::circle(ground, ground_r), ring);
+        for (i, p) in e.parts.iter().enumerate() {
+            let on = e.selected == Selected::Part(i);
+            let c = at(p.pivot);
+            let radius = if on { 7.0 } else { 5.0 };
+            let fill = if on {
+                Color::from_rgb8(0x22, 0xD3, 0xEE)
+            } else {
+                Color::from_rgba8(0x22, 0xD3, 0xEE, 0.55)
+            };
+            frame.fill(&Path::circle(c, radius), fill);
+            frame.stroke(&Path::circle(c, radius), ring);
+            frame.fill_text(canvas::Text {
+                content: format!("{}", i + 1),
+                position: iced::Point::new(c.x + 9.0, c.y - 8.0),
+                color: Color::WHITE,
+                size: 12.0.into(),
+                ..canvas::Text::default()
+            });
+        }
+        vec![frame.into_geometry()]
+    }
 }
 
 /// "Add character": name it, check it on light and dark, click its feet.
-fn new_character<'a>(draft: &'a crate::mascot::pack::Draft) -> Element<'a, Message> {
+fn new_character<'a>(draft: &'a crate::mascot::pack::Draft, busy: bool) -> Element<'a, Message> {
     column![
         h2("New character"),
         canvas(GroundPicker { draft })
@@ -1486,7 +2285,7 @@ fn new_character<'a>(draft: &'a crate::mascot::pack::Draft) -> Element<'a, Messa
                 .style(theme::secondary)
                 .on_press(Message::Ui(UiMsg::CancelCharacter)),
             button(
-                text("Use character")
+                text(if busy { "Installing…" } else { "Use character" })
                     .font(theme::HEADING)
                     .size(13)
                     .width(Length::Fill)
@@ -1496,7 +2295,7 @@ fn new_character<'a>(draft: &'a crate::mascot::pack::Draft) -> Element<'a, Messa
             .padding([10, 12])
             .style(theme::primary)
             .on_press_maybe(
-                (!draft.name.trim().is_empty()).then_some(Message::Ui(UiMsg::SaveCharacter))
+                (!busy && !draft.name.trim().is_empty()).then_some(Message::Ui(UiMsg::SaveCharacter))
             ),
         ]
         .spacing(8),
@@ -1580,7 +2379,10 @@ impl canvas::Program<Message> for GroundPicker<'_> {
             .with_color(Color::from_rgba8(0xF5, 0x9E, 0x0B, 0.7))
             .with_width(1.0);
         frame.stroke(
-            &Path::line(iced::Point::new(r.x, at.y), iced::Point::new(r.x + r.width, at.y)),
+            &Path::line(
+                iced::Point::new(r.x, at.y),
+                iced::Point::new(r.x + r.width, at.y),
+            ),
             line,
         );
         frame.fill(&Path::circle(at, 6.0), Color::from_rgb8(0xF5, 0x9E, 0x0B));
@@ -1597,17 +2399,15 @@ fn display_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     // The cards and the list share one selection; only a named display that
     // has gone away needs saying.
     let target = s.choice(display::TARGET);
-    let missing: Element<'a, Message> = if target != "primary"
-        && target != "all"
-        && !v.displays.iter().any(|d| d.name == target)
-    {
-        text(format!("{target} isn't connected right now."))
-            .size(12)
-            .color(theme::AMBER_TEXT)
-            .into()
-    } else {
-        space().into()
-    };
+    let missing: Element<'a, Message> =
+        if target != "primary" && target != "all" && !v.displays.iter().any(|d| d.name == target) {
+            text(format!("{target} isn't connected right now."))
+                .size(12)
+                .color(theme::AMBER_TEXT)
+                .into()
+        } else {
+            space().into()
+        };
     let share_tip = container(
         column![
             text("Streaming on Discord?")
@@ -1722,7 +2522,7 @@ fn sound_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
                 text(format!("{:.0}%", volume * 100.0)).size(13)
             ]
             .into(),
-            slider(0.0..=1.0, volume, |x| Message::Set(
+            slider(v.registry.range(sound::VOLUME), volume, |x| Message::Set(
                 sound::VOLUME,
                 Value::Float(x)
             ))
@@ -1740,4 +2540,77 @@ fn sound_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     .spacing(22)
     .max_width(560)
     .into()
+}
+
+#[cfg(test)]
+mod character_arrangement_tests {
+    use super::*;
+    use canvas::Program;
+
+    #[test]
+    fn drag_stays_captured_across_transparent_space_and_zoom_preserves_canvas_units() {
+        use crate::mascot::editor::{Editor, Selected};
+        use iced::{Point, Rectangle, Size, mouse};
+        let dir =
+            std::env::temp_dir().join(format!("tinypaw-arrange-input-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("body.png");
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([100, 140, 220, 255]))
+            .save(&file)
+            .unwrap();
+        let mut editor = Editor::from_body(&file, &[]).unwrap();
+        editor.select(Selected::Body);
+        let bounds = Rectangle::new(Point::new(30.0, 40.0), Size::new(300.0, 340.0));
+        for zoom in [1.0, 1.5, 2.0] {
+            editor.zoom = zoom;
+            let preview = ArtPreview {
+                editor: &editor,
+                busy: false,
+            };
+            let r = preview.image_rect(bounds.size());
+            let start = Point::new(bounds.x + r.center_x(), bounds.y + r.center_y());
+            let mut state = ArtPreviewState::default();
+            let press = preview
+                .update(
+                    &mut state,
+                    &iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                    bounds,
+                    mouse::Cursor::Available(start),
+                )
+                .unwrap()
+                .into_inner();
+            assert!(matches!(
+                press.0,
+                Some(Message::Ui(UiMsg::ArtDragStart(Selected::Body)))
+            ));
+            let moved = Point::new(start.x + 10.0 * r.width / editor.canvas.0 as f32, start.y);
+            let action = preview
+                .update(
+                    &mut state,
+                    &iced::Event::Mouse(mouse::Event::CursorMoved { position: moved }),
+                    bounds,
+                    mouse::Cursor::Available(moved),
+                )
+                .unwrap()
+                .into_inner();
+            let Some(Message::Ui(UiMsg::ArtDrag(dx, dy))) = action.0 else {
+                panic!("expected drag")
+            };
+            assert!((dx - 10.0).abs() < 0.001 && dy.abs() < 0.001);
+            assert_eq!(action.2, iced::event::Status::Captured);
+            let outside = Point::new(bounds.x + bounds.width + 50.0, bounds.y);
+            let release = preview
+                .update(
+                    &mut state,
+                    &iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+                    bounds,
+                    mouse::Cursor::Available(outside),
+                )
+                .unwrap()
+                .into_inner();
+            assert_eq!(release.2, iced::event::Status::Captured);
+            assert!(state.drag.is_none());
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

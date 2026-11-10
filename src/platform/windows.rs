@@ -446,7 +446,15 @@ fn lens_tick(host: windows_sys::Win32::Foundation::HWND, state: &mut LensState) 
         }
         .clamp(area.top, (area.bottom - side).max(area.top));
         let magnifier = state.magnifier as HWND;
-        SetWindowPos(host, HWND_TOPMOST, x, y, side, side, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        SetWindowPos(
+            host,
+            HWND_TOPMOST,
+            x,
+            y,
+            side,
+            side,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
         SetWindowPos(
             magnifier,
             std::ptr::null_mut(),
@@ -647,7 +655,7 @@ unsafe extern "system" fn keyboard_hook(code: i32, w: usize, l: isize) -> isize 
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowSource {
-    pub id: &'static str,
+    pub id: String,
     pub handle: isize,
     pub title: String,
 }
@@ -671,7 +679,7 @@ pub fn window_sources() -> Vec<WindowSource> {
             let mut title = [0u16; 512];
             let len = GetWindowTextW(hwnd, title.as_mut_ptr(), 512);
             if len > 0 {
-                let id = super::intern(&format!("window:{}", hwnd as isize));
+                let id = format!("window:{}", hwnd as isize);
                 (&mut *(data as *mut Vec<WindowSource>)).push(WindowSource {
                     id,
                     handle: hwnd as isize,
@@ -704,7 +712,8 @@ pub fn window_rect(hwnd: isize) -> Option<(i32, i32, i32, i32)> {
         right: 0,
         bottom: 0,
     };
-    let ok = unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd as _, &mut r) };
+    let ok =
+        unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd as _, &mut r) };
     (ok != 0).then_some((r.left, r.top, r.right, r.bottom))
 }
 
@@ -961,7 +970,11 @@ pub mod frame {
                     return hit(hwnd, p.x, p.y) as isize;
                 }
                 WM_NCMOUSEMOVE => {
-                    let code = if button(w as u8).is_some() { w as u8 } else { 0 };
+                    let code = if button(w as u8).is_some() {
+                        w as u8
+                    } else {
+                        0
+                    };
                     if code != 0 && HOVER.load(Ordering::Relaxed) == 0 {
                         let mut track = TRACKMOUSEEVENT {
                             cbSize: size_of::<TRACKMOUSEEVENT>() as u32,

@@ -395,9 +395,14 @@ impl Session {
                 Mode::Annotating(Ownership::Latched) => {}
             },
             Event::InteractDown => {
-                if self.mode == Mode::Annotating(Ownership::Latched)
-                    && self.tool_id == "point"
+                // Alt may arrive before the asynchronous focus request is
+                // acknowledged. Cancel that request too, so it cannot take
+                // input back while the user is interacting underneath.
+                let latched = self.mode == Mode::Annotating(Ownership::Latched)
+                    || self.pending.is_some_and(|p| p.ownership == Ownership::Latched);
+                if latched
                     && !self.tool.button_down()
+                    && !self.awaiting_button_up
                     && self.frozen.is_none()
                     && !self.capturing()
                 {

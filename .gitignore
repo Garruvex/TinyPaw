@@ -5,3 +5,6 @@
 /.tmp-runtime/
 /.tmp-transfer/
 /.work/
+
+# Local build and review output
+/output/

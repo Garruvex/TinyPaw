@@ -275,3 +275,46 @@ fn restoring_swapped_shortcuts_validates_the_complete_set() {
     );
     assert_eq!(r.shortcut_label(system::HOLD).unwrap(), "Ctrl+Alt+P");
 }
+
+#[test]
+fn unsupported_lens_is_rejected_before_mutating_session() {
+    let mut reg = Registry::build(features::BUILTINS).unwrap();
+    reg.host = HostCapabilities {
+        window_lens: false,
+        desktop_lens: false,
+    };
+    let mut s = session(&reg);
+    reg.dispatch(system::MASTER_TOGGLE, &mut s, 0).unwrap();
+    let mode = s.mode();
+    for id in [features::upcoming::LENS, features::upcoming::ANYWHERE] {
+        let reason = reg.availability(id, &s).unwrap_err();
+        assert_eq!(reg.dispatch(id, &mut s, 1), Err(reason));
+        assert_eq!(s.mode(), mode);
+        assert_eq!(s.active_tool(), point::TOOL);
+    }
+    assert!(
+        reg.dispatch(features::upcoming::ANYWHERE_END, &mut s, 2)
+            .is_ok()
+    );
+}
+
+#[test]
+fn dynamic_window_sources_remain_owned_and_validate_as_choices() {
+    let reg = Registry::build(features::BUILTINS).unwrap();
+    let mut values = reg.defaults();
+    let value = reg
+        .parse_value(features::upcoming::SOURCE, "window:123")
+        .unwrap();
+    assert!(matches!(&value, Value::DynamicChoice(s) if s == "window:123"));
+    reg.set(&mut values, features::upcoming::SOURCE, value)
+        .unwrap();
+    assert_eq!(values.choice_text(features::upcoming::SOURCE), "window:123");
+    assert!(
+        reg.set(
+            &mut values,
+            system::INK_WIDTH,
+            Value::DynamicChoice("8".into())
+        )
+        .is_err()
+    );
+}

@@ -24,7 +24,13 @@ const ROD_LIGHT: Color = Color::from_rgb8(0x5A, 0x5E, 0x68);
 /// Where the wrist sits in the paw's local, upright coordinates (tip at 0,0).
 const WRIST: Vector = Vector::new(7.0, 56.0);
 
-pub fn draw_tip(frame: &mut Frame, tip: Tip, area: Size, pack: Option<&Pack>) {
+pub fn draw_tip(
+    frame: &mut Frame,
+    tip: Tip,
+    area: Size,
+    pack: Option<&Pack>,
+    forearm_color: Option<[u8; 4]>,
+) {
     match tip {
         Tip::Paw {
             at,
@@ -45,8 +51,11 @@ pub fn draw_tip(frame: &mut Frame, tip: Tip, area: Size, pack: Option<&Pack>) {
                         sprite.image = pressed;
                     }
                     if stick || stretch {
-                        let forearm =
-                            stretch.then_some(pack.accent.map_or(FUR, crate::view::theme::rgba));
+                        let forearm = stretch.then_some(
+                            forearm_color
+                                .or(pack.accent)
+                                .map_or(FUR, crate::view::theme::rgba),
+                        );
                         let texture = pack
                             .forearm
                             .as_ref()
@@ -60,6 +69,7 @@ pub fn draw_tip(frame: &mut Frame, tip: Tip, area: Size, pack: Option<&Pack>) {
                             area,
                             sprite.wrist(),
                             forearm,
+                            sprite.size.width * pack.joint_width,
                             texture,
                             |f, angle| sprite.draw(f, at, press, angle),
                         );
@@ -75,7 +85,8 @@ pub fn draw_tip(frame: &mut Frame, tip: Tip, area: Size, pack: Option<&Pack>) {
                     scale,
                     area,
                     WRIST * scale,
-                    stretch.then_some(FUR),
+                    stretch.then_some(forearm_color.map_or(FUR, crate::view::theme::rgba)),
+                    18.0 * scale,
                     None,
                     |f, angle| draw_paw(f, at, press, scale, angle),
                 ),
@@ -153,6 +164,7 @@ fn draw_stick(
     area: Size,
     wrist: Vector,
     forearm: Option<Color>,
+    forearm_width: f32,
     texture: Option<(&crate::packs::Forearm, f32)>,
     draw_paw: impl FnOnce(&mut Frame, f32),
 ) {
@@ -173,7 +185,15 @@ fn draw_stick(
         if let Some((arm, width)) = texture {
             draw_textured_forearm(frame, wrist, grip, tip.x - grip_x, scale, arm, width * s);
         } else {
-            draw_forearm(frame, wrist, grip, tip.x - grip_x, scale, color);
+            draw_forearm(
+                frame,
+                wrist,
+                grip,
+                tip.x - grip_x,
+                scale,
+                color,
+                forearm_width * s,
+            );
         }
         draw_paw(frame, angle);
         return;
@@ -246,7 +266,15 @@ fn draw_textured_forearm(
     }
 }
 
-fn draw_forearm(frame: &mut Frame, wrist: Point, grip: Point, lag: f32, scale: f32, color: Color) {
+fn draw_forearm(
+    frame: &mut Frame,
+    wrist: Point,
+    grip: Point,
+    lag: f32,
+    scale: f32,
+    color: Color,
+    width: f32,
+) {
     let direction = grip - wrist;
     let length = direction.x.hypot(direction.y).max(1.0);
     let normal = Vector::new(-direction.y / length, direction.x / length);
@@ -254,8 +282,8 @@ fn draw_forearm(frame: &mut Frame, wrist: Point, grip: Point, lag: f32, scale: f
     let bend = normal * (lag * 0.2).clamp(-60.0 * scale, 60.0 * scale);
     let near = wrist + direction * 0.3 + bend;
     let far = wrist + direction * 0.7 + bend;
-    let narrow = normal * (9.0 * scale);
-    let wide = normal * (22.0 * scale);
+    let narrow = normal * (width * 0.5);
+    let wide = normal * (width * 1.2);
     let limb = Path::new(|b| {
         b.move_to(wrist + narrow);
         b.bezier_curve_to(near + narrow, far + wide, grip + wide);
@@ -325,6 +353,75 @@ fn draw_paw(frame: &mut Frame, tip: Point, press: f32, scale: f32, angle: f32) {
     });
 }
 
+/// Vector pads stay crisp at every pointer size and display scale.
+pub fn draw_print(frame: &mut Frame, print: &crate::session::PawPrint, alpha: f32) {
+    use crate::session::PawPrintKind;
+    let mut color = crate::view::theme::rgba(print.color.0);
+    color.a *= alpha;
+    frame.with_save(|f| {
+        f.translate(Vector::new(print.at.x, print.at.y));
+        f.rotate(Radians(print.angle));
+        f.scale(print.size / 28.0);
+        let dog = print.kind == PawPrintKind::Dog;
+        let toes = if dog {
+            [
+                (-10.0, -3.0, -0.35),
+                (-4.0, -9.0, -0.12),
+                (4.0, -9.0, 0.12),
+                (10.0, -3.0, 0.35),
+            ]
+        } else {
+            [
+                (-9.0, -3.0, -0.45),
+                (-3.5, -9.0, -0.15),
+                (3.5, -9.0, 0.15),
+                (9.0, -3.0, 0.45),
+            ]
+        };
+        for (x, y, angle) in toes {
+            f.with_save(|f| {
+                f.translate(Vector::new(x, y));
+                f.rotate(Radians(angle));
+                f.scale_nonuniform(Vector::new(if dog { 3.3 } else { 3.0 }, 4.0));
+                f.fill(&Path::circle(Point::ORIGIN, 1.0), color);
+            });
+            if dog {
+                let claw = Path::new(|b| {
+                    b.move_to(Point::new(x - 1.1, y - 5.0));
+                    b.quadratic_curve_to(Point::new(x, y - 9.0), Point::new(x + 1.1, y - 5.0));
+                    b.close();
+                });
+                f.fill(&claw, color);
+            }
+        }
+        let pad = Path::new(|b| {
+            b.move_to(Point::new(0.0, if dog { 0.0 } else { 1.5 }));
+            b.bezier_curve_to(
+                Point::new(-4.0, -4.0),
+                Point::new(-6.0, 2.0),
+                Point::new(-8.0, 6.0),
+            );
+            b.bezier_curve_to(
+                Point::new(-11.0, 12.0),
+                Point::new(-4.0, 13.0),
+                Point::new(0.0, 10.5),
+            );
+            b.bezier_curve_to(
+                Point::new(4.0, 13.0),
+                Point::new(11.0, 12.0),
+                Point::new(8.0, 6.0),
+            );
+            b.bezier_curve_to(
+                Point::new(6.0, 2.0),
+                Point::new(4.0, -4.0),
+                Point::new(0.0, if dog { 0.0 } else { 1.5 }),
+            );
+            b.close();
+        });
+        f.fill(&pad, color);
+    });
+}
+
 fn draw_laser(frame: &mut Frame, at: Point, press: f32) {
     let pulse = 1.0 + 0.5 * press.clamp(0.0, 1.0);
     frame.fill(
@@ -341,6 +438,43 @@ mod tests {
     use iced::advanced::{graphics::geometry::Renderer as _, renderer::Headless};
     use iced::futures::FutureExt;
     use iced::{Font, Pixels, Renderer};
+
+    #[test]
+    fn stamps_render_with_distinct_claws_and_transparent_gaps() {
+        use crate::session::{OutputId, PawPrint, PawPrintKind, Pt, Rgba};
+        let mut renderer =
+            <Renderer as Headless>::new(Font::DEFAULT, Pixels(16.0), Some("tiny-skia"))
+                .now_or_never()
+                .flatten()
+                .expect("tiny-skia renderer");
+        let mut frame = Frame::new(&renderer, Size::new(240.0, 120.0));
+        for (x, kind) in [(60.0, PawPrintKind::Cat), (180.0, PawPrintKind::Dog)] {
+            draw_print(
+                &mut frame,
+                &PawPrint {
+                    output: OutputId(0),
+                    at: Pt::new(x, 60.0),
+                    kind,
+                    color: Rgba([230, 120, 150, 255]),
+                    size: 56.0,
+                    angle: 0.0,
+                    born: 0,
+                },
+                1.0,
+            );
+        }
+        renderer.draw_geometry(frame.into_geometry());
+        let shot = renderer.screenshot(Size::new(240, 120), 1.0, Color::WHITE);
+        let pixel = |x: usize, y: usize| &shot[(240 * y + x) * 4..][..3];
+        assert_eq!(pixel(60, 72), [230, 120, 150], "cat central pad");
+        assert_eq!(pixel(180, 72), [230, 120, 150], "dog central pad");
+        assert_eq!(pixel(60, 40), [255, 255, 255], "gap between toes");
+        assert_eq!(pixel(52, 28), [255, 255, 255], "cat has no claw");
+        assert_ne!(pixel(172, 28), [255, 255, 255], "dog has a claw");
+        if let Some(path) = std::env::var_os("TINYPAW_STAMP_PREVIEW") {
+            image::save_buffer(path, &shot, 240, 120, image::ColorType::Rgba8).unwrap();
+        }
+    }
 
     #[test]
     fn paw_rotation_keeps_the_hotspot_fixed_in_all_presentations() {
@@ -405,7 +539,8 @@ mod tests {
                 stretch,
                 grip_x: 40.0, // puts the grip directly below the tip
             };
-            draw_tip(&mut frame, pose, area, Some(&pack));
+            let override_color = stretch.then_some([230, 40, 90, 255]);
+            draw_tip(&mut frame, pose, area, Some(&pack), override_color);
             renderer.draw_geometry(frame.into_geometry());
             let shot = renderer.screenshot(Size::new(200, 200), 1.0, Color::WHITE);
             let pixel = |y: usize| &shot[(200 * y + 100) * 4..][..3];
@@ -422,7 +557,56 @@ mod tests {
                     [0, 0, 255],
                     "forearm texture is drawn beneath the paw"
                 );
+            } else if stretch {
+                assert_eq!(
+                    pixel(170),
+                    [230, 40, 90],
+                    "generated forearm uses the chosen colour"
+                );
             }
         }
+    }
+
+    #[test]
+    fn generated_forearm_uses_the_pack_width_without_a_texture() {
+        let mut pack = crate::packs::load_all().0.remove(0);
+        pack.forearm = None;
+        let mut widths = Vec::new();
+        for joint_width in [0.2, 1.0] {
+            pack.joint_width = joint_width;
+            let mut renderer =
+                <Renderer as Headless>::new(Font::DEFAULT, Pixels(16.0), Some("tiny-skia"))
+                    .now_or_never()
+                    .flatten()
+                    .unwrap();
+            let area = Size::new(200.0, 200.0);
+            let mut frame = Frame::new(&renderer, area);
+            draw_tip(
+                &mut frame,
+                Tip::Paw {
+                    at: crate::session::Pt::new(100.0, 25.0),
+                    press: 0.0,
+                    scale: 1.0,
+                    angle: 0.0,
+                    stick: false,
+                    stretch: true,
+                    grip_x: 40.0,
+                },
+                area,
+                Some(&pack),
+                Some([230, 40, 90, 255]),
+            );
+            renderer.draw_geometry(frame.into_geometry());
+            let shot = renderer.screenshot(Size::new(200, 200), 1.0, Color::WHITE);
+            widths.push(
+                (0..200)
+                    .filter(|x| shot[(200 * 170 + x) * 4..][..3] == [230, 40, 90])
+                    .count(),
+            );
+        }
+        assert!(
+            widths[0] > 0 && widths[1] > widths[0] * 2,
+            "width slider did not resize the generated limb: {widths:?}"
+        );
     }
 }

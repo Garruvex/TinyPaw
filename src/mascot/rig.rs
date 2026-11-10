@@ -23,6 +23,7 @@ const TAIL_AT: (Point, Size) = (Point::new(302.0, 452.0), Size::new(308.0, 312.0
 const BODY_AT: (Point, Size) = (Point::new(91.0, 457.0), Size::new(410.0, 350.0));
 const HEAD_AT: (Point, Size) = (Point::new(0.0, 0.0), Size::new(544.0, 520.0));
 
+#[derive(Debug, Clone)]
 pub struct Rig {
     kind: Kind,
     /// Canvas size in rig pixels.
@@ -32,6 +33,7 @@ pub struct Rig {
     silhouette: Silhouette,
 }
 
+#[derive(Debug, Clone)]
 enum Kind {
     Yohta {
         head: Handle,
@@ -49,12 +51,14 @@ enum Kind {
 }
 
 /// An image cropped to its visible pixels, placed on the canvas.
+#[derive(Debug, Clone)]
 struct Piece {
     image: Handle,
     at: Point,
     size: Size,
 }
 
+#[derive(Debug, Clone)]
 struct Part {
     kind: PartType,
     piece: Piece,
@@ -66,6 +70,7 @@ struct Part {
     motion: MotionSpec,
 }
 
+#[derive(Debug, Clone)]
 struct LayerEye {
     frames: Vec<Handle>,
     closed: Option<Piece>,
@@ -142,9 +147,8 @@ fn over(top: Rgba<u8>, bottom: Rgba<u8>) -> Rgba<u8> {
     if a <= 0.0 {
         return Rgba([0, 0, 0, 0]);
     }
-    let mix = |t: u8, b: u8| {
-        ((f32::from(t) * ta + f32::from(b) * ba * (1.0 - ta)) / a).round() as u8
-    };
+    let mix =
+        |t: u8, b: u8| ((f32::from(t) * ta + f32::from(b) * ba * (1.0 - ta)) / a).round() as u8;
     Rgba([
         mix(top[0], bottom[0]),
         mix(top[1], bottom[1]),
@@ -200,6 +204,7 @@ impl LayerEye {
 }
 
 /// Which rig cells hold visible artwork, for alpha-aware hit testing.
+#[derive(Debug, Clone)]
 struct Silhouette {
     columns: usize,
     rows: usize,
@@ -248,6 +253,7 @@ impl Silhouette {
     }
 }
 
+#[derive(Debug, Clone)]
 struct Eye {
     at: Point,
     size: Size,
@@ -334,9 +340,7 @@ impl Rig {
             parts.push(Part {
                 kind: p.kind,
                 piece: main,
-                faces: [0, 1, 2].map(|i| {
-                    p.faces[i].as_ref().and_then(piece).map(|(face, _)| face)
-                }),
+                faces: [0, 1, 2].map(|i| p.faces[i].as_ref().and_then(piece).map(|(face, _)| face)),
                 pivot: Point::new(p.pivot.0 * size.width, p.pivot.1 * size.height),
                 parent: p.parent,
                 behind: p.behind,
@@ -431,11 +435,7 @@ impl Rig {
                 pose.expression == Expression::Blink,
             ),
             Kind::Layered { body, parts, eyes } => {
-                let ctx = Layered {
-                    parts,
-                    eyes,
-                    pose,
-                };
+                let ctx = Layered { parts, eyes, pose };
                 for (i, p) in parts.iter().enumerate() {
                     if p.parent.is_none() && p.behind {
                         ctx.part(frame, i);
@@ -481,7 +481,6 @@ impl Rig {
     pub fn anchor(&self) -> Point {
         self.anchor
     }
-
 
     /// All positions are in rig coordinates. Rotation is around attachment
     /// points, rather than the centre of the source sprite rectangle.
@@ -557,7 +556,10 @@ impl Rig {
 }
 
 fn place(frame: &mut Frame, p: &Piece) {
-    frame.draw_image(Rectangle::new(p.at, p.size), canvas::Image::new(p.image.clone()));
+    frame.draw_image(
+        Rectangle::new(p.at, p.size),
+        canvas::Image::new(p.image.clone()),
+    );
 }
 
 /// Draws a layered character's parts with their parents' transforms.
@@ -792,7 +794,10 @@ mod tests {
         let Kind::Layered { body, parts, eyes } = &rig.kind else {
             panic!("layered");
         };
-        assert_eq!((body.at, body.size), (Point::new(30.0, 50.0), Size::new(40.0, 45.0)));
+        assert_eq!(
+            (body.at, body.size),
+            (Point::new(30.0, 50.0), Size::new(40.0, 45.0))
+        );
         assert_eq!(parts[0].pivot, Point::new(50.0, 50.0));
         assert!(parts[0].faces[1].is_some() && parts[0].faces[0].is_none());
         assert_eq!(eyes[0].frames.len(), 49);
@@ -810,7 +815,10 @@ mod tests {
         art.eyes[0].white = RgbaImage::new(100, 100);
         art.eyes[0].max_offset = (0.2, 0.2);
         let eye = LayerEye::new(&art.eyes[0], 0).unwrap();
-        assert_eq!((eye.at, eye.size), (Point::new(40.0, 25.0), Size::new(10.0, 10.0)));
+        assert_eq!(
+            (eye.at, eye.size),
+            (Point::new(40.0, 25.0), Size::new(10.0, 10.0))
+        );
     }
 
     #[test]

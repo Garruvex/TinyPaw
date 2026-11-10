@@ -88,6 +88,8 @@ pub enum Value {
     Float(f64),
     Color([u8; 4]),
     Choice(&'static str),
+    /// Transient host identifiers are released when a setting is replaced.
+    DynamicChoice(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -149,6 +151,13 @@ impl SettingValues {
         match self.0.get(id) {
             Some(Value::Choice(c)) => c,
             _ => "",
+        }
+    }
+
+    pub fn choice_text(&self, id: &str) -> &str {
+        match self.0.get(id) {
+            Some(Value::DynamicChoice(c)) => c,
+            _ => self.choice(id),
         }
     }
 }
@@ -221,12 +230,28 @@ pub type RegisterFn = fn(&mut Registrar);
 /// Frozen, validated definitions with dispatch indexes.
 #[derive(Clone)]
 pub struct Registry {
+    pub host: HostCapabilities,
     commands: Vec<CommandDef>,
     settings: Vec<SettingDef>,
     tools: Vec<ToolDef>,
     by_id: HashMap<&'static str, usize>,
     by_cli: HashMap<&'static str, usize>,
     shortcuts: Vec<(Shortcut, usize)>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct HostCapabilities {
+    pub window_lens: bool,
+    pub desktop_lens: bool,
+}
+
+impl Default for HostCapabilities {
+    fn default() -> Self {
+        Self {
+            window_lens: cfg!(windows),
+            desktop_lens: cfg!(windows),
+        }
+    }
 }
 
 impl Registry {
@@ -294,6 +319,7 @@ impl Registry {
             commands: r.commands,
             settings: r.settings,
             tools: r.tools,
+            host: HostCapabilities::default(),
             by_id,
             by_cli,
             shortcuts,
@@ -420,8 +446,16 @@ impl Registry {
             .iter()
             .find(|s| s.id == id)
             .ok_or(Unavailable("unknown setting"))?;
+        if matches!(&value, Value::DynamicChoice(_)) && id != crate::features::upcoming::SOURCE {
+            return Err(Unavailable(
+                "owned window identifiers are only valid for Lens source",
+            ));
+        }
         if !valid(&value, &def.constraint)
-            || std::mem::discriminant(&value) != std::mem::discriminant(&def.default)
+            || !(matches!(
+                (&value, &def.default),
+                (Value::DynamicChoice(_), Value::Choice(_))
+            ) || std::mem::discriminant(&value) == std::mem::discriminant(&def.default))
         {
             return Err(Unavailable("value outside the declared constraints"));
         }
@@ -462,14 +496,33 @@ impl Registry {
                 if text.is_empty() || text.len() > 64 {
                     return Err(bad);
                 }
-                Value::Choice(Box::leak(text.to_owned().into_boxed_str()))
+                if id == crate::features::upcoming::SOURCE {
+                    Value::DynamicChoice(text.to_owned())
+                } else {
+                    Value::Choice(crate::platform::intern(text))
+                }
             }
             (Value::Choice(_), _) => return Err(bad),
+            (Value::DynamicChoice(_), _) => return Err(bad),
         })
     }
 
     pub fn setting(&self, id: &str) -> Option<&SettingDef> {
         self.settings.iter().find(|s| s.id == id)
+    }
+
+    pub fn range(&self, id: &str) -> std::ops::RangeInclusive<f64> {
+        match &self.setting(id).expect("registered slider").constraint {
+            Constraint::Range { min, max } => *min..=*max,
+            _ => panic!("{id} is not a range setting"),
+        }
+    }
+
+    pub fn choices(&self, id: &str) -> &'static [&'static str] {
+        match &self.setting(id).expect("registered choice").constraint {
+            Constraint::Choices(choices) => choices,
+            _ => panic!("{id} is not a choice setting"),
+        }
     }
 
     #[cfg(test)]
@@ -510,8 +563,21 @@ impl Registry {
         session: &mut Session,
         now: Millis,
     ) -> Result<Dispatched, Unavailable> {
-        (def.available)(session)?;
+        self.availability(def.id, session)?;
         Ok(Self::apply(handler(session), session, now))
+    }
+
+    /// Shared by dispatch, menus, wheel, tray and shortcuts, before mutation.
+    pub fn availability(&self, id: &str, session: &Session) -> Result<(), Unavailable> {
+        use crate::features::upcoming;
+        if id == upcoming::ANYWHERE && !self.host.desktop_lens {
+            return Err(Unavailable("Desktop Lens is unavailable on this platform"));
+        }
+        if id == upcoming::LENS && !self.host.window_lens && !self.host.desktop_lens {
+            return Err(Unavailable("Lens is unavailable on this platform"));
+        }
+        let def = self.command(id).ok_or(Unavailable("unknown command"))?;
+        (def.available)(session)
     }
 
     fn apply(outcome: Outcome, session: &mut Session, now: Millis) -> Dispatched {
@@ -538,6 +604,7 @@ fn valid(value: &Value, constraint: &Constraint) -> bool {
             v.is_finite() && *v >= *min && *v <= *max
         }
         (Value::Choice(c), Constraint::Choices(list)) => list.contains(c),
+        (Value::DynamicChoice(c), Constraint::Choices(list)) => list.contains(&c.as_str()),
         _ => false,
     }
 }

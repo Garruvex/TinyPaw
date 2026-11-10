@@ -519,6 +519,7 @@ fn undo_runs_across_stroke_label_and_pin_in_order() {
             .iter()
             .map(|m| match m {
                 Mark::Stroke(_) => "stroke",
+                Mark::PawPrint(_) => "paw print",
                 Mark::Label(_) => "label",
                 Mark::Pin(_) => "pin",
             })
@@ -703,6 +704,41 @@ fn interact_release_after_off_cannot_reacquire() {
 }
 
 #[test]
+fn interact_works_from_every_idle_live_tool_and_resumes_that_tool() {
+    let reg = registry();
+    for command in ["point", "text", "pin", "spotlight", "lens"] {
+        let mut s = session_with("toggle");
+        s.handle(Event::MasterToggle, 0);
+        ack(&mut s);
+        let def = reg.command_by_cli(command).unwrap();
+        reg.dispatch(def.id, &mut s, 1).unwrap();
+        let tool = s.active_tool();
+        s.handle(Event::InteractDown, 2);
+        assert_eq!(s.mode(), Mode::Passthrough, "Alt did not release {tool}");
+        s.handle(Event::InteractUp, 3);
+        s.handle(Event::ButtonsReleased, 4);
+        ack(&mut s);
+        assert!(s.is_pointing());
+        assert_eq!(s.active_tool(), tool);
+    }
+}
+
+#[test]
+fn interact_cancels_an_in_flight_input_acquisition() {
+    let mut s = session_with("toggle");
+    s.handle(Event::MasterToggle, 0);
+    let stale = s.pending_ticket().unwrap();
+    s.handle(Event::InteractDown, 1);
+    assert_eq!(s.overlay_state(), OverlayState::Hidden);
+    s.handle(Event::InputAcquired(stale), 2);
+    assert!(!s.is_pointing(), "late acknowledgement must not steal input back from Alt");
+    s.handle(Event::InteractUp, 3);
+    s.handle(Event::ButtonsReleased, 4);
+    ack(&mut s);
+    assert!(s.is_pointing());
+}
+
+#[test]
 fn text_undo_and_style_are_independent_of_annotation_history() {
     let reg = registry();
     let mut s = session_with("toggle");
@@ -762,5 +798,77 @@ fn reduced_motion_snaps_grip_and_expires_ink_without_fading() {
     assert!(!s.animating(1));
     assert_eq!(s.mark_alpha(&s.scene().marks()[0], 3001), 0.0);
     s.handle(Event::Tick, 3001);
+    assert!(s.scene().is_empty());
+}
+
+#[test]
+fn paw_stamps_commit_once_and_share_ink_history_and_fade() {
+    for (id, kind) in [("cat", PawPrintKind::Cat), ("dog", PawPrintKind::Dog)] {
+        let reg = registry();
+        let mut settings = reg.defaults();
+        reg.set(&mut settings, point::TAP_STAMP, Value::Choice(id))
+            .unwrap();
+        reg.set(&mut settings, system::INK_FADE, Value::Choice("3s"))
+            .unwrap();
+        let mut s = Session::new(point::TOOL, point::new_state, settings);
+        s.handle(Event::MasterToggle, 0);
+        ack(&mut s);
+        s.handle(ptr(PointerKind::Down, 30.0, 40.0), 10);
+        let fx = s.handle(ptr(PointerKind::Up, 31.0, 40.0), 20);
+        assert_eq!(fx, vec![Effect::PlayTap]);
+        let Mark::PawPrint(print) = &s.scene().marks()[0] else {
+            panic!("expected stamp")
+        };
+        assert_eq!(print.at, Pt::new(30.0, 40.0));
+        assert_eq!(print.kind, kind);
+        assert_eq!(print.color, Rgba::CYAN);
+        assert_eq!(print.born, 20);
+        assert_eq!(print.output, O);
+        s.handle(ptr(PointerKind::Up, 31.0, 40.0), 30);
+        assert_eq!(s.scene().marks().len(), 1, "duplicate release cannot stamp");
+        draw_line(&mut s, (60.0, 40.0), (100.0, 40.0));
+        assert_eq!(s.scene().marks().len(), 2);
+        assert!(matches!(s.scene().marks()[1], Mark::Stroke(_)));
+        s.handle(Event::Undo, 30);
+        assert!(matches!(s.scene().marks()[0], Mark::PawPrint(_)));
+        s.handle(Event::Undo, 30);
+        assert!(s.scene().is_empty());
+        tap(&mut s, 30.0, 40.0);
+        s.handle(Event::Tick, 4000);
+        assert!(s.scene().is_empty(), "stamp expires with ink");
+        tap(&mut s, 30.0, 40.0);
+        s.handle(Event::Clear, 4010);
+        assert!(s.scene().is_empty());
+    }
+}
+
+#[test]
+fn stamps_ignore_laser_cancelled_press_and_release_on_another_output() {
+    let reg = registry();
+    let mut settings = reg.defaults();
+    reg.set(&mut settings, point::TAP_STAMP, Value::Choice("cat"))
+        .unwrap();
+    let mut s = Session::new(point::TOOL, point::new_state, settings.clone());
+    s.handle(Event::MasterToggle, 0);
+    ack(&mut s);
+    s.handle(ptr(PointerKind::Down, 10.0, 10.0), 0);
+    s.handle(ptr(PointerKind::Left, 10.0, 10.0), 1);
+    s.handle(ptr(PointerKind::Up, 10.0, 10.0), 2);
+    assert!(s.scene().is_empty());
+    s.handle(ptr(PointerKind::Down, 10.0, 10.0), 3);
+    s.handle(
+        Event::Pointer(PointerEvent {
+            kind: PointerKind::Up,
+            output: OutputId(1),
+            pos: Pt::new(10.0, 10.0),
+            at: 4,
+        }),
+        4,
+    );
+    assert!(s.scene().is_empty());
+    reg.set(&mut settings, point::STYLE, Value::Choice("laser"))
+        .unwrap();
+    s.handle(Event::SettingsChanged(settings), 5);
+    tap(&mut s, 10.0, 10.0);
     assert!(s.scene().is_empty());
 }

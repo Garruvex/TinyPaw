@@ -3,7 +3,6 @@
 use iced::widget::{button, column, container, row, text};
 use iced::{Alignment, Element, Length};
 
-use super::icons::{Glyph, icon};
 use super::{UiMsg, theme};
 use crate::app::Message;
 use crate::features::system;
@@ -22,12 +21,11 @@ pub fn view<'a>(registry: &Registry) -> Element<'a, Message> {
         Some(e) => format!("3.  {e} hands the mouse back to your game."),
         None => "3.  End annotation hands the mouse back to your game.".to_owned(),
     };
-    let logo = container(icon(Glyph::PawSolid, 20.0, theme::AMBER))
+    let logo = container(iced::widget::image(crate::branding::logo()).width(36).height(36))
         .width(36)
         .height(36)
         .align_x(Alignment::Center)
-        .align_y(Alignment::Center)
-        .style(theme::fill(theme::AMBER_BG, 10.0));
+        .align_y(Alignment::Center);
     let title = column![
         text("TinyPaw is ready").font(theme::HEADING).size(17),
         text("It lives in the tray and starts Off.").size(12).color(theme::MUTED),

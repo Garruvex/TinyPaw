@@ -7,6 +7,8 @@ pub mod capture;
 pub mod displays;
 pub mod hotkeys;
 pub mod ipc;
+#[cfg(windows)]
+pub mod lens;
 pub mod tray;
 #[cfg(windows)]
 pub mod windows;
@@ -34,6 +36,7 @@ use iced::futures::stream::{self, BoxStream, StreamExt};
 
 #[derive(Debug, Clone)]
 pub enum External {
+    PreferencesSaved(Result<(), String>),
     Hotkey {
         id: u32,
         pressed: bool,
@@ -104,7 +107,10 @@ mod tests {
     fn interning_stores_each_string_once() {
         let a = super::intern("window:1234");
         let b = super::intern(&String::from("window:1234"));
-        assert!(std::ptr::eq(a, b), "repeat refreshes reuse the same allocation");
+        assert!(
+            std::ptr::eq(a, b),
+            "repeat refreshes reuse the same allocation"
+        );
         assert_ne!(super::intern("window:5678"), a);
     }
 }

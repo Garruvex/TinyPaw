@@ -4,6 +4,7 @@
 
 mod app;
 mod audio;
+mod branding;
 mod features;
 mod mascot;
 mod packs;

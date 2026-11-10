@@ -7,8 +7,8 @@ use crate::registry::{
     Value, when_enabled,
 };
 use crate::session::{
-    Effect, Event, Mark, Millis, OutputId, PointerEvent, PointerKind, Pt, Rgba, Stroke, Tip,
-    ToolCx, ToolState,
+    Effect, Event, Mark, Millis, OutputId, PawPrint, PawPrintKind, PointerEvent, PointerKind, Pt,
+    Rgba, Stroke, Tip, ToolCx, ToolState,
 };
 
 pub const TOOL: &str = "point";
@@ -18,7 +18,15 @@ pub const USE_LASER: &str = "point.laser";
 pub const STYLE: &str = "point.style";
 pub const PRESENTATION: &str = "point.presentation";
 pub const SIZE: &str = "point.size";
+pub const TAP_STAMP: &str = "point.tap_stamp";
 pub const ANGLE: &str = "point.angle";
+pub const FOREARM_COLOR: &str = "point.forearm_color";
+pub const FOREARM_AUTO_COLOR: &str = "point.forearm_auto_color";
+
+/// None retains the pack's own accent colour. Textured forearms ignore this.
+pub fn forearm_color(settings: &SettingValues) -> Option<[u8; 4]> {
+    (!settings.bool(FOREARM_AUTO_COLOR)).then(|| settings.color(FOREARM_COLOR))
+}
 /// The installed pack the paw draws with (open-ended: user packs have new IDs).
 pub const PACK: &str = "point.pack";
 
@@ -36,6 +44,22 @@ pub const GRIP_TAU_MS: f32 = 90.0;
 const GRIP_SETTLED: f32 = 0.5;
 
 pub fn register(r: &mut Registrar) {
+    r.setting(SettingDef {
+        id: FOREARM_COLOR,
+        label: "Forearm colour",
+        group: "Appearance",
+        order: 5,
+        default: Value::Color([0xF2, 0xA6, 0x5A, 255]),
+        constraint: Constraint::None,
+    });
+    r.setting(SettingDef {
+        id: FOREARM_AUTO_COLOR,
+        label: "Use pointer's forearm colour",
+        group: "Appearance",
+        order: 6,
+        default: Value::Bool(true),
+        constraint: Constraint::None,
+    });
     r.tool(ToolDef {
         id: TOOL,
         label: "Point",
@@ -117,6 +141,14 @@ pub fn register(r: &mut Registrar) {
             min: 32.0,
             max: 96.0,
         },
+    });
+    r.setting(SettingDef {
+        id: TAP_STAMP,
+        label: "Tap stamp",
+        group: "Appearance",
+        order: 4,
+        default: Value::Choice("off"),
+        constraint: Constraint::Choices(&["off", "cat", "dog"]),
     });
     r.setting(SettingDef {
         id: ANGLE,
@@ -252,7 +284,27 @@ impl ToolState for PointTool {
             },
             PointerKind::Up => match std::mem::take(&mut self.gesture) {
                 Gesture::Idle => {}
-                Gesture::Pressed { .. } => {
+                Gesture::Pressed { output, start } => {
+                    let kind = match cx.settings.choice(TAP_STAMP) {
+                        "cat" => Some(PawPrintKind::Cat),
+                        "dog" => Some(PawPrintKind::Dog),
+                        _ => None,
+                    };
+                    if cx.settings.choice(STYLE) == "paw"
+                        && output == ev.output
+                        && start.distance(ev.pos) <= DRAG_THRESHOLD
+                        && let Some(kind) = kind
+                    {
+                        cx.scene.push(Mark::PawPrint(PawPrint {
+                            output,
+                            at: start,
+                            kind,
+                            color: Rgba(cx.settings.color(INK_COLOR)),
+                            size: 28.0 * cx.settings.float(SIZE) as f32 / BASE_SIZE,
+                            angle: -(cx.settings.float(ANGLE) as f32).to_radians(),
+                            born: cx.now,
+                        }));
+                    }
                     self.tap_at = Some(cx.now);
                     cx.effects.push(Effect::PlayTap);
                 }

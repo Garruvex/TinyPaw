@@ -17,6 +17,19 @@ pub enum PartType {
     Other,
 }
 
+impl std::fmt::Display for PartType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            PartType::Head => "Head",
+            PartType::Tail => "Tail",
+            PartType::Ear => "Ear",
+            PartType::Wing => "Wing",
+            PartType::Hair => "Hair",
+            PartType::Other => "Other",
+        })
+    }
+}
+
 impl PartType {
     pub const ALL: [PartType; 6] = [
         PartType::Head,

@@ -13,6 +13,14 @@ use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Source};
 
 const RATE: u32 = 44_100;
 
+// Embedded in the executable so installed builds need no external sound folder.
+const BUNDLED: &[(&str, &[u8])] = &[
+    ("duck-toy", include_bytes!("../assets/sounds/duck-toy-sound.wav")),
+    ("mac-quack", include_bytes!("../assets/sounds/mac-quack.wav")),
+    ("bonk-clip", include_bytes!("../assets/sounds/bonk_7zPAD7C.wav")),
+    ("dry-fart", include_bytes!("../assets/sounds/dry-fart.wav")),
+];
+
 /// A predecoded clip.
 #[derive(Debug, Clone)]
 pub struct Clip {
@@ -48,6 +56,10 @@ pub fn custom_path() -> Option<PathBuf> {
 pub fn decode_wav(path: &Path) -> Result<Clip, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     let decoder = Decoder::try_from(BufReader::new(file)).map_err(|e| e.to_string())?;
+    decode_clip(decoder)
+}
+
+fn decode_clip(decoder: impl Source<Item = f32>) -> Result<Clip, String> {
     let channels = decoder.channels().get();
     let rate = decoder.sample_rate().get();
     // Cap at five seconds: a tap sound should be short.
@@ -147,6 +159,7 @@ pub struct Audio {
     knock: Clip,
     pop: Clip,
     bonk: Clip,
+    bundled: Vec<(&'static str, Clip)>,
     custom: Option<Clip>,
     pack: Option<Clip>,
 }
@@ -161,6 +174,21 @@ impl Audio {
             knock: knock(),
             pop: pop(),
             bonk: bonk(),
+            bundled: BUNDLED
+                .iter()
+                .filter_map(|&(id, bytes)| {
+                    match Decoder::try_from(std::io::Cursor::new(bytes))
+                        .map_err(|e| e.to_string())
+                        .and_then(decode_clip)
+                    {
+                        Ok(clip) => Some((id, clip)),
+                        Err(e) => {
+                            eprintln!("tinypaw: could not decode bundled sound {id}: {e}");
+                            None
+                        }
+                    }
+                })
+                .collect(),
             custom,
             pack: None,
         }
@@ -201,8 +229,12 @@ impl Audio {
             "pop" => &self.pop,
             "bonk" => &self.bonk,
             "custom" => self.custom.as_ref().unwrap_or(&self.knock),
-            // "pack": the placeholder paw ships no tap of its own.
-            _ => &self.knock,
+            _ => self
+                .bundled
+                .iter()
+                .find(|(key, _)| *key == id)
+                .map(|(_, clip)| clip)
+                .unwrap_or(&self.knock),
         }
     }
 
@@ -211,6 +243,23 @@ impl Audio {
         if let Some(sink) = &self.sink {
             sink.mixer()
                 .add(self.clip(id).source(volume.clamp(0.0, 1.0)));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_wavs_decode_and_are_selectable() {
+        for &(id, bytes) in BUNDLED {
+            let clip = decode_clip(Decoder::try_from(std::io::Cursor::new(bytes)).unwrap())
+                .unwrap_or_else(|e| panic!("{id}: {e}"));
+            assert!(clip.samples.iter().all(|s| s.is_finite()), "{id}");
+            assert!(clip.samples.iter().any(|s| s.abs() > 0.001), "{id} is silent");
+            assert!(crate::features::sound::CHOICES.contains(&id));
+            assert_ne!(crate::features::sound::label(id), "Unknown");
         }
     }
 }
