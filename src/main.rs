@@ -5,6 +5,7 @@
 mod app;
 mod audio;
 mod features;
+mod mascot;
 mod packs;
 mod platform;
 mod preferences;
@@ -31,6 +32,15 @@ fn usage(registry: &Registry) -> String {
 }
 
 fn main() -> ExitCode {
+    if std::env::args().nth(1).as_deref() == Some("--mascot-preview") {
+        return match mascot::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("tinypaw mascot preview: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let registry: &'static Registry = match Registry::build(features::BUILTINS) {
         Ok(r) => Box::leak(Box::new(r)),
         Err(e) => {

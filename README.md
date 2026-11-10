@@ -50,6 +50,12 @@ TinyPaw starts Off in the tray. Left-click the tray icon or press **Ctrl+Alt+P**
 
 ## CLI
 
+### Experimental Yohta mascot preview
+
+Run `cargo run -- --mascot-preview` (or `target/debug/tinypaw.exe --mascot-preview`) to try the approved sitting mascot in a separate preview window. Move the cursor inside the preview to steer the eyes and click Yohta to open the sample menu. Controls include blinking/idle motion, a simulated music beat with tempo, size, and light/dark backgrounds.
+
+The menu is a demonstration; desktop dragging, real music detection, the standing pose, and annotation-app integration are still pending. See [mascot prototype](docs/mascot-prototype.md) and the proposed [desktop character and custom import feature](docs/mascot-feature.md).
+
 `tinypaw <command>` talks to the running instance: `status`, `toggle`, `off`, `latch`, `undo`, `clear`, `point`, `text`, `pin`, `spotlight`, `lens`, `freeze`, `paw`, `laser`, `mute`, `settings`, `hold-begin`, `hold-end`, `quit`, and `set <setting> <value>`. For example, to switch to Hold-to-draw:
 
 ```bash
