@@ -610,17 +610,17 @@ fn new_pointer<'a>(draft: &'a Draft, editing: bool) -> Element<'a, Message> {
         slider(0.0..=1.0, draft.wrist.0, |x| Message::Ui(
             UiMsg::DraftWristX(x)
         ))
-        .step(0.01),
+        .step(0.01_f32),
         hint("Vertical"),
         slider(0.0..=1.0, draft.wrist.1, |y| Message::Ui(
             UiMsg::DraftWristY(y)
         ))
-        .step(0.01),
+        .step(0.01_f32),
         h2("Forearm width"),
         slider(0.05..=1.5, draft.joint_width, |w| Message::Ui(
             UiMsg::DraftJointWidth(w)
         ))
-        .step(0.01),
+        .step(0.01_f32),
         arm,
         h2("Test the pair"),
         canvas(PairPreview {
