@@ -409,3 +409,92 @@ pub fn window_sources() -> Vec<WindowSource> {
     sources.sort_by(|a, b| a.title.cmp(&b.title));
     sources
 }
+
+/// Physical cursor position on the virtual desktop.
+pub fn cursor_pos() -> Option<(i32, i32)> {
+    let mut p = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
+    let ok = unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut p) };
+    (ok != 0).then_some((p.x, p.y))
+}
+
+/// Physical outer rectangle of a window: left, top, right, bottom.
+pub fn window_rect(hwnd: isize) -> Option<(i32, i32, i32, i32)> {
+    let mut r = windows_sys::Win32::Foundation::RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    let ok = unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd as _, &mut r) };
+    (ok != 0).then_some((r.left, r.top, r.right, r.bottom))
+}
+
+/// Work area (desktop minus taskbar) and effective DPI of the monitor that
+/// contains a physical point, or the nearest one when no monitor does.
+/// `primary` ignores the point and uses the primary monitor.
+pub fn monitor_at(x: i32, y: i32, primary: bool) -> ((i32, i32, i32, i32), u32) {
+    use windows_sys::Win32::Graphics::Gdi::*;
+    unsafe {
+        let point = windows_sys::Win32::Foundation::POINT {
+            x: if primary { 0 } else { x },
+            y: if primary { 0 } else { y },
+        };
+        let flags = if primary {
+            MONITOR_DEFAULTTOPRIMARY
+        } else {
+            MONITOR_DEFAULTTONEAREST
+        };
+        let monitor = MonitorFromPoint(point, flags);
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        let work = if GetMonitorInfoW(monitor, &mut info) != 0 {
+            let r = info.rcWork;
+            (r.left, r.top, r.right, r.bottom)
+        } else {
+            (0, 0, 1920, 1080)
+        };
+        let (mut dpi, mut dpi_y) = (96, 96);
+        windows_sys::Win32::UI::HiDpi::GetDpiForMonitor(
+            monitor,
+            windows_sys::Win32::UI::HiDpi::MDT_EFFECTIVE_DPI,
+            &mut dpi,
+            &mut dpi_y,
+        );
+        (work, dpi.max(48))
+    }
+}
+
+/// Moves (and optionally resizes) a topmost window without activating it.
+pub fn move_window(hwnd: isize, x: i32, y: i32, size: Option<(i32, i32)>) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+    let (w, h, flag) = match size {
+        Some((w, h)) => (w, h, 0),
+        None => (0, 0, SWP_NOSIZE),
+    };
+    unsafe {
+        SetWindowPos(hwnd as _, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | flag);
+    }
+}
+
+/// Clicks on this window never activate it, so the app the user was in keeps
+/// keyboard focus while they use the desktop character.
+pub fn never_activate(hwnd: isize) {
+    unsafe {
+        windows_sys::Win32::UI::Shell::SetWindowSubclass(hwnd as _, Some(no_activate), 0x4D41, 0);
+    }
+}
+
+unsafe extern "system" fn no_activate(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    msg: u32,
+    w: usize,
+    l: isize,
+    _: usize,
+    _: usize,
+) -> isize {
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+    if msg == WM_MOUSEACTIVATE {
+        return MA_NOACTIVATE as isize;
+    }
+    unsafe { windows_sys::Win32::UI::Shell::DefSubclassProc(hwnd, msg, w, l) }
+}

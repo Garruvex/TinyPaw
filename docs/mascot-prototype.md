@@ -55,12 +55,11 @@ target/debug/tinypaw.exe --mascot-preview --snapshot .work/yohta-menu.png --snap
 The destination directory must exist. Snapshot mode captures the preview after
 startup and exits. Additional scenes are `light` and `small`.
 
-## Next integration
+## Desktop integration
 
-Keep the mascot optional. Register its enable, size and motion preferences and
-menu actions through the existing feature registry. A dedicated small desktop
-surface should own dragging, monitor/DPI placement and mascot-only hit testing,
-independently of annotation capture. Keep marks and pointer rendering separate.
-Real music response should be an optional platform audio service that supplies
-an amplitude/beat envelope to the rig. It must release audio resources when
-disabled. Add the standing pose against the same eye/neck/tail contract.
+The same rig now runs in the resident app's desktop character window
+(`src/mascot/desktop.rs`). See
+[Stage 1 implementation](mascot-feature.md#stage-1-implementation). Still to
+come: real music response, as an optional platform audio service that supplies
+an amplitude envelope to the rig and releases audio resources when disabled;
+and the standing pose, against the same eye/neck/tail contract.

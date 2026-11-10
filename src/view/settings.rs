@@ -11,7 +11,7 @@ use iced::{Alignment, Color, Element, Length, Theme};
 use super::icons::{Glyph, icon};
 use super::{PreviewTile, UiMsg, theme};
 use crate::app::Message;
-use crate::features::{display, point, sound, system};
+use crate::features::{display, mascot, point, sound, system};
 use crate::packs::{Draft, Pack};
 use crate::registry::{Registry, ShortcutContext, Value};
 use crate::session::{ActivationStyle, Session};
@@ -22,6 +22,7 @@ pub enum Page {
     Display,
     #[default]
     Appearance,
+    Character,
     Sound,
 }
 
@@ -179,6 +180,7 @@ fn nav<'a>(page: Page) -> Element<'a, Message> {
             item(Page::Controls, Glyph::Controls, "Controls"),
             item(Page::Display, Glyph::Display, "Display"),
             item(Page::Appearance, Glyph::Paw, "Appearance"),
+            item(Page::Character, Glyph::PawSolid, "Character"),
             item(Page::Sound, Glyph::Sound, "Sound"),
             space().height(Length::Fill),
             tip,
@@ -207,6 +209,7 @@ fn main<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         Page::Controls => controls(v),
         Page::Display => display_page(v),
         Page::Sound => sound_page(v),
+        Page::Character => character_page(v),
     });
     scrollable(
         container(Column::with_children(content).spacing(16))
@@ -1073,6 +1076,58 @@ fn check<'a>(label: &'a str, on: bool, id: &'static str) -> Element<'a, Message>
         })
         .on_toggle(move |b| Message::Set(id, Value::Bool(b)))
         .into()
+}
+
+fn character_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
+    let s = v.session.settings();
+    let size = s.float(mascot::SIZE);
+    column![
+        h1("Character"),
+        section(vec![
+            check(
+                "Show Yohta on the desktop",
+                s.bool(mascot::ENABLED),
+                mascot::ENABLED
+            ),
+            hint(
+                "Click Yohta for a quick menu and drag him anywhere. He stays while TinyPaw                  is Off and steps aside while you draw. The tray menu can show or hide him."
+            ),
+        ]),
+        section(vec![
+            row![
+                h2("Size"),
+                space().width(Length::Fill),
+                text(format!("{size:.0} px tall")).size(13)
+            ]
+            .into(),
+            slider(mascot::MIN_SIZE..=mascot::MAX_SIZE, size, |x| {
+                Message::Set(mascot::SIZE, Value::Float(x))
+            })
+            .step(4.0)
+            .style(theme::range)
+            .into(),
+        ]),
+        check(
+            "Eyes follow the cursor",
+            s.bool(mascot::EYES),
+            mascot::EYES
+        ),
+        check(
+            "Idle motion and blinking",
+            s.bool(mascot::IDLE),
+            mascot::IDLE
+        ),
+        hint("Reduced motion (Appearance) also stops idle motion and blinking."),
+        button(text("Reset position").size(13))
+            .padding([7, 12])
+            .style(theme::secondary)
+            .on_press_maybe(
+                s.bool(mascot::ENABLED).then_some(Message::Ui(UiMsg::ResetMascotPosition))
+            ),
+    ]
+    .spacing(22)
+    .max_width(560)
+    .into()
 }
 
 fn display_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {

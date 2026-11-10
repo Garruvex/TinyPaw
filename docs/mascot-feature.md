@@ -1,9 +1,10 @@
 # Desktop character and custom character imports
 
-Status: proposed feature scope, 10 November 2026. This document defines future
-work; it does not mean desktop integration or custom imports already exist.
-The current [Yohta prototype](mascot-prototype.md) demonstrates the visual
-direction in a separate preview window.
+Status: feature scope, 10 November 2026. Stage 1 (desktop interaction) is
+implemented on Windows as of 11 November 2026; see
+[Stage 1 implementation](#stage-1-implementation). Custom imports (stage 2) and
+the standing pose and music (stage 3) do not exist yet. The
+[Yohta prototype](mascot-prototype.md) preview window remains for rig work.
 
 ## Goal
 
@@ -248,6 +249,48 @@ Character use must remain functional without any audio backend.
 3. **Pose and music polish.** Add matching standing Yohta artwork, stable pose
    switching and optional Windows playback response. Validate resource use,
    reduced motion and the full desktop workflow before advertising support.
+
+### Stage 1 implementation
+
+- **Feature.** `src/features/mascot.rs` registers `mascot.enabled` (default
+  off), `mascot.size` (96–320, default 160), `mascot.eyes`, `mascot.idle` and
+  the internal `mascot.x`/`mascot.y` ground anchor in physical desktop pixels.
+  Commands: `mascot.toggle` (tray check item, `tinypaw mascot`) and
+  `mascot.hide` (`tinypaw mascot-hide`). Settings has a Character page.
+- **Window.** `src/mascot/desktop.rs` owns one transparent, topmost,
+  taskbar-less Iced window laid out as `[menu slot | character | menu slot]`.
+  The menu opens on the right, or on the left near the right edge of the work
+  area, without resizing the window. The rig is decoded when the character is
+  enabled and released when it is turned off.
+- **Input.** The window stays click-through (winit mouse passthrough) except
+  while the polled cursor is over the rig's silhouette, the open menu, or during
+  a press. The silhouette is a coarse 6-rig-pixel grid stamped from the sprite
+  alpha, which also pads the outline for the small idle rotations. A
+  `WM_MOUSEACTIVATE` subclass returns `MA_NOACTIVATE`, so clicking Yohta never
+  takes focus from the user's app. A press becomes a drag after 5 logical
+  pixels; otherwise release toggles the menu. Escape or a click outside closes
+  it. Menu entries dispatch through the registry and are disabled when
+  unavailable.
+- **Placement.** The ground anchor is clamped to the nearest monitor's work
+  area: feet no lower than the taskbar, the window (and so the menu) no higher
+  than the top edge, and the character's sides within the edges. An unplaced
+  or off-screen anchor recovers to the bottom right of the primary display, or
+  the nearest display. Display and DPI changes re-place it. Size changes keep
+  the feet still.
+- **Annotation.** While the annotation surface owns input
+  (`OverlayState::Interactive`), the window is hidden and its menu closed. It
+  returns at the same spot. Off and click-through marks leave it visible.
+- **Motion.** Idle sway and blinking at about 30 fps while enabled. Reduced
+  motion (app or Windows) stops sway and blinking and snaps the gaze. With idle
+  off, polling drops to 10 Hz for hit testing and gaze.
+- **Measured** (release build, 3440×1440 primary display, 11 November 2026):
+  idle motion on, 2.8–3.8 % of one core; idle off, 0.6 %; character off,
+  0 %, with private memory back from 13 MB to 5 MB.
+- **Known limits.** Hit testing follows the polled cursor, so a click within
+  about 33 ms (100 ms when still) of moving onto Yohta can still reach the app
+  underneath. The vertical clamp keeps room for the menu above the feet, so
+  Yohta cannot sit flush with the top edge. Non-Windows builds keep the settings
+  but report that the character is unavailable.
 
 Completion checks:
 

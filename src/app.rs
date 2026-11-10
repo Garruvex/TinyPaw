@@ -11,7 +11,7 @@ use iced::window::{self, settings::PlatformSpecific};
 use iced::{Element, Point, Size, Subscription, Task, Theme, event, theme};
 
 use crate::audio::{self, Audio};
-use crate::features::{point, sound, system, wheel as wheel_feature};
+use crate::features::{mascot as character, point, sound, system, wheel as wheel_feature};
 use crate::packs::{self, Draft, Pack};
 use crate::platform::{
     self, External,
@@ -48,6 +48,7 @@ pub enum Message {
     TextChanged(String),
     TextSubmit,
     Still(Ticket, Result<Vec<(OutputId, image::Handle)>, String>),
+    Mascot(crate::mascot::Msg),
     Frame,
     Tick,
 }
@@ -90,6 +91,9 @@ pub struct App {
     alt_down: bool,
     #[cfg(windows)]
     lens: Option<platform::windows::Lens>,
+    /// The desktop character window, while enabled.
+    #[cfg(windows)]
+    mascot: Option<crate::mascot::desktop::Desktop>,
     #[cfg(windows)]
     sources: Vec<platform::windows::WindowSource>,
 }
@@ -199,6 +203,8 @@ impl App {
             #[cfg(windows)]
             lens: None,
             #[cfg(windows)]
+            mascot: None,
+            #[cfg(windows)]
             sources: platform::windows::window_sources(),
         };
         let (loaded_packs, problems) = packs::load_all();
@@ -222,6 +228,8 @@ impl App {
         } else {
             Task::none()
         };
+        // Restore the desktop character if it was showing last time.
+        let task = Task::batch([task, app.reconcile_mascot()]);
         (app, task)
     }
 
@@ -260,6 +268,10 @@ impl App {
                 }
             }
             Message::External(External::DisplaysChanged) => {
+                #[cfg(windows)]
+                if let Some(m) = &mut self.mascot {
+                    m.displays_changed();
+                }
                 let displays = displays::list();
                 if self.displays != displays {
                     out.effects
@@ -325,6 +337,7 @@ impl App {
                 }
             }
             Message::Set(id, value) => out.sets.push((id, value)),
+            Message::Mascot(msg) => self.mascot_message(msg, now, &mut out, &mut tasks),
             Message::Ui(ui) => tasks.push(self.ui_message(ui, now, &mut out)),
             Message::PressedPicked(path) => {
                 if let (Some(path), Some(draft)) = (path, self.pointer_draft.as_mut()) {
@@ -508,6 +521,17 @@ impl App {
                     .extend(self.session.handle(Event::InputAcquired(ticket), now));
             }
             Message::WindowOpened(id) => {
+                #[cfg(windows)]
+                if self.mascot.as_ref().is_some_and(|m| m.id == id) {
+                    tasks.push(window::run(id, |w| {
+                        use iced::window::raw_window_handle::RawWindowHandle;
+                        let hwnd = match w.window_handle().map(|h| h.as_raw()) {
+                            Ok(RawWindowHandle::Win32(h)) => h.hwnd.get(),
+                            _ => 0,
+                        };
+                        Message::Mascot(crate::mascot::Msg::Native(hwnd))
+                    }));
+                }
                 if let Some(o) = self.overlays.iter_mut().find(|o| o.id == id) {
                     o.ready = true;
                     #[cfg(windows)]
@@ -532,6 +556,8 @@ impl App {
                 } else if Some(id) == self.first_run_window {
                     self.first_run_window = None;
                     tasks.push(window::close(id));
+                } else if self.mascot_window() == Some(id) {
+                    out.sets.push((character::ENABLED, Value::Bool(false)));
                 }
             }
             Message::Tick => {
@@ -632,7 +658,143 @@ impl App {
             }
         }
         tasks.push(self.reconcile());
+        tasks.push(self.reconcile_mascot());
         Task::batch(tasks)
+    }
+
+    fn mascot_window(&self) -> Option<window::Id> {
+        #[cfg(windows)]
+        {
+            self.mascot.as_ref().map(|m| m.id)
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    }
+
+    #[cfg(windows)]
+    fn mascot_options(&self) -> crate::mascot::desktop::Options {
+        let s = self.session.settings();
+        crate::mascot::desktop::Options {
+            eyes: s.bool(character::EYES),
+            idle: s.bool(character::IDLE),
+            reduced: system::reduced(s),
+        }
+    }
+
+    #[cfg_attr(not(windows), allow(unused_variables))]
+    fn mascot_message(
+        &mut self,
+        msg: crate::mascot::Msg,
+        now: Millis,
+        out: &mut Outcomes,
+        tasks: &mut Vec<Task<Message>>,
+    ) {
+        use crate::mascot::Msg;
+        match msg {
+            // Menu entries go through the registry like every other surface.
+            Msg::Command(id) => {
+                #[cfg(windows)]
+                if let Some(m) = &mut self.mascot {
+                    m.close_menu();
+                }
+                out.collect(self.dispatch(id, now).ok());
+            }
+            Msg::Set(id, value) => {
+                #[cfg(windows)]
+                if let Some(m) = &mut self.mascot {
+                    m.close_menu();
+                }
+                out.sets.push((id, value));
+            }
+            #[cfg(windows)]
+            msg => {
+                let options = self.mascot_options();
+                if let Some(m) = &mut self.mascot {
+                    let (task, save) = m.update(msg, &options);
+                    tasks.push(task);
+                    if let Some((x, y)) = save {
+                        out.sets.push((character::X, Value::Float(x)));
+                        out.sets.push((character::Y, Value::Float(y)));
+                    }
+                }
+            }
+            #[cfg(not(windows))]
+            _ => {}
+        }
+    }
+
+    /// Opens, closes, resizes and hides the character window to match its
+    /// settings. It stays while annotation is Off and steps aside while the
+    /// annotation surface owns input.
+    fn reconcile_mascot(&mut self) -> Task<Message> {
+        #[cfg(windows)]
+        {
+            let s = self.session.settings();
+            let want = s.bool(character::ENABLED);
+            let size = s.float(character::SIZE) as f32;
+            let hidden = self.session.overlay_state() == OverlayState::Interactive;
+            let rows = MASCOT_MENU_ROWS;
+            match (&mut self.mascot, want) {
+                (None, true) => {
+                    let anchor = (s.float(character::X), s.float(character::Y));
+                    let (m, open) =
+                        crate::mascot::desktop::Desktop::open(size, anchor, rows, hidden);
+                    self.mascot = Some(m);
+                    return open.map(Message::WindowOpened);
+                }
+                (Some(_), false) => {
+                    let m = self.mascot.take().expect("mascot window");
+                    return window::close(m.id);
+                }
+                (Some(m), true) => {
+                    m.resize(size, rows);
+                    return m.set_hidden(hidden);
+                }
+                (None, false) => {}
+            }
+        }
+        Task::none()
+    }
+
+    /// The character's menu: annotation, sound and app controls, dispatched
+    /// through the registry and disabled when unavailable.
+    #[cfg(windows)]
+    fn mascot_menu(&self) -> Vec<crate::mascot::desktop::Item> {
+        use crate::mascot::{Msg, desktop::Item};
+        let s = self.session.settings();
+        let command = |id: &'static str, label: &'static str, checked: Option<bool>| Item {
+            label,
+            checked,
+            on_press: self
+                .registry
+                .command(id)
+                .filter(|d| (d.available)(&self.session).is_ok())
+                .map(|_| Msg::Command(id)),
+        };
+        vec![
+            command(
+                system::MASTER_TOGGLE,
+                "TinyPaw On",
+                Some(self.session.is_enabled()),
+            ),
+            command(
+                sound::TOGGLE_MUTE,
+                "Mute tap sound",
+                Some(s.bool(sound::MUTE)),
+            ),
+            Item {
+                label: "Eyes follow cursor",
+                checked: Some(s.bool(character::EYES)),
+                on_press: Some(Msg::Set(
+                    character::EYES,
+                    Value::Bool(!s.bool(character::EYES)),
+                )),
+            },
+            command(system::SETTINGS, "Settings…", None),
+            command(character::HIDE, "Hide character", None),
+        ]
     }
 
     fn ui_message(&mut self, ui: UiMsg, now: Millis, out: &mut Outcomes) -> Task<Message> {
@@ -697,6 +859,15 @@ impl App {
                 self.ui.ink_menu = !self.ui.ink_menu;
             }
             UiMsg::Nav(page) => self.page = page,
+            UiMsg::ResetMascotPosition => {
+                #[cfg(windows)]
+                if let Some(m) = &mut self.mascot {
+                    m.reset_position();
+                }
+                let unplaced = Value::Float(character::UNPLACED);
+                out.sets.push((character::X, unplaced.clone()));
+                out.sets.push((character::Y, unplaced));
+            }
             UiMsg::AddPressed => {
                 return Task::perform(
                     rfd::AsyncFileDialog::new()
@@ -938,6 +1109,11 @@ impl App {
         #[cfg(windows)]
         if id == crate::features::upcoming::SOURCE {
             self.lens = None;
+        }
+        #[cfg(not(windows))]
+        if id == character::ENABLED && value == Value::Bool(true) {
+            self.notice = Some("The desktop character is available on Windows".into());
+            return;
         }
         // A pack must be installed and valid before it can be selected.
         if id == point::PACK
@@ -1268,6 +1444,10 @@ impl App {
                 notice: self.notice.as_deref(),
             });
         }
+        #[cfg(windows)]
+        if let Some(m) = self.mascot.as_ref().filter(|m| m.id == window) {
+            return m.view(self.mascot_menu(), &self.mascot_options());
+        }
         if Some(window) == self.first_run_window {
             return view::first_run::view(self.registry.shortcut_label(system::MASTER_TOGGLE));
         }
@@ -1323,6 +1503,16 @@ impl App {
         {
             subs.push(iced::time::every(Duration::from_millis(250)).map(|_| Message::Tick));
         }
+        #[cfg(windows)]
+        if let Some(every) = self
+            .mascot
+            .as_ref()
+            .and_then(|m| m.poll_interval(&self.mascot_options()))
+        {
+            subs.push(
+                iced::time::every(every).map(|_| Message::Mascot(crate::mascot::Msg::Poll)),
+            );
+        }
         // Frames only while something animates; otherwise the process sleeps.
         if self.session.animating(now) {
             subs.push(window::frames().map(|_| Message::Frame));
@@ -1336,6 +1526,9 @@ impl App {
         Subscription::batch(subs)
     }
 }
+
+/// Entries in the character menu; fixes the menu's height.
+const MASCOT_MENU_ROWS: usize = 5;
 
 /// How long an overlay notice stays in the status chip.
 const NOTICE_MS: Millis = 3000;

@@ -82,6 +82,7 @@ pub enum UiMsg {
     DraftName(String),
     SaveDraft,
     CancelDraft,
+    ResetMascotPosition,
 }
 
 /// Cached committed ink, invalidated by scene revision.

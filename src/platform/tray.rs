@@ -4,13 +4,15 @@ use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuIt
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use super::External;
-use crate::features::system;
+use crate::features::{mascot, system};
 use crate::registry::{Registry, Surfaces};
 use crate::session::Session;
 
 pub struct Tray {
     icon: TrayIcon,
     master: Option<CheckMenuItem>,
+    /// "Show character", checked while the desktop character is enabled.
+    character: Option<CheckMenuItem>,
     items: Vec<(&'static str, MenuItem)>,
     on_icon: Icon,
     off_icon: Icon,
@@ -20,6 +22,7 @@ pub struct Tray {
 pub fn build(registry: &Registry) -> Result<Tray, String> {
     let menu = Menu::new();
     let mut master = None;
+    let mut character = None;
     let mut items = Vec::new();
     let mut last_group = None;
     for def in registry.commands_for(Surfaces::TRAY) {
@@ -32,6 +35,10 @@ pub fn build(registry: &Registry) -> Result<Tray, String> {
             let item = CheckMenuItem::with_id(def.id, def.label, true, false, None);
             menu.append(&item).map_err(|e| e.to_string())?;
             master = Some(item);
+        } else if def.id == mascot::TOGGLE {
+            let item = CheckMenuItem::with_id(def.id, def.label, true, false, None);
+            menu.append(&item).map_err(|e| e.to_string())?;
+            character = Some(item);
         } else {
             let item = MenuItem::with_id(def.id, def.label, true, None);
             menu.append(&item).map_err(|e| e.to_string())?;
@@ -65,6 +72,7 @@ pub fn build(registry: &Registry) -> Result<Tray, String> {
     Ok(Tray {
         icon,
         master,
+        character,
         items,
         on_icon,
         off_icon,
@@ -79,6 +87,9 @@ impl Tray {
         if let Some(master) = &self.master {
             // The menu toggles the check itself on click; always restore truth.
             master.set_checked(on);
+        }
+        if let Some(item) = &self.character {
+            item.set_checked(session.settings().bool(mascot::ENABLED));
         }
         for (id, item) in &self.items {
             if let Some(def) = registry.command(id) {

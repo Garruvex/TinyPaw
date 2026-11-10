@@ -10,12 +10,70 @@ const SOURCE: &[u8] = include_bytes!("../../assets/mascot/yohta/source/approved.
 pub const WIDTH: f32 = 620.0;
 pub const HEIGHT: f32 = 860.0;
 const STEPS: i32 = 3;
+/// Rig pixels per silhouette cell. Coarse cells also pad the outline a
+/// little, covering the small idle rotations of head and tail.
+const CELL: f32 = 6.0;
+
+// Where each sprite is drawn, in rig coordinates.
+const TAIL_AT: (Point, Size) = (Point::new(302.0, 452.0), Size::new(308.0, 312.0));
+const BODY_AT: (Point, Size) = (Point::new(91.0, 457.0), Size::new(410.0, 350.0));
+const HEAD_AT: (Point, Size) = (Point::new(0.0, 0.0), Size::new(544.0, 520.0));
 
 pub struct Rig {
     head: Handle,
     body: Handle,
     tail: Handle,
     eyes: Vec<Eye>,
+    silhouette: Silhouette,
+}
+
+/// Which rig cells hold visible artwork, for alpha-aware hit testing.
+struct Silhouette {
+    columns: usize,
+    rows: usize,
+    cells: Vec<bool>,
+    /// Lowest visible rig row: where the feet meet the ground.
+    ground: f32,
+}
+
+impl Silhouette {
+    fn new() -> Self {
+        let columns = (WIDTH / CELL).ceil() as usize;
+        let rows = (HEIGHT / CELL).ceil() as usize;
+        Self {
+            columns,
+            rows,
+            cells: vec![false; columns * rows],
+            ground: 0.0,
+        }
+    }
+
+    fn stamp(&mut self, pixels: &RgbaImage, (at, size): (Point, Size)) {
+        let (sx, sy) = (
+            size.width / pixels.width() as f32,
+            size.height / pixels.height() as f32,
+        );
+        for (x, y, p) in pixels.enumerate_pixels() {
+            if p[3] < 32 {
+                continue;
+            }
+            let rx = at.x + x as f32 * sx;
+            let ry = at.y + y as f32 * sy;
+            let (c, r) = ((rx / CELL) as usize, (ry / CELL) as usize);
+            if c < self.columns && r < self.rows {
+                self.cells[r * self.columns + c] = true;
+                self.ground = self.ground.max(ry + sy);
+            }
+        }
+    }
+
+    fn contains(&self, p: Point) -> bool {
+        if p.x < 0.0 || p.y < 0.0 {
+            return false;
+        }
+        let (c, r) = ((p.x / CELL) as usize, (p.y / CELL) as usize);
+        c < self.columns && r < self.rows && self.cells[r * self.columns + c]
+    }
 }
 
 struct Eye {
@@ -43,12 +101,29 @@ impl Rig {
             Eye::new(&head, (98, 355), (70, 317, 57, 73)),
             Eye::new(&head, (245, 355), (177, 309, 164, 90)),
         ];
+        let body = crop(720, 638, 410, 350);
+        let tail = crop(1138, 600, 385, 390);
+        let mut silhouette = Silhouette::new();
+        silhouette.stamp(&tail, TAIL_AT);
+        silhouette.stamp(&body, BODY_AT);
+        silhouette.stamp(&head, HEAD_AT);
         Self {
             head: handle(head),
-            body: handle(crop(720, 638, 410, 350)),
-            tail: handle(crop(1138, 600, 385, 390)),
+            body: handle(body),
+            tail: handle(tail),
             eyes,
+            silhouette,
         }
+    }
+
+    /// Whether a rig-space point lies on visible artwork.
+    pub fn opaque(&self, p: Point) -> bool {
+        self.silhouette.contains(p)
+    }
+
+    /// The rig row the character stands on.
+    pub fn ground(&self) -> f32 {
+        self.silhouette.ground
     }
 
     /// All positions are in rig coordinates. Rotation is around attachment
@@ -64,16 +139,16 @@ impl Rig {
         sprite(
             frame,
             &self.tail,
-            Point::new(302.0, 452.0),
-            Size::new(308.0, 312.0),
+            TAIL_AT.0,
+            TAIL_AT.1,
             Point::new(345.0, 510.0),
             tail_angle,
         );
         sprite(
             frame,
             &self.body,
-            Point::new(91.0, 457.0),
-            Size::new(410.0, 350.0),
+            BODY_AT.0,
+            BODY_AT.1,
             Point::new(295.0, 820.0),
             0.0,
         );
@@ -82,9 +157,8 @@ impl Rig {
             f.translate(Vector::new(pivot.x, pivot.y));
             f.rotate(head_angle);
             f.translate(Vector::new(-pivot.x, -pivot.y));
-            let origin = Point::new(0.0, 0.0);
             f.draw_image(
-                Rectangle::new(origin, Size::new(544.0, 520.0)),
+                Rectangle::new(HEAD_AT.0, HEAD_AT.1),
                 canvas::Image::new(self.head.clone()),
             );
             for eye in &self.eyes {
@@ -233,5 +307,16 @@ mod tests {
         let rig = Rig::load();
         assert_eq!(rig.eyes.len(), 2);
         assert!(rig.eyes.iter().all(|eye| eye.frames.len() == 49));
+    }
+    #[test]
+    fn silhouette_covers_the_character_and_not_the_corners() {
+        let rig = Rig::load();
+        // Face, chest and tail are solid; canvas corners are empty.
+        assert!(rig.opaque(Point::new(232.0, 360.0)));
+        assert!(rig.opaque(Point::new(295.0, 700.0)));
+        assert!(!rig.opaque(Point::new(2.0, HEIGHT - 2.0)));
+        assert!(!rig.opaque(Point::new(WIDTH - 2.0, 2.0)));
+        assert!(!rig.opaque(Point::new(-5.0, 300.0)));
+        assert!(rig.ground() > 700.0 && rig.ground() <= HEIGHT);
     }
 }

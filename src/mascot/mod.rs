@@ -1,6 +1,23 @@
-//! Experimental sitting mascot. Kept outside the annotation session until the
-//! rig and interaction are approved; no hooks, capture, tray or audio device.
+//! Yohta, the optional desktop character. `desktop` is the resident app's
+//! character window; `run` is the standalone `--mascot-preview` window, which
+//! starts no hooks, capture, tray or audio device. Both share the rig.
+#[cfg(windows)]
+pub mod desktop;
 mod rig;
+
+/// Messages from the desktop character window.
+#[derive(Debug, Clone)]
+pub enum Msg {
+    /// Left button pressed on visible artwork.
+    Pressed,
+    Released,
+    /// Cursor, drag and hit-test polling while visible.
+    Poll,
+    Native(isize),
+    /// A menu entry: run a registered command, or change a setting.
+    Command(&'static str),
+    Set(&'static str, crate::registry::Value),
+}
 
 use iced::widget::canvas::{self as drawing, Frame, Geometry};
 use iced::widget::{button, canvas, checkbox, column, container, row, slider, text};
@@ -188,7 +205,7 @@ impl Preview {
                 .label("Simulate music bob")
                 .on_toggle(Message::Beat),
             text("Size").size(14),
-            slider(96.0..=440.0, self.size, Message::Scale).step(1.0),
+            slider(96.0..=440.0, self.size, Message::Scale).step(1.0_f32),
             text(format!("{:.0} px tall", self.size)).size(13),
             checkbox(self.light)
                 .label("Light background")
@@ -198,7 +215,7 @@ impl Preview {
         if self.beat {
             controls = controls
                 .push(text(format!("Demo tempo · {:.0} BPM", self.tempo)).size(14))
-                .push(slider(60.0..=180.0, self.tempo, Message::Tempo).step(1.0));
+                .push(slider(60.0..=180.0, self.tempo, Message::Tempo).step(1.0_f32));
         }
         if self.menu {
             controls = controls.push(text("Yohta menu").size(20));
@@ -344,14 +361,14 @@ impl drawing::Program<Message> for Stage<'_> {
     }
 }
 
-struct Motion {
-    head: f32,
-    tail: f32,
-    bounce: f32,
-    blink: bool,
+pub(crate) struct Motion {
+    pub head: f32,
+    pub tail: f32,
+    pub bounce: f32,
+    pub blink: bool,
 }
 
-fn motion(now: f32, idle: bool, beat: bool, tempo: f32) -> Motion {
+pub(crate) fn motion(now: f32, idle: bool, beat: bool, tempo: f32) -> Motion {
     let phase = now * tempo / 60.0 * std::f32::consts::TAU;
     Motion {
         head: if beat {

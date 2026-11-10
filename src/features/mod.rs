@@ -3,6 +3,7 @@
 
 pub mod display;
 pub mod freeze;
+pub mod mascot;
 pub mod pin;
 pub mod point;
 pub mod sound;
@@ -25,5 +26,6 @@ pub const BUILTINS: &[RegisterFn] = &[
     sound::register,
     display::register,
     wheel::register,
+    mascot::register,
     upcoming::register,
 ];
