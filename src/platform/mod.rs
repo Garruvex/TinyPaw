@@ -11,7 +11,23 @@ pub mod tray;
 #[cfg(windows)]
 pub mod windows;
 
+use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
+
+/// Returns a `'static` copy of `s`, storing each distinct string once. Window
+/// and display identifiers are refreshed often and repeat, so interning keeps
+/// the settings-friendly `&'static str` without growing on every refresh.
+pub fn intern(s: &str) -> &'static str {
+    static SEEN: Mutex<Option<HashSet<&'static str>>> = Mutex::new(None);
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    let set = seen.get_or_insert_with(HashSet::new);
+    if let Some(existing) = set.get(s) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(s.to_owned().into_boxed_str());
+    set.insert(leaked);
+    leaked
+}
 
 use iced::futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use iced::futures::stream::{self, BoxStream, StreamExt};
@@ -77,5 +93,16 @@ pub fn restore_foreground(_handle: Option<isize>) {
     #[cfg(windows)]
     if let Some(h) = _handle {
         windows::set_foreground(h);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn interning_stores_each_string_once() {
+        let a = super::intern("window:1234");
+        let b = super::intern(&String::from("window:1234"));
+        assert!(std::ptr::eq(a, b), "repeat refreshes reuse the same allocation");
+        assert_ne!(super::intern("window:5678"), a);
     }
 }

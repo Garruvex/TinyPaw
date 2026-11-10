@@ -50,7 +50,7 @@ pub fn list() -> Vec<Display> {
             }
             items.push(Display {
                 id: crate::session::OutputId(0),
-                name: Box::leak(name.into_boxed_str()),
+                name: super::intern(&name),
                 x: rect.left,
                 y: rect.top,
                 width: rect.right - rect.left,

@@ -79,7 +79,7 @@ unsafe extern "system" fn events(
 ) -> isize {
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
     match msg {
-        WM_WTSSESSION_CHANGE if matches!(w, 7 | 3 | 4) => super::send(super::External::Interrupted),
+        WM_WTSSESSION_CHANGE if matches!(w, 2 | 4 | 7) => super::send(super::External::Interrupted),
         WM_POWERBROADCAST if w == 4 => super::send(super::External::Interrupted),
         WM_DPICHANGED | WM_DISPLAYCHANGE => super::send(super::External::DisplaysChanged),
         WM_SETTINGCHANGE => super::send(super::External::MotionChanged),
@@ -270,37 +270,86 @@ pub fn start_notifications() {
                 return;
             }
             observe(hwnd as isize);
-            let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), instance, 0);
-            KEYBOARD_HOOK.store(!hook.is_null(), Ordering::Relaxed);
+            NOTIFY_HWND.store(hwnd as isize, Ordering::Release);
+            // Honour an arm request that arrived before the window existed.
+            if INTERACT_ARMED.load(Ordering::Acquire) {
+                set_hook(true);
+            }
             let mut msg = std::mem::zeroed();
             while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
-            if !hook.is_null() {
-                UnhookWindowsHookEx(hook);
-            }
+            set_hook(false);
         })
         .expect("desktop notification thread");
 }
+/// Posted to the notification window to install (w = 1) or remove (w = 0)
+/// the keyboard hook on its own thread.
+const WM_TINYPAW_HOOK: u32 = windows_sys::Win32::UI::WindowsAndMessaging::WM_APP + 1;
+
 unsafe extern "system" fn notification_proc(
     hwnd: windows_sys::Win32::Foundation::HWND,
     msg: u32,
     w: usize,
     l: isize,
 ) -> isize {
+    if msg == WM_TINYPAW_HOOK {
+        set_hook(w != 0);
+        return 0;
+    }
     unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, msg, w, l) }
 }
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 static INTERACT_ARMED: AtomicBool = AtomicBool::new(false);
 static ALT_HELD: AtomicBool = AtomicBool::new(false);
-static KEYBOARD_HOOK: AtomicBool = AtomicBool::new(false);
+static KEYBOARD_HOOK: AtomicIsize = AtomicIsize::new(0);
+static NOTIFY_HWND: AtomicIsize = AtomicIsize::new(0);
+
+/// Installs or removes the low-level keyboard hook. Runs on the notification
+/// thread only, which pumps the messages the hook is delivered through.
+fn set_hook(on: bool) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+    let current = KEYBOARD_HOOK.load(Ordering::Acquire);
+    unsafe {
+        match (on, current) {
+            (true, 0) => {
+                let instance =
+                    windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(std::ptr::null());
+                let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), instance, 0);
+                KEYBOARD_HOOK.store(hook as isize, Ordering::Release);
+            }
+            (false, h) if h != 0 => {
+                UnhookWindowsHookEx(h as _);
+                KEYBOARD_HOOK.store(0, Ordering::Release);
+                ALT_HELD.store(false, Ordering::Relaxed);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Arms Hold to interact while TinyPaw is On. The system-wide keyboard hook
+/// exists only while armed, so an Off TinyPaw sees no keystrokes at all.
 pub fn arm_interact(armed: bool) {
-    INTERACT_ARMED.store(armed, Ordering::Relaxed);
+    if INTERACT_ARMED.swap(armed, Ordering::AcqRel) == armed {
+        return;
+    }
+    let hwnd = NOTIFY_HWND.load(Ordering::Acquire);
+    if hwnd != 0 {
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(
+                hwnd as _,
+                WM_TINYPAW_HOOK,
+                armed as usize,
+                0,
+            );
+        }
+    }
 }
 pub fn has_keyboard_hook() -> bool {
-    KEYBOARD_HOOK.load(Ordering::Relaxed)
+    KEYBOARD_HOOK.load(Ordering::Acquire) != 0
 }
 unsafe extern "system" fn keyboard_hook(code: i32, w: usize, l: isize) -> isize {
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -343,7 +392,7 @@ pub fn window_sources() -> Vec<WindowSource> {
             let mut title = [0u16; 512];
             let len = GetWindowTextW(hwnd, title.as_mut_ptr(), 512);
             if len > 0 {
-                let id = Box::leak(format!("window:{}", hwnd as isize).into_boxed_str());
+                let id = super::intern(&format!("window:{}", hwnd as isize));
                 (&mut *(data as *mut Vec<WindowSource>)).push(WindowSource {
                     id,
                     handle: hwnd as isize,
