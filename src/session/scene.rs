@@ -47,6 +47,8 @@ pub struct Label {
     pub at: Pt,
     pub text: String,
     pub size: f32,
+    pub color: Rgba,
+    pub backing: bool,
 }
 
 /// A numbered marker centred on `at`.

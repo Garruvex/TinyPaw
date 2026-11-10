@@ -11,19 +11,17 @@ pub struct Still {
 }
 
 #[cfg(windows)]
-pub fn primary_display() -> Result<Still, String> {
+pub fn display(d: &super::displays::Display) -> Result<Still, String> {
     use std::mem::{size_of, zeroed};
     use std::ptr::null_mut;
     use windows_sys::Win32::Graphics::Gdi::{
         BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
-        DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC, SRCCOPY,
-        SelectObject,
+        DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC, SRCCOPY, SelectObject,
     };
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
 
     unsafe {
         // The process is per-monitor DPI aware, so these are physical pixels.
-        let (w, h) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+        let (w, h) = (d.width, d.height);
         if w <= 0 || h <= 0 {
             return Err("no primary display".into());
         }
@@ -34,7 +32,7 @@ pub fn primary_display() -> Result<Still, String> {
         let mem = CreateCompatibleDC(screen);
         let bitmap = CreateCompatibleBitmap(screen, w, h);
         let old = SelectObject(mem, bitmap);
-        let copied = BitBlt(mem, 0, 0, w, h, screen, 0, 0, SRCCOPY) != 0;
+        let copied = BitBlt(mem, 0, 0, w, h, screen, d.x, d.y, SRCCOPY) != 0;
 
         let mut info: BITMAPINFO = zeroed();
         info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
@@ -76,6 +74,6 @@ pub fn primary_display() -> Result<Still, String> {
 }
 
 #[cfg(not(windows))]
-pub fn primary_display() -> Result<Still, String> {
+pub fn display(d: &super::displays::Display) -> Result<Still, String> {
     Err("Freeze capture is not available on this desktop yet".into())
 }

@@ -48,10 +48,17 @@ fn setting_edit_and_reset_round_trip() {
     let reg = Registry::build(features::BUILTINS).unwrap();
     let mut v = reg.defaults();
     assert_eq!(v.float(system::INK_WIDTH), 4.0);
-    reg.set(&mut v, system::INK_WIDTH, Value::Float(8.0)).unwrap();
+    reg.set(&mut v, system::INK_WIDTH, Value::Float(8.0))
+        .unwrap();
     assert_eq!(v.float(system::INK_WIDTH), 8.0);
-    assert!(reg.set(&mut v, system::INK_WIDTH, Value::Float(99.0)).is_err());
-    assert!(reg.set(&mut v, system::INK_WIDTH, Value::Bool(true)).is_err());
+    assert!(
+        reg.set(&mut v, system::INK_WIDTH, Value::Float(99.0))
+            .is_err()
+    );
+    assert!(
+        reg.set(&mut v, system::INK_WIDTH, Value::Bool(true))
+            .is_err()
+    );
     assert!(
         reg.set(&mut v, system::ACTIVATION_STYLE, Value::Choice("bogus"))
             .is_err()
@@ -175,7 +182,10 @@ fn feature_added_through_builtins_list_only() {
     assert_eq!(s.settings().float("sample.level"), 0.5);
     assert!(reg.dispatch("sample.ping", &mut s, 0).is_err());
     reg.dispatch(system::MASTER_TOGGLE, &mut s, 0).unwrap();
-    assert!(reg.dispatch(reg.command_by_cli("ping").unwrap().id, &mut s, 0).is_ok());
+    assert!(
+        reg.dispatch(reg.command_by_cli("ping").unwrap().id, &mut s, 0)
+            .is_ok()
+    );
 }
 
 #[test]
@@ -197,8 +207,14 @@ fn parses_text_into_declared_types() {
         reg.parse_value(system::ACTIVATION_STYLE, "hold"),
         Ok(Value::Choice("hold"))
     );
-    assert!(reg.parse_value(system::ACTIVATION_STYLE, "sometimes").is_err());
-    assert_eq!(reg.parse_value(system::INK_WIDTH, "6"), Ok(Value::Float(6.0)));
+    assert!(
+        reg.parse_value(system::ACTIVATION_STYLE, "sometimes")
+            .is_err()
+    );
+    assert_eq!(
+        reg.parse_value(system::INK_WIDTH, "6"),
+        Ok(Value::Float(6.0))
+    );
     assert_eq!(
         reg.parse_value(system::INK_COLOR, "#ff8000"),
         Ok(Value::Color([0xFF, 0x80, 0x00, 0xFF]))
@@ -210,16 +226,19 @@ fn parses_text_into_declared_types() {
 fn mute_command_flips_the_setting_through_set() {
     let reg = Registry::build(features::BUILTINS).unwrap();
     let mut s = session(&reg);
-    let d = reg.dispatch(features::sound::TOGGLE_MUTE, &mut s, 0).unwrap();
+    let d = reg
+        .dispatch(features::sound::TOGGLE_MUTE, &mut s, 0)
+        .unwrap();
     assert_eq!(d, Dispatched::Set(features::sound::MUTE, Value::Bool(true)));
 }
 
 #[test]
-fn lens_is_listed_but_refused_and_freeze_is_live() {
+fn lens_and_freeze_are_live() {
     let reg = Registry::build(features::BUILTINS).unwrap();
     let mut s = session(&reg);
     reg.dispatch(system::MASTER_TOGGLE, &mut s, 0).unwrap();
-    assert!(reg.dispatch(features::upcoming::LENS, &mut s, 0).is_err());
+    assert!(reg.dispatch(features::upcoming::LENS, &mut s, 0).is_ok());
+    assert_eq!(s.active_tool(), features::upcoming::TOOL);
     let freeze = reg.command_by_cli("freeze").unwrap();
     assert!(reg.dispatch(freeze.id, &mut s, 0).is_ok());
     assert_eq!(reg.shortcut_label(freeze.id).as_deref(), Some("Ctrl+Alt+F"));
@@ -227,4 +246,32 @@ fn lens_is_listed_but_refused_and_freeze_is_live() {
         reg.shortcut_label(features::wheel::OPEN).as_deref(),
         Some("Ctrl+Alt+W")
     );
+}
+
+#[test]
+fn rebind_rejects_conflicts_without_changing_current_binding() {
+    let mut r = Registry::build(features::BUILTINS).unwrap();
+    r.rebind(system::MASTER_TOGGLE, "Ctrl+Shift+F9").unwrap();
+    assert_eq!(
+        r.shortcut_label(system::MASTER_TOGGLE).unwrap(),
+        "Ctrl+Shift+F9"
+    );
+    assert!(r.rebind(system::HOLD, "Ctrl+Shift+F9").is_err());
+    assert_eq!(r.shortcut_label(system::HOLD).unwrap(), "Ctrl+Alt+D");
+    assert!(r.rebind(system::MASTER_TOGGLE, "Alt").is_err());
+}
+
+#[test]
+fn restoring_swapped_shortcuts_validates_the_complete_set() {
+    let mut r = Registry::build(features::BUILTINS).unwrap();
+    let map = std::collections::BTreeMap::from([
+        (system::MASTER_TOGGLE.to_string(), "Ctrl+Alt+D".into()),
+        (system::HOLD.to_string(), "Ctrl+Alt+P".into()),
+    ]);
+    r.restore_bindings(&map).unwrap();
+    assert_eq!(
+        r.shortcut_label(system::MASTER_TOGGLE).unwrap(),
+        "Ctrl+Alt+D"
+    );
+    assert_eq!(r.shortcut_label(system::HOLD).unwrap(), "Ctrl+Alt+P");
 }

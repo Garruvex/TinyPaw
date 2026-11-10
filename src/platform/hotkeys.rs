@@ -38,6 +38,7 @@ fn to_hotkey(s: &Shortcut) -> Option<HotKey> {
     let code = match s.key {
         Key::Char(c) if c.is_ascii_digit() => Code::from_str(&format!("Digit{c}")).ok()?,
         Key::Char(c) => Code::from_str(&format!("Key{c}")).ok()?,
+        Key::Alt => return None,
         Key::Escape => Code::Escape,
         Key::Space => Code::Space,
         Key::F(n) => Code::from_str(&format!("F{n}")).ok()?,
@@ -45,12 +46,15 @@ fn to_hotkey(s: &Shortcut) -> Option<HotKey> {
     Some(HotKey::new((!mods.is_empty()).then_some(mods), code))
 }
 
-pub fn register(registry: &'static Registry) -> Result<Hotkeys, String> {
+pub fn register(registry: &Registry) -> Result<Hotkeys, String> {
     let manager = GlobalHotKeyManager::new().map_err(|e| e.to_string())?;
     let mut commands = HashMap::new();
     let mut failures = Vec::new();
     let mut taken = Vec::new();
     for (shortcut, def) in registry.shortcuts(ShortcutContext::Global) {
+        if shortcut.key == Key::Alt {
+            continue;
+        }
         let Some(hotkey) = to_hotkey(shortcut) else {
             failures.push(format!("{}: unsupported key", shortcut.label()));
             continue;

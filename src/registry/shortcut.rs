@@ -12,6 +12,7 @@ pub enum ShortcutContext {
 pub enum Key {
     /// A letter or digit, stored uppercase.
     Char(char),
+    Alt,
     Escape,
     Space,
     F(u8),
@@ -28,6 +29,15 @@ pub struct Shortcut {
 
 impl Shortcut {
     pub fn parse(context: ShortcutContext, text: &str) -> Option<Self> {
+        if text.eq_ignore_ascii_case("alt") {
+            return Some(Shortcut {
+                context,
+                ctrl: false,
+                alt: false,
+                shift: false,
+                key: Key::Alt,
+            });
+        }
         let mut s = Shortcut {
             context,
             ctrl: false,
@@ -37,7 +47,16 @@ impl Shortcut {
         };
         let mut key = None;
         for part in text.split('+').map(str::trim) {
-            match part.to_ascii_lowercase().as_str() {
+            let lower = part.to_ascii_lowercase();
+            if key.is_some()
+                && !matches!(
+                    lower.as_str(),
+                    "ctrl" | "control" | "cmd" | "alt" | "option" | "shift"
+                )
+            {
+                return None;
+            }
+            match lower.as_str() {
                 "ctrl" | "control" | "cmd" => s.ctrl = true,
                 "alt" | "option" => s.alt = true,
                 "shift" => s.shift = true,
@@ -86,6 +105,7 @@ impl Shortcut {
         }
         match self.key {
             Key::Char(c) => out.push(c),
+            Key::Alt => out.push_str("Alt"),
             Key::Escape => out.push_str("Esc"),
             Key::Space => out.push_str("Space"),
             Key::F(n) => out.push_str(&format!("F{n}")),

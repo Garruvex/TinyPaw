@@ -17,7 +17,9 @@ use std::process::ExitCode;
 use registry::Registry;
 
 fn usage(registry: &Registry) -> String {
-    let mut out = String::from("Usage: tinypaw [command]\n\nWith no command, starts TinyPaw in the tray.\n\nCommands:\n");
+    let mut out = String::from(
+        "Usage: tinypaw [command]\n\nWith no command, starts TinyPaw in the tray.\n\nCommands:\n",
+    );
     out.push_str("  status       Report whether TinyPaw is On\n");
     out.push_str("  set <setting> <value>\n               Change a setting, e.g. `set system.activation_style hold`\n");
     for def in registry.cli_commands() {
@@ -77,6 +79,8 @@ fn main() -> ExitCode {
     #[cfg(windows)]
     platform::windows::release_own_console();
     platform::init_bridge();
+    #[cfg(windows)]
+    platform::windows::start_notifications();
     platform::ipc::serve(listener);
 
     match app::run(registry) {

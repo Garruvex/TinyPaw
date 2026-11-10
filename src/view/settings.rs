@@ -3,16 +3,16 @@
 //! the same typed update path as the CLI and quick bar.
 
 use iced::widget::{
-    Column, button, canvas, checkbox, column, container, pick_list, row, scrollable, slider,
-    space, text, toggler, tooltip,
+    Column, button, canvas, checkbox, column, container, pick_list, row, scrollable, slider, space,
+    text, toggler, tooltip,
 };
 use iced::{Alignment, Color, Element, Length, Theme};
 
 use super::icons::{Glyph, icon};
 use super::{PreviewTile, UiMsg, theme};
 use crate::app::Message;
-use crate::packs::{Draft, Pack};
 use crate::features::{display, point, sound, system};
+use crate::packs::{Draft, Pack};
 use crate::registry::{Registry, ShortcutContext, Value};
 use crate::session::{ActivationStyle, Session};
 
@@ -29,6 +29,9 @@ pub struct SettingsView<'a> {
     pub registry: &'a Registry,
     pub session: &'a Session,
     pub page: Page,
+    pub displays: &'a [crate::platform::displays::Display],
+    #[cfg(windows)]
+    pub sources: &'a [crate::platform::windows::WindowSource],
     pub has_custom_sound: bool,
     /// Commands whose global shortcut is held by another app.
     pub taken: &'a [&'static str],
@@ -38,14 +41,23 @@ pub struct SettingsView<'a> {
     pub pack: Option<&'a Pack>,
     /// "Add your pointer" in progress.
     pub draft: Option<&'a Draft>,
+    pub editing: bool,
 }
 
 fn h1<'a>(label: &'a str) -> Element<'a, Message> {
-    text(label).font(theme::HEADING).size(22).color(theme::TEXT).into()
+    text(label)
+        .font(theme::HEADING)
+        .size(22)
+        .color(theme::TEXT)
+        .into()
 }
 
 fn h2<'a>(label: &'a str) -> Element<'a, Message> {
-    text(label).font(theme::MEDIUM).size(13).color(theme::MUTED).into()
+    text(label)
+        .font(theme::MEDIUM)
+        .size(13)
+        .color(theme::MUTED)
+        .into()
 }
 
 fn hint<'a>(label: impl text::IntoFragment<'a>) -> Element<'a, Message> {
@@ -103,11 +115,11 @@ fn header<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     if let Some(label) = v.registry.shortcut_label(system::MASTER_TOGGLE) {
         right = right.push(keycap(label));
     }
-    right = right.push(
-        container(switch)
-            .padding([6, 12])
-            .style(theme::outlined(theme::CONTROL, 999.0, theme::LINE)),
-    );
+    right = right.push(container(switch).padding([6, 12]).style(theme::outlined(
+        theme::CONTROL,
+        999.0,
+        theme::LINE,
+    )));
     container(
         row![
             row![logo, text("TinyPaw").font(theme::HEADING).size(17)]
@@ -130,8 +142,14 @@ fn nav<'a>(page: Page) -> Element<'a, Message> {
         let on = page == p;
         button(
             row![
-                icon(glyph, 18.0, if on { theme::CYAN_TEXT } else { theme::SUBTLE }),
-                text(label).size(14).font(if on { theme::MEDIUM } else { theme::BODY }),
+                icon(
+                    glyph,
+                    18.0,
+                    if on { theme::CYAN_TEXT } else { theme::SUBTLE }
+                ),
+                text(label)
+                    .size(14)
+                    .font(if on { theme::MEDIUM } else { theme::BODY }),
             ]
             .spacing(10)
             .align_y(Alignment::Center),
@@ -144,7 +162,10 @@ fn nav<'a>(page: Page) -> Element<'a, Message> {
     };
     let tip = container(
         column![
-            text("Streaming on Discord?").font(theme::MEDIUM).size(12).color(theme::TEXT),
+            text("Streaming on Discord?")
+                .font(theme::MEDIUM)
+                .size(12)
+                .color(theme::TEXT),
             text("Share the game monitor, not the game window, so viewers see the paw and ink.")
                 .size(12)
                 .color(theme::MUTED),
@@ -238,7 +259,13 @@ fn appearance<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
             .height(40)
             .align_x(Alignment::Center)
             .align_y(Alignment::Center)
-            .style(theme::fill(Color { a: 0.14, ..laser_tint }, 20.0))
+            .style(theme::fill(
+                Color {
+                    a: 0.14,
+                    ..laser_tint
+                },
+                20.0,
+            ))
             .into(),
         "Laser".into(),
         laser,
@@ -250,7 +277,11 @@ fn appearance<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
             .height(40)
             .align_x(Alignment::Center)
             .align_y(Alignment::Center)
-            .style(theme::outlined(Color::TRANSPARENT, 20.0, theme::LINE_STRONG))
+            .style(theme::outlined(
+                Color::TRANSPARENT,
+                20.0,
+                theme::LINE_STRONG,
+            ))
             .into(),
         "Add yours".into(),
         false,
@@ -271,7 +302,7 @@ fn appearance<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     let presentation = container(
         row![
             seg("Furry Paw", "furry", true),
-            seg("Stretch Paw", "stretch", false),
+            seg("Stretch Paw", "stretch", true),
             seg("Classic Stick", "stick", true),
         ]
         .spacing(4),
@@ -280,7 +311,10 @@ fn appearance<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     .style(theme::fill(theme::WELL, 10.0));
     let pres_hint = match pres {
         "stick" => "The paw on a slim rod from an off-screen grip, lower right.",
-        _ => "A compact paw at the pointer. Stretch Paw needs forearm art in the pack.",
+        "stretch" => {
+            "A curved forearm follows the paw. Packs without forearm art use their accent colour."
+        }
+        _ => "A compact paw at the pointer.",
     };
 
     let size = s.float(point::SIZE);
@@ -289,11 +323,29 @@ fn appearance<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         space().width(Length::Fill),
         text(format!("{size:.0} px")).size(13).color(theme::TEXT),
     ];
-    let size_slider = slider(32.0..=96.0, size, |x| Message::Set(point::SIZE, Value::Float(x)))
-        .step(4.0)
-        .style(theme::range);
+    let size_slider = slider(32.0..=96.0, size, |x| {
+        Message::Set(point::SIZE, Value::Float(x))
+    })
+    .step(4.0)
+    .style(theme::range);
 
     let current_ink = s.color(system::INK_COLOR);
+    let angle = s.float(point::ANGLE);
+    let angle_control = section(vec![
+        row![
+            h2("Paw angle"),
+            space().width(Length::Fill),
+            text(format!("{angle:.0}°")).size(13).color(theme::TEXT),
+        ]
+        .into(),
+        slider(-60.0..=60.0, angle, |x| {
+            Message::Set(point::ANGLE, Value::Float(x))
+        })
+        .step(5.0)
+        .style(theme::range)
+        .into(),
+        hint("Positive angles reach from the lower right."),
+    ]);
     let width = s.float(system::INK_WIDTH);
     let swatches = row(theme::INKS.iter().map(|&(_, c)| {
         button(space().width(28).height(28))
@@ -332,11 +384,96 @@ fn appearance<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     if let Some(accent) = v.pack.and_then(|p| p.accent) {
         ink_row = ink_row.push(super::match_pointer(accent, current_ink));
     }
+    #[cfg(windows)]
+    let source_picker: Element<'a, Message> = column![
+        h2("Lens source window"),
+        pick_list(
+            v.sources.to_vec(),
+            v.sources
+                .iter()
+                .find(|source| source.id == s.choice(crate::features::upcoming::SOURCE))
+                .cloned(),
+            |source| Message::Set(crate::features::upcoming::SOURCE, Value::Choice(source.id))
+        )
+        .placeholder("Window active before TinyPaw")
+        .padding([8, 12])
+        .text_size(13)
+        .width(Length::Fill)
+        .style(theme::select),
+        row![
+            button("Refresh windows")
+                .style(theme::secondary)
+                .on_press(Message::Ui(UiMsg::RefreshSources)),
+            button("Use foreground")
+                .style(theme::secondary)
+                .on_press(Message::Set(
+                    crate::features::upcoming::SOURCE,
+                    Value::Choice("foreground")
+                ))
+        ]
+        .spacing(8),
+        hint("Window capture keeps TinyPaw out of the lens. Use a borderless or windowed game."),
+    ]
+    .spacing(8)
+    .into();
+    #[cfg(not(windows))]
+    let source_picker: Element<'a, Message> = hint("Lens capture is available on Windows.");
+    let label_swatches = row([
+        [255, 255, 255, 255],
+        [34, 211, 238, 255],
+        [255, 210, 80, 255],
+        [255, 90, 100, 255],
+        [0, 0, 0, 255],
+    ]
+    .into_iter()
+    .map(|c| {
+        button(space().width(28).height(28))
+            .style(theme::swatch(
+                theme::rgba(c),
+                s.color(crate::features::text::COLOR) == c,
+            ))
+            .on_press(Message::Set(crate::features::text::COLOR, Value::Color(c)))
+            .into()
+    }))
+    .spacing(8);
     let left = column![
         h1("Appearance"),
         section(vec![h2("Pointer"), pointers.into()]),
+        row![
+            button("Import folder").style(theme::secondary).on_press(Message::Ui(UiMsg::ImportPack)),
+            button("Re-aim pointer").style(theme::secondary).on_press_maybe(v.pack.filter(|p| p.folder.is_some()).map(|_| Message::Ui(UiMsg::EditPack))),
+            button("Remove pointer").style(theme::secondary).on_press_maybe(v.pack.filter(|p| p.folder.is_some()).map(|_| Message::Ui(UiMsg::RemovePack))),
+        ].spacing(8),
+        h2("Label size"),
+        slider(12.0..=48.0, s.float(crate::features::text::SIZE), |x| Message::Set(crate::features::text::SIZE, Value::Float(x))).step(1.0).style(theme::range),
+        h2("Label colour"), label_swatches,
+        check("Dark label backing", s.bool(crate::features::text::BACKING), crate::features::text::BACKING),
+        source_picker,
+        h2("Lens magnification"),
+        pick_list(["2", "4"], Some(s.choice(crate::features::upcoming::ZOOM)), |z| Message::Set(crate::features::upcoming::ZOOM, Value::Choice(z))).padding([8,12]).style(theme::select),
+        h2("Lens size"),
+        slider(120.0..=480.0,s.float(crate::features::upcoming::SIZE),|x| Message::Set(crate::features::upcoming::SIZE,Value::Float(x))).step(10.0).style(theme::range),
+        h2("Spotlight radius"),
+        slider(60.0..=400.0, s.float(crate::features::spotlight::RADIUS), |x| Message::Set(crate::features::spotlight::RADIUS, Value::Float(x))).step(5.0).style(theme::range),
+
+        section(vec![
+            h2("Create your own artwork"),
+            hint("Attach your character reference in your image tool or send it with the prompt to an artist."),
+            row![
+                button(text("Copy pointer prompt").size(13))
+                    .padding([7, 12])
+                    .style(theme::secondary)
+                    .on_press(Message::Ui(UiMsg::CopyPointerPrompt)),
+                button(text("Copy forearm prompt").size(13))
+                    .padding([7, 12])
+                    .style(theme::secondary)
+                    .on_press(Message::Ui(UiMsg::CopyForearmPrompt)),
+            ].spacing(8).wrap().into(),
+            hint("Use Add yours to import the paw, then optionally attach a matching forearm and align the wrist."),
+        ]),
         section(vec![h2("Presentation"), presentation.into(), hint(pres_hint)]),
         section(vec![size_row.into(), size_slider.into()]),
+        if !laser && pres == "furry" { angle_control } else { space().into() },
         section(vec![
             h2("Ink"),
             ink_row.into(),
@@ -356,23 +493,33 @@ fn appearance<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
             ink,
             width: width as f32,
             laser,
+            stick: pres == "stick",
+            stretch: pres == "stretch",
+            scale: size as f32 / point::BASE_SIZE,
+            angle: -(angle as f32).to_radians(),
             pack: v.pack.cloned(),
         })
         .width(Length::Fill)
         .height(150)
     };
     if let Some(draft) = v.draft {
-        return row![left, new_pointer(draft)].spacing(28).into();
+        return row![left, new_pointer(draft, v.editing)].spacing(28).into();
     }
     let preview = column![
         h2("Preview"),
         tile(Color::from_rgb8(0xF4, 0xF4, 0xF5)),
         tile(Color::from_rgb8(0x1B, 0x26, 0x21)),
-        button(text("Try a tap").font(theme::MEDIUM).size(13).width(Length::Fill).center())
-            .width(Length::Fill)
-            .padding([11, 12])
-            .style(theme::secondary)
-            .on_press(Message::Ui(UiMsg::PreviewSound)),
+        button(
+            text("Try a tap")
+                .font(theme::MEDIUM)
+                .size(13)
+                .width(Length::Fill)
+                .center()
+        )
+        .width(Length::Fill)
+        .padding([11, 12])
+        .style(theme::secondary)
+        .on_press(Message::Ui(UiMsg::PreviewSound)),
     ]
     .spacing(10)
     .width(260);
@@ -381,13 +528,107 @@ fn appearance<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
 }
 
 /// "Add your pointer": click the exact tip, name it, save.
-fn new_pointer<'a>(draft: &'a Draft) -> Element<'a, Message> {
+fn new_pointer<'a>(draft: &'a Draft, editing: bool) -> Element<'a, Message> {
+    if editing {
+        return column![
+            h2("Re-aim pointer"),
+            canvas(HotspotPicker {
+                draft,
+                forearm: false
+            })
+            .width(Length::Fill)
+            .height(180),
+            hint("Click the exact pointing tip. Both idle and pressed art keep this anchor."),
+            row![
+                button("Cancel")
+                    .padding([8, 12])
+                    .style(theme::secondary)
+                    .on_press(Message::Ui(UiMsg::CancelDraft)),
+                button("Save click point")
+                    .padding([8, 12])
+                    .style(theme::primary)
+                    .on_press(Message::Ui(UiMsg::SaveDraft))
+            ]
+            .spacing(8),
+        ]
+        .spacing(10)
+        .width(260)
+        .into();
+    }
+    let arm: Element<'a, Message> = if draft.forearm.is_some() {
+        column![
+            h2("Forearm attachment"),
+            canvas(HotspotPicker {
+                draft,
+                forearm: true
+            })
+            .width(Length::Fill)
+            .height(130),
+            hint("Click the wrist joint at the top of the forearm."),
+            button(text("Remove forearm").size(13))
+                .style(theme::secondary)
+                .on_press(Message::Ui(UiMsg::RemoveForearm)),
+        ]
+        .spacing(8)
+        .into()
+    } else {
+        button(text("Add matching forearm PNG").size(13))
+            .padding([8, 12])
+            .style(theme::secondary)
+            .on_press(Message::Ui(UiMsg::AddForearm))
+            .into()
+    };
     column![
         h2("New pointer"),
-        canvas(HotspotPicker { draft })
-            .width(Length::Fill)
-            .height(260),
-        hint("Click the exact tip of the pointer. Light and dark halves show how it reads on both."),
+        canvas(HotspotPicker {
+            draft,
+            forearm: false
+        })
+        .width(Length::Fill)
+        .height(150),
+        hint(
+            "Click the exact tip of the pointer. Light and dark halves show how it reads on both."
+        ),
+        button(if draft.pressed.is_some() {
+            "Replace pressed pose"
+        } else {
+            "Add pressed pose PNG"
+        })
+        .padding([8, 12])
+        .style(theme::secondary)
+        .on_press(Message::Ui(UiMsg::AddPressed)),
+        button(if draft.tap.is_some() {
+            "Replace pack tap WAV"
+        } else {
+            "Add default tap WAV"
+        })
+        .padding([8, 12])
+        .style(theme::secondary)
+        .on_press(Message::Ui(UiMsg::AddPackTap)),
+        h2("Paw wrist position"),
+        hint("Horizontal"),
+        slider(0.0..=1.0, draft.wrist.0, |x| Message::Ui(
+            UiMsg::DraftWristX(x)
+        ))
+        .step(0.01),
+        hint("Vertical"),
+        slider(0.0..=1.0, draft.wrist.1, |y| Message::Ui(
+            UiMsg::DraftWristY(y)
+        ))
+        .step(0.01),
+        h2("Forearm width"),
+        slider(0.05..=1.5, draft.joint_width, |w| Message::Ui(
+            UiMsg::DraftJointWidth(w)
+        ))
+        .step(0.01),
+        arm,
+        h2("Test the pair"),
+        canvas(PairPreview {
+            pack: draft.preview()
+        })
+        .width(Length::Fill)
+        .height(220),
+        hint("Move and hold the mouse in the preview to check bending and pressing."),
         iced::widget::text_input("Name", &draft.name)
             .on_input(|n| Message::Ui(UiMsg::DraftName(n)))
             .size(14)
@@ -414,11 +655,17 @@ fn new_pointer<'a>(draft: &'a Draft) -> Element<'a, Message> {
                 .padding([10, 12])
                 .style(theme::secondary)
                 .on_press(Message::Ui(UiMsg::CancelDraft)),
-            button(text("Save pointer").font(theme::HEADING).size(13).width(Length::Fill).center())
-                .width(Length::Fill)
-                .padding([10, 12])
-                .style(theme::primary)
-                .on_press(Message::Ui(UiMsg::SaveDraft)),
+            button(
+                text("Save pointer")
+                    .font(theme::HEADING)
+                    .size(13)
+                    .width(Length::Fill)
+                    .center()
+            )
+            .width(Length::Fill)
+            .padding([10, 12])
+            .style(theme::primary)
+            .on_press(Message::Ui(UiMsg::SaveDraft)),
         ]
         .spacing(8),
     ]
@@ -431,16 +678,27 @@ fn new_pointer<'a>(draft: &'a Draft) -> Element<'a, Message> {
 /// hotspot; a click inside the image moves the hotspot there.
 struct HotspotPicker<'a> {
     draft: &'a Draft,
+    forearm: bool,
 }
 
 impl HotspotPicker<'_> {
     fn image_rect(&self, bounds: iced::Size) -> iced::Rectangle {
         let pad = 16.0;
-        let (w, h) = (self.draft.width as f32, self.draft.height as f32);
+        let (w, h) = self
+            .draft
+            .forearm
+            .as_ref()
+            .filter(|_| self.forearm)
+            .map_or((self.draft.width as f32, self.draft.height as f32), |a| {
+                (a.width as f32, a.height as f32)
+            });
         let fit = ((bounds.width - pad * 2.0) / w).min((bounds.height - pad * 2.0) / h);
         let size = iced::Size::new(w * fit, h * fit);
         iced::Rectangle::new(
-            iced::Point::new((bounds.width - size.width) / 2.0, (bounds.height - size.height) / 2.0),
+            iced::Point::new(
+                (bounds.width - size.width) / 2.0,
+                (bounds.height - size.height) / 2.0,
+            ),
             size,
         )
     }
@@ -456,14 +714,20 @@ impl canvas::Program<Message> for HotspotPicker<'_> {
         bounds: iced::Rectangle,
         cursor: iced::mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
-        if let iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) = event
+        if let iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) =
+            event
             && let Some(p) = cursor.position_in(bounds)
         {
             let r = self.image_rect(bounds.size());
             if r.contains(p) {
                 let fx = (p.x - r.x) / r.width;
                 let fy = (p.y - r.y) / r.height;
-                return Some(canvas::Action::publish(Message::Ui(UiMsg::DraftHotspot(fx, fy))).and_capture());
+                let message = if self.forearm {
+                    UiMsg::DraftForearmAnchor(fx, fy)
+                } else {
+                    UiMsg::DraftHotspot(fx, fy)
+                };
+                return Some(canvas::Action::publish(Message::Ui(message)).and_capture());
             }
         }
         None
@@ -490,14 +754,38 @@ impl canvas::Program<Message> for HotspotPicker<'_> {
             Color::from_rgb8(0x1B, 0x26, 0x21),
         );
         let r = self.image_rect(size);
-        back.draw_image(r, canvas::Image::new(self.draft.image.clone()));
+        let (image, anchor) = self
+            .draft
+            .forearm
+            .as_ref()
+            .filter(|_| self.forearm)
+            .map_or((&self.draft.image, self.draft.hotspot), |a| {
+                (&a.image, a.anchor)
+            });
+        back.draw_image(r, canvas::Image::new(image.clone()));
         // Crosshair in its own frame: images paint above shapes in one frame.
         let mut marks = Frame::new(renderer, size);
-        let hx = r.x + self.draft.hotspot.0 * r.width;
-        let hy = r.y + self.draft.hotspot.1 * r.height;
+        let hx = r.x + anchor.0 * r.width;
+        let hy = r.y + anchor.1 * r.height;
         let ring = Path::circle(iced::Point::new(hx, hy), 7.0);
-        marks.stroke(&ring, Stroke::default().with_color(Color::BLACK).with_width(3.0));
-        marks.stroke(&ring, Stroke::default().with_color(theme::CYAN).with_width(1.5));
+        marks.stroke(
+            &ring,
+            Stroke::default().with_color(Color::BLACK).with_width(3.0),
+        );
+        marks.stroke(
+            &ring,
+            Stroke::default().with_color(theme::CYAN).with_width(1.5),
+        );
+        if !self.forearm {
+            let wrist = iced::Point::new(
+                r.x + self.draft.wrist.0 * r.width,
+                r.y + self.draft.wrist.1 * r.height,
+            );
+            marks.stroke(
+                &Path::circle(wrist, 5.0),
+                Stroke::default().with_color(theme::AMBER).with_width(2.0),
+            );
+        }
         vec![back.into_geometry(), marks.into_geometry()]
     }
 
@@ -508,9 +796,122 @@ impl canvas::Program<Message> for HotspotPicker<'_> {
         cursor: iced::mouse::Cursor,
     ) -> iced::mouse::Interaction {
         match cursor.position_in(bounds) {
-            Some(p) if self.image_rect(bounds.size()).contains(p) => iced::mouse::Interaction::Crosshair,
+            Some(p) if self.image_rect(bounds.size()).contains(p) => {
+                iced::mouse::Interaction::Crosshair
+            }
             _ => iced::mouse::Interaction::default(),
         }
+    }
+}
+
+struct PairPreview {
+    pack: Pack,
+}
+
+struct PairPreviewState {
+    session: Session,
+    started: std::time::Instant,
+}
+
+impl Default for PairPreviewState {
+    fn default() -> Self {
+        let registry = Registry::build(crate::features::BUILTINS).expect("valid built-ins");
+        let mut settings = registry.defaults();
+        registry
+            .set(&mut settings, point::PRESENTATION, Value::Choice("stretch"))
+            .unwrap();
+        let mut session = Session::new(point::TOOL, point::new_state, settings);
+        session.handle(crate::session::Event::MasterToggle, 0);
+        let ticket = session.pending_ticket().unwrap();
+        session.handle(crate::session::Event::InputAcquired(ticket), 0);
+        Self {
+            session,
+            started: std::time::Instant::now(),
+        }
+    }
+}
+
+impl canvas::Program<Message> for PairPreview {
+    type State = PairPreviewState;
+
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: &iced::Event,
+        bounds: iced::Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        use crate::session::{Event, OutputId, PointerEvent, PointerKind, Pt};
+        let now = state.started.elapsed().as_millis() as u64;
+        let position = cursor.position_in(bounds);
+        let kind = match event {
+            iced::Event::Mouse(iced::mouse::Event::CursorMoved { .. }) if position.is_some() => {
+                Some(PointerKind::Moved)
+            }
+            iced::Event::Mouse(iced::mouse::Event::CursorMoved { .. })
+                if state.session.pointer().is_some() =>
+            {
+                Some(PointerKind::Left)
+            }
+            iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left))
+                if position.is_some() =>
+            {
+                Some(PointerKind::Down)
+            }
+            iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+                Some(PointerKind::Up)
+            }
+            iced::Event::Mouse(iced::mouse::Event::CursorLeft) => Some(PointerKind::Left),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            let p = position.unwrap_or(iced::Point::new(bounds.width * 0.4, 30.0));
+            state.session.handle(
+                Event::Pointer(PointerEvent {
+                    kind,
+                    output: OutputId(0),
+                    pos: Pt::new(p.x, p.y),
+                    at: now,
+                }),
+                now,
+            );
+            if matches!(kind, PointerKind::Up | PointerKind::Left) {
+                state.session.handle(Event::Clear, now);
+            }
+            return Some(canvas::Action::request_redraw().and_capture());
+        }
+        state
+            .session
+            .animating(now)
+            .then(canvas::Action::request_redraw)
+    }
+
+    fn draw(
+        &self,
+        state: &Self::State,
+        renderer: &iced::Renderer,
+        _: &Theme,
+        bounds: iced::Rectangle,
+        _: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        frame.fill_rectangle(iced::Point::ORIGIN, bounds.size(), theme::WELL);
+        let now = state.started.elapsed().as_millis() as u64;
+        let tip = state
+            .session
+            .tip(now)
+            .map(|(_, tip)| tip)
+            .unwrap_or(crate::session::Tip::Paw {
+                at: crate::session::Pt::new(bounds.width * 0.4, 30.0),
+                press: 0.0,
+                scale: 1.0,
+                angle: 0.0,
+                stick: false,
+                stretch: true,
+                grip_x: bounds.width * 0.4,
+            });
+        super::paw::draw_tip(&mut frame, tip, bounds.size(), Some(&self.pack));
+        vec![frame.into_geometry()]
     }
 }
 
@@ -580,11 +981,19 @@ fn controls<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
                     row![
                         text(def.label).size(14).width(Length::Fill),
                         if v.taken.contains(&def.id) {
-                            text("In use by another app").size(12).color(theme::AMBER_TEXT)
+                            text("In use by another app")
+                                .size(12)
+                                .color(theme::AMBER_TEXT)
                         } else {
                             text(scope).size(12).color(theme::FAINT)
                         },
-                        container(keycap(shortcut.label())).width(120).align_x(Alignment::End),
+                        container(keycap(shortcut.label()))
+                            .width(120)
+                            .align_x(Alignment::End),
+                        button("Change")
+                            .padding([7, 12])
+                            .style(theme::secondary)
+                            .on_press(Message::Ui(UiMsg::Rebind(def.id))),
                     ]
                     .spacing(12)
                     .align_y(Alignment::Center),
@@ -600,54 +1009,39 @@ fn controls<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
                     ..container::Style::default()
                 }),
             );
-            rows = rows.push(container(space()).height(1).width(Length::Fill).style(theme::fill(theme::LINE, 0.0)));
+            rows = rows.push(
+                container(space())
+                    .height(1)
+                    .width(Length::Fill)
+                    .style(theme::fill(theme::LINE, 0.0)),
+            );
         }
     }
 
     column![
         h1("Controls"),
+        h2("Motion"),
+        pick_list(
+            ["system", "full", "reduced"],
+            Some(v.session.settings().choice(system::MOTION)),
+            |m| Message::Set(system::MOTION, Value::Choice(m))
+        )
+        .padding([8, 12])
+        .style(theme::select),
         section(vec![h2("When switched On"), styles.into()]),
         section(vec![
             h2("Shortcuts"),
             rows.into(),
-            hint("Rebinding shortcuts comes in a later alpha."),
+            button("Restore default shortcuts")
+                .padding([8, 12])
+                .style(theme::secondary)
+                .on_press(Message::Ui(UiMsg::ResetShortcuts))
+                .into(),
         ]),
     ]
     .spacing(22)
     .max_width(680)
     .into()
-}
-
-fn option_card<'a>(label: &'static str, detail: &'static str, on: bool, enabled: bool) -> Element<'a, Message> {
-    let dot = container(
-        container(space())
-            .width(8)
-            .height(8)
-            .style(theme::fill(if on { theme::CYAN } else { Color::TRANSPARENT }, 4.0)),
-    )
-    .width(18)
-    .height(18)
-    .align_x(Alignment::Center)
-    .align_y(Alignment::Center)
-    .style(theme::outlined(
-        Color::TRANSPARENT,
-        9.0,
-        if on { theme::CYAN } else { theme::FAINT },
-    ));
-    let card = button(
-        row![
-            dot,
-            text(label).size(14).width(Length::Fill),
-            text(detail).size(12).color(theme::MUTED),
-        ]
-        .spacing(12)
-        .align_y(Alignment::Center),
-    )
-    .width(Length::Fill)
-    .padding(14)
-    .style(theme::card(on))
-    .on_press_maybe(enabled.then_some(Message::Ui(UiMsg::Nav(Page::Display))));
-    if enabled { card.into() } else { later(card) }
 }
 
 fn check<'a>(label: &'a str, on: bool, id: &'static str) -> Element<'a, Message> {
@@ -668,7 +1062,11 @@ fn check<'a>(label: &'a str, on: bool, id: &'static str) -> Element<'a, Message>
                 border: iced::Border {
                     radius: 4.0.into(),
                     width: 1.0,
-                    color: if checked { theme::CYAN } else { theme::LINE_STRONG },
+                    color: if checked {
+                        theme::CYAN
+                    } else {
+                        theme::LINE_STRONG
+                    },
                 },
                 text_color: Some(theme::TEXT),
             }
@@ -683,8 +1081,29 @@ fn display_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         h1("Display"),
         section(vec![
             h2("Draw on"),
-            option_card("Primary display", "Follows Windows' main display", true, true),
-            option_card("All displays", "", false, false),
+            button("Primary display")
+                .padding(12)
+                .style(theme::card(s.choice(display::TARGET) == "primary"))
+                .on_press(Message::Set(display::TARGET, Value::Choice("primary")))
+                .into(),
+            button("All displays")
+                .padding(12)
+                .style(theme::card(s.choice(display::TARGET) == "all"))
+                .on_press(Message::Set(display::TARGET, Value::Choice("all")))
+                .into(),
+            pick_list(
+                v.displays.to_vec(),
+                v.displays
+                    .iter()
+                    .find(|d| d.name == s.choice(display::TARGET))
+                    .cloned(),
+                |d| Message::Set(display::TARGET, Value::Choice(d.name))
+            )
+            .placeholder("Choose a named display")
+            .padding(12)
+            .style(theme::select)
+            .into(),
+            text(format!("Selected: {}", s.choice(display::TARGET))).into(),
         ]),
         check(
             "Hide the quick bar while streaming",
@@ -755,10 +1174,13 @@ fn sound_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
                 text(format!("{:.0}%", volume * 100.0)).size(13)
             ]
             .into(),
-            slider(0.0..=1.0, volume, |x| Message::Set(sound::VOLUME, Value::Float(x)))
-                .step(0.05)
-                .style(theme::range)
-                .into(),
+            slider(0.0..=1.0, volume, |x| Message::Set(
+                sound::VOLUME,
+                Value::Float(x)
+            ))
+            .step(0.05)
+            .style(theme::range)
+            .into(),
         ]),
         check("Mute tap sound", s.bool(sound::MUTE), sound::MUTE),
         check(

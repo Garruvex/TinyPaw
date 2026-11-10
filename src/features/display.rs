@@ -13,7 +13,7 @@ pub fn register(r: &mut Registrar) {
         order: 0,
         default: Value::Choice("primary"),
         // "all" joins the choices with multi-monitor support.
-        constraint: Constraint::Choices(&["primary"]),
+        constraint: Constraint::None,
     });
     r.setting(SettingDef {
         id: HIDE_BAR,

@@ -1,6 +1,6 @@
 # TinyPaw scope and architecture
 
-Product scope, 10 November 2026. Stack selected. Capture behavior still requires live testing.
+Product scope, 10 November 2026. Stack selected. Capture behavior still requires live testing. Implementation and remaining release gates: [release validation](release-validation.md).
 
 See the [system, engine and desktop layout](architecture.md) for the implementation map.
 
@@ -189,7 +189,9 @@ A pack is a directory containing a versioned JSON manifest and local media. The 
     "pressed": "paw-press.png",
     "hotspot": [0.40, 0.08],
     "wrist": [0.50, 0.90],
-    "forearm": "forearm.png"
+    "forearm": "forearm.png",
+    "forearmAnchor": [0.50, 0.02],
+    "jointWidth": 0.40
   },
   "sounds": { "tap": "tap.wav" }
 }
@@ -198,6 +200,8 @@ A pack is a directory containing a versioned JSON manifest and local media. The 
 The hotspot is the pointing claw or pad. The optional wrist anchor is where a forearm or rod attaches. Both use fractions of the image width and height from the top-left and must be distinct to define the pointing axis. Set final values against the artwork. A stretch forearm is a separate upright transparent strip with the wrist end at top center. Keep identifying tufts and distal markings in the paw image; place stretchable fur in the strip. With one PNG, suggest a wrist position for optional stick use and allow adjustment in the preview. A hotspot-only pack uses its original orientation. An optional pack accent supplies Match pointer ink. The settings sound picker overrides the pack default independently of the visual style. Include a restore-default action. Resolve assets within the pack directory, validate the manifest and images before switching, and keep the current pack active if loading fails.
 
 ### Add your pointer
+
+Paired PNG import is available in Appearance. The forearm anchor uses fractions of its own image dimensions. Its vertical position must be between 0 and 0.8, leaving a section below the joint to stretch. Joint width scales the full forearm image width relative to the paw image width and accepts 0.05 to 1.5. Omitted values default to a top-centre forearm anchor and a width of 0.4. The renderer retains the first eighth of the source as a short wrist section and bends the remaining texture using up to 32 strips. Packs without a forearm image use the procedural accent-colour limb.
 
 User-supplied artwork and custom pointer packs are original TinyPaw v1 requirements. TinyHand's HandMaker builds its art prompt from a style description. It expects an upright hand with a single upper tip and a centered wrist, validates the silhouette and transparency on import, then attaches the stick. TinyPaw uses the upright pose as its generation guide and allows users to set the hotspot manually for other poses. [TinyHand prompt and importer](https://github.com/nilbuild/tinyhand/blob/c5fb36b7c4d7c87480958872a724b30a52427a47/Sources/TinyHand/HandMaker.swift#L4-L26)
 

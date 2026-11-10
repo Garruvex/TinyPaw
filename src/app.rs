@@ -12,8 +12,11 @@ use iced::{Element, Point, Size, Subscription, Task, Theme, event, theme};
 
 use crate::audio::{self, Audio};
 use crate::features::{point, sound, system, wheel as wheel_feature};
-use crate::platform::{self, External};
 use crate::packs::{self, Draft, Pack};
+use crate::platform::{
+    self, External,
+    displays::{self, Display},
+};
 use crate::preferences;
 use crate::registry::{
     Dispatched, Key, Registry, ShellAction, ShortcutContext, Unavailable, Value,
@@ -24,25 +27,27 @@ use crate::session::{
 };
 use crate::view::{self, InkCache, OverlayUi, UiMsg, settings::Page, wheel};
 
-/// This alpha drives a single overlay on the primary display.
-const PRIMARY: OutputId = OutputId(0);
-
 #[derive(Debug, Clone)]
 pub enum Message {
     External(External),
     WindowOpened(window::Id),
+    NativeReady(window::Id, isize),
     CloseRequested(window::Id),
-    Pointer(PointerKind, Point),
+    Pointer(OutputId, PointerKind, Point),
     Key(keyboard::Key, keyboard::Modifiers, window::Id),
     Command(&'static str),
     Set(&'static str, Value),
     Ui(UiMsg),
     WavPicked(Option<PathBuf>),
     PointerPicked(Option<PathBuf>),
+    PackPicked(Option<PathBuf>),
+    ForearmPicked(Option<PathBuf>),
+    PressedPicked(Option<PathBuf>),
+    PackTapPicked(Option<PathBuf>),
     Acquired(Ticket),
     TextChanged(String),
     TextSubmit,
-    Still(Ticket, Result<image::Handle, String>),
+    Still(Ticket, Result<Vec<(OutputId, image::Handle)>, String>),
     Frame,
     Tick,
 }
@@ -52,13 +57,17 @@ struct Overlay {
     ready: bool,
     /// What was last applied: `Some(true)` interactive, `Some(false)` click-through.
     applied: Option<bool>,
+    display: Display,
+    ink: InkCache,
+    hwnd: isize,
 }
 
 pub struct App {
-    registry: &'static Registry,
+    registry: Registry,
     session: Session,
     started: Instant,
-    overlay: Option<Overlay>,
+    overlays: Vec<Overlay>,
+    displays: Vec<Display>,
     settings_window: Option<window::Id>,
     first_run_window: Option<window::Id>,
     page: Page,
@@ -68,15 +77,21 @@ pub struct App {
     hotkeys: Option<platform::hotkeys::Hotkeys>,
     tray: Option<platform::tray::Tray>,
     audio: Audio,
-    ink: InkCache,
     /// The frozen frame's pixels, kept outside annotation history.
-    still: Option<(u64, image::Handle)>,
+    still: Option<(u64, Vec<(OutputId, image::Handle)>)>,
     next_frame: u64,
     /// Short overlay message and when it appeared.
     overlay_notice: Option<(String, Millis)>,
     editor_focused: bool,
     packs: Vec<Pack>,
     pointer_draft: Option<Draft>,
+    editing_pack: Option<&'static str>,
+    rebinding: Option<&'static str>,
+    alt_down: bool,
+    #[cfg(windows)]
+    lens: Option<platform::windows::Lens>,
+    #[cfg(windows)]
+    sources: Vec<platform::windows::WindowSource>,
 }
 
 pub fn run(registry: &'static Registry) -> iced::Result {
@@ -97,7 +112,7 @@ fn overlay_settings() -> window::Settings {
     window::Settings {
         size: Size::new(800.0, 600.0),
         position: window::Position::Specific(Point::ORIGIN),
-        fullscreen: true,
+        fullscreen: false,
         decorations: false,
         transparent: true,
         resizable: false,
@@ -131,10 +146,18 @@ fn panel_settings(size: Size, min: Option<Size>, resizable: bool) -> window::Set
 
 impl App {
     fn boot(registry: &'static Registry) -> (Self, Task<Message>) {
-        let loaded = preferences::load(registry);
+        let mut registry = registry.clone();
+        preferences::load_shortcuts(&mut registry);
+        let mut loaded = preferences::load(&registry);
+        #[cfg(windows)]
+        let _ = registry.set(
+            &mut loaded.values,
+            system::SYSTEM_REDUCED,
+            Value::Bool(platform::windows::reduced_motion()),
+        );
         let tool = registry.default_tool();
         let session = Session::new(tool.id, tool.factory, loaded.values);
-        let hotkeys = match platform::hotkeys::register(registry) {
+        let hotkeys = match platform::hotkeys::register(&registry) {
             Ok(h) => {
                 for failure in &h.failures {
                     eprintln!("tinypaw: shortcut not registered: {failure}");
@@ -146,14 +169,15 @@ impl App {
                 None
             }
         };
-        let tray = platform::tray::build(registry)
+        let tray = platform::tray::build(&registry)
             .inspect_err(|e| eprintln!("tinypaw: tray unavailable: {e}"))
             .ok();
         let mut app = Self {
             registry,
             session,
             started: Instant::now(),
-            overlay: None,
+            overlays: Vec::new(),
+            displays: displays::list(),
             settings_window: None,
             first_run_window: None,
             page: Page::default(),
@@ -163,20 +187,29 @@ impl App {
             hotkeys,
             tray,
             audio: Audio::new(),
-            ink: InkCache::default(),
             still: None,
             next_frame: 0,
             overlay_notice: None,
             editor_focused: false,
             packs: Vec::new(),
             pointer_draft: None,
+            editing_pack: None,
+            rebinding: None,
+            alt_down: false,
+            #[cfg(windows)]
+            lens: None,
+            #[cfg(windows)]
+            sources: platform::windows::window_sources(),
         };
         let (loaded_packs, problems) = packs::load_all();
         for problem in &problems {
             eprintln!("tinypaw: pointer pack skipped: {problem}");
         }
         if !problems.is_empty() {
-            app.notice = Some(format!("{} pointer pack(s) could not be loaded", problems.len()));
+            app.notice = Some(format!(
+                "{} pointer pack(s) could not be loaded",
+                problems.len()
+            ));
         }
         app.packs = loaded_packs;
         app.sync_tray();
@@ -216,6 +249,53 @@ impl App {
         let mut tasks = Vec::new();
 
         match message {
+            Message::NativeReady(id, hwnd) => {
+                if let Some(o) = self.overlays.iter_mut().find(|o| o.id == id) {
+                    o.hwnd = hwnd;
+                    #[cfg(windows)]
+                    {
+                        platform::windows::observe(hwnd);
+                        platform::windows::place(hwnd, &o.display);
+                    }
+                }
+            }
+            Message::External(External::DisplaysChanged) => {
+                let displays = displays::list();
+                if self.displays != displays {
+                    out.effects
+                        .extend(self.session.handle(Event::Interrupted, now));
+                    self.displays = displays;
+                    self.notice = Some(
+                        "Displays changed. Choose a display before restarting TinyPaw.".into(),
+                    );
+                }
+            }
+            Message::External(External::Interrupted) => {
+                out.effects
+                    .extend(self.session.handle(Event::Interrupted, now));
+            }
+            Message::External(External::InteractKey(pressed)) => {
+                let commands: Vec<_> = self
+                    .registry
+                    .shortcuts(ShortcutContext::Global)
+                    .filter(|(s, _)| s.key == Key::Alt)
+                    .map(|(_, d)| d.id)
+                    .collect();
+                for cmd in commands {
+                    out.collect(if pressed {
+                        self.registry.dispatch(cmd, &mut self.session, now).ok()
+                    } else {
+                        self.registry.dispatch_release(cmd, &mut self.session, now)
+                    });
+                }
+            }
+            Message::External(External::MotionChanged) => {
+                #[cfg(windows)]
+                out.sets.push((
+                    system::SYSTEM_REDUCED,
+                    Value::Bool(platform::windows::reduced_motion()),
+                ));
+            }
             Message::External(External::Hotkey { id, pressed }) => {
                 if let Some(cmd) = self.hotkeys.as_ref().and_then(|h| h.command(id)) {
                     let result = if pressed {
@@ -246,11 +326,55 @@ impl App {
             }
             Message::Set(id, value) => out.sets.push((id, value)),
             Message::Ui(ui) => tasks.push(self.ui_message(ui, now, &mut out)),
+            Message::PressedPicked(path) => {
+                if let (Some(path), Some(draft)) = (path, self.pointer_draft.as_mut()) {
+                    self.notice = packs::set_pressed(draft, &path).err();
+                }
+            }
+            Message::PackTapPicked(path) => {
+                if let (Some(path), Some(draft)) = (path, self.pointer_draft.as_mut()) {
+                    match audio::decode_wav(&path) {
+                        Ok(clip) => {
+                            draft.tap = Some((clip, path));
+                            self.notice = None;
+                        }
+                        Err(e) => self.notice = Some(e),
+                    }
+                }
+            }
+            Message::PackPicked(path) => {
+                if let Some(path) = path {
+                    let taken: Vec<_> = self.packs.iter().map(|p| p.id).collect();
+                    match packs::import_folder(&path, &taken) {
+                        Ok(pack) => {
+                            let id = pack.id;
+                            self.packs.push(pack);
+                            out.sets.push((point::PACK, Value::Choice(id)));
+                            self.notice = None;
+                        }
+                        Err(e) => self.notice = Some(e),
+                    }
+                }
+            }
+            Message::ForearmPicked(path) => {
+                if let Some(path) = path {
+                    match packs::forearm_from_file(&path) {
+                        Ok(arm) => {
+                            if let Some(draft) = &mut self.pointer_draft {
+                                draft.forearm = Some(arm);
+                            }
+                            self.notice = None;
+                        }
+                        Err(e) => self.notice = Some(format!("Could not load the forearm: {e}")),
+                    }
+                }
+            }
             Message::PointerPicked(path) => {
                 if let Some(path) = path {
                     match packs::draft_from_file(&path) {
                         Ok(draft) => {
                             self.pointer_draft = Some(draft);
+                            self.editing_pack = None;
                             self.page = Page::Appearance;
                             self.notice = None;
                         }
@@ -271,15 +395,76 @@ impl App {
                 }
             }
             Message::Key(key, modifiers, window) => {
-                if self.overlay.as_ref().is_some_and(|o| o.id == window) {
+                if Some(window) == self.settings_window && self.rebinding.is_some() {
+                    if matches!(
+                        key.as_ref(),
+                        keyboard::Key::Named(
+                            Named::Control | Named::Shift | Named::Alt | Named::Super
+                        )
+                    ) {
+                        return Task::none();
+                    }
+                    let command = self.rebinding.take().unwrap();
+                    if !matches!(key.as_ref(), keyboard::Key::Named(Named::Escape)) {
+                        let base = match key.as_ref() {
+                            keyboard::Key::Character(c) => Some(c.to_uppercase()),
+                            keyboard::Key::Named(Named::Alt) => Some("Alt".into()),
+                            keyboard::Key::Named(n) => Some(format!("{n:?}")),
+                            _ => None,
+                        };
+                        if let Some(base) = base {
+                            let binding = if base == "Alt" {
+                                base
+                            } else {
+                                format!(
+                                    "{}{}{}{}",
+                                    if modifiers.control() { "Ctrl+" } else { "" },
+                                    if modifiers.alt() { "Alt+" } else { "" },
+                                    if modifiers.shift() { "Shift+" } else { "" },
+                                    base
+                                )
+                            };
+                            let old = self.registry.clone();
+                            match self.registry.rebind(command, &binding) {
+                                Err(e) => self.notice = Some(e),
+                                Ok(()) => {
+                                    self.hotkeys = None;
+                                    match platform::hotkeys::register(&self.registry) {
+                                        Ok(h) if !h.taken.contains(&command) => {
+                                            self.hotkeys = Some(h);
+                                            self.notice =
+                                                preferences::save_shortcuts(&self.registry)
+                                                    .err()
+                                                    .map(|e| e.to_string());
+                                        }
+                                        result => {
+                                            drop(result);
+                                            self.registry = old;
+                                            self.hotkeys =
+                                                platform::hotkeys::register(&self.registry).ok();
+                                            self.notice = Some(
+                                                "Shortcut unavailable; kept the previous binding"
+                                                    .into(),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if self.overlays.iter().any(|o| o.id == window) {
                     let escape = matches!(key.as_ref(), keyboard::Key::Named(Named::Escape));
                     if self.session.text_draft().is_some() {
                         // The editor owns the keyboard; Escape cancels the
                         // draft before it can exit the session.
-                        if escape {
-                            out.effects.extend(
-                                self.session.handle(Event::Text(TextInput::Cancel), now),
-                            );
+                        if modifiers.control()
+                            && matches!(key.as_ref(), keyboard::Key::Character("z" | "Z"))
+                        {
+                            out.effects
+                                .extend(self.session.handle(Event::Text(TextInput::Undo), now));
+                        } else if escape {
+                            out.effects
+                                .extend(self.session.handle(Event::Text(TextInput::Cancel), now));
                         }
                     } else if escape && (self.ui.wheel.take().is_some() || self.ui.close_menus()) {
                         // Escape closes the wheel or a menu before it exits.
@@ -289,20 +474,27 @@ impl App {
                 }
             }
             Message::TextChanged(text) => {
-                out.effects
-                    .extend(self.session.handle(Event::Text(TextInput::Changed(text)), now));
+                out.effects.extend(
+                    self.session
+                        .handle(Event::Text(TextInput::Changed(text)), now),
+                );
             }
             Message::TextSubmit => {
                 out.effects
                     .extend(self.session.handle(Event::Text(TextInput::Submit), now));
+            }
+            Message::Still(ticket, result) if self.session.capture_ticket() != Some(ticket) => {
+                let _ = result;
             }
             Message::Still(ticket, result) => match result {
                 Ok(handle) => {
                     self.next_frame += 1;
                     self.still = Some((self.next_frame, handle));
                     let frame = self.next_frame;
-                    out.effects
-                        .extend(self.session.handle(Event::StillReady { ticket, frame }, now));
+                    out.effects.extend(
+                        self.session
+                            .handle(Event::StillReady { ticket, frame }, now),
+                    );
                 }
                 Err(e) => {
                     eprintln!("tinypaw: freeze capture failed: {e}");
@@ -310,19 +502,29 @@ impl App {
                         .extend(self.session.handle(Event::StillFailed(ticket), now));
                 }
             },
-            Message::Pointer(kind, p) => self.pointer(kind, p, now, &mut out),
+            Message::Pointer(output, kind, p) => self.pointer(output, kind, p, now, &mut out),
             Message::Acquired(ticket) => {
                 out.effects
                     .extend(self.session.handle(Event::InputAcquired(ticket), now));
             }
             Message::WindowOpened(id) => {
-                if let Some(o) = self.overlay.as_mut().filter(|o| o.id == id) {
+                if let Some(o) = self.overlays.iter_mut().find(|o| o.id == id) {
                     o.ready = true;
+                    #[cfg(windows)]
+                    tasks.push(window::run(id, move |w| {
+                        use iced::window::raw_window_handle::RawWindowHandle;
+                        let hwnd = match w.window_handle().map(|h| h.as_raw()) {
+                            Ok(RawWindowHandle::Win32(h)) => h.hwnd.get(),
+                            _ => 0,
+                        };
+                        Message::NativeReady(id, hwnd)
+                    }));
                 }
             }
             Message::CloseRequested(id) => {
-                if self.overlay.as_ref().is_some_and(|o| o.id == id) {
-                    out.effects.extend(self.session.handle(Event::MasterOff, now));
+                if self.overlays.iter().any(|o| o.id == id) {
+                    out.effects
+                        .extend(self.session.handle(Event::MasterOff, now));
                 } else if Some(id) == self.settings_window {
                     self.settings_window = None;
                     self.notice = None;
@@ -333,6 +535,31 @@ impl App {
                 }
             }
             Message::Tick => {
+                #[cfg(windows)]
+                if self.session.is_enabled() {
+                    let down =
+                        platform::windows::key_down(0x12) && !platform::windows::key_down(0x11);
+                    if !platform::windows::has_keyboard_hook() && down != self.alt_down {
+                        self.alt_down = down;
+                        let commands: Vec<_> = self
+                            .registry
+                            .shortcuts(ShortcutContext::Global)
+                            .filter(|(s, _)| s.key == Key::Alt)
+                            .map(|(_, d)| d.id)
+                            .collect();
+                        for cmd in commands {
+                            out.collect(if down {
+                                self.registry.dispatch(cmd, &mut self.session, now).ok()
+                            } else {
+                                self.registry.dispatch_release(cmd, &mut self.session, now)
+                            });
+                        }
+                    }
+                    if platform::windows::buttons_up() {
+                        out.effects
+                            .extend(self.session.handle(Event::ButtonsReleased, now));
+                    }
+                }
                 out.effects.extend(self.session.handle(Event::Tick, now));
                 if self
                     .overlay_notice
@@ -345,6 +572,14 @@ impl App {
             Message::Frame => {}
         }
 
+        #[cfg(windows)]
+        {
+            platform::windows::arm_interact(self.session.is_enabled());
+            if self.session.waiting_for_interact_resume() && platform::windows::buttons_up() {
+                out.effects
+                    .extend(self.session.handle(Event::ButtonsReleased, now));
+            }
+        }
         // Shell actions first: a wheel pick dispatches commands of its own.
         for action in std::mem::take(&mut out.shell) {
             match action {
@@ -361,7 +596,15 @@ impl App {
             match effect {
                 Effect::PlayTap => self.play_tap(),
                 Effect::ReturnFocus => platform::restore_foreground(self.previous_focus.take()),
-                Effect::CaptureStill(ticket) => tasks.push(capture_still(ticket)),
+                Effect::CaptureStill(ticket) => tasks.push(capture_still(
+                    ticket,
+                    displays::selected(
+                        &self.displays,
+                        self.session
+                            .settings()
+                            .choice(crate::features::display::TARGET),
+                    ),
+                )),
                 Effect::ReleaseStill => self.still = None,
                 Effect::Notice(text) => self.overlay_notice = Some((text.to_owned(), now)),
             }
@@ -379,17 +622,72 @@ impl App {
         if was_enabled && !self.session.is_enabled() {
             // Off stops tap playback and closes transient overlay UI.
             self.ui = OverlayUi::default();
-            if self.settings_window.is_none() {
-                self.audio.close();
-            }
+            self.audio.close();
         }
         self.sync_tray();
+        self.update_lens(now, &mut out);
+        for effect in std::mem::take(&mut out.effects) {
+            if let Effect::Notice(text) = effect {
+                self.overlay_notice = Some((text.to_owned(), now));
+            }
+        }
         tasks.push(self.reconcile());
         Task::batch(tasks)
     }
 
     fn ui_message(&mut self, ui: UiMsg, now: Millis, out: &mut Outcomes) -> Task<Message> {
         match ui {
+            UiMsg::RefreshSources => {
+                #[cfg(windows)]
+                {
+                    self.sources = platform::windows::window_sources();
+                }
+            }
+            UiMsg::Rebind(id) => {
+                self.rebinding = Some(id);
+                self.notice = Some("Press the new shortcut (Escape cancels)".into());
+            }
+            UiMsg::ResetShortcuts => {
+                self.registry = Registry::build(crate::features::BUILTINS).expect("builtins");
+                self.hotkeys = None;
+                self.hotkeys = platform::hotkeys::register(&self.registry).ok();
+                self.notice = preferences::save_shortcuts(&self.registry)
+                    .err()
+                    .map(|e| e.to_string());
+            }
+            UiMsg::ImportPack => {
+                return Task::perform(
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Import pointer pack folder")
+                        .pick_folder(),
+                    |f| Message::PackPicked(f.map(|f| f.path().to_path_buf())),
+                );
+            }
+            UiMsg::EditPack => {
+                if let Some(pack) = self.current_pack() {
+                    let id = pack.id;
+                    match packs::edit_draft(pack) {
+                        Ok(d) => {
+                            self.pointer_draft = Some(d);
+                            self.editing_pack = Some(id);
+                        }
+                        Err(e) => self.notice = Some(e),
+                    }
+                }
+            }
+            UiMsg::RemovePack => {
+                if let Some(pack) = self.current_pack() {
+                    let id = pack.id;
+                    match packs::remove(pack) {
+                        Ok(()) => {
+                            self.packs.retain(|p| p.id != id);
+                            out.sets.push((point::PACK, Value::Choice(packs::DEFAULT)));
+                            self.notice = None;
+                        }
+                        Err(e) => self.notice = Some(e),
+                    }
+                }
+            }
             UiMsg::TogglePointerMenu => {
                 self.ui.ink_menu = false;
                 self.ui.pointer_menu = !self.ui.pointer_menu;
@@ -399,6 +697,71 @@ impl App {
                 self.ui.ink_menu = !self.ui.ink_menu;
             }
             UiMsg::Nav(page) => self.page = page,
+            UiMsg::AddPressed => {
+                return Task::perform(
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Choose pressed pose on the same canvas")
+                        .add_filter("PNG image", &["png"])
+                        .pick_file(),
+                    |f| Message::PressedPicked(f.map(|f| f.path().to_path_buf())),
+                );
+            }
+            UiMsg::AddPackTap => {
+                return Task::perform(
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Choose this pack's default tap")
+                        .add_filter("WAV audio", &["wav"])
+                        .pick_file(),
+                    |f| Message::PackTapPicked(f.map(|f| f.path().to_path_buf())),
+                );
+            }
+            UiMsg::AddForearm => {
+                return Task::perform(
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Choose the matching forearm PNG")
+                        .add_filter("PNG image", &["png"])
+                        .pick_file(),
+                    |file| Message::ForearmPicked(file.map(|f| f.path().to_path_buf())),
+                );
+            }
+            UiMsg::RemoveForearm => {
+                if let Some(d) = &mut self.pointer_draft {
+                    d.forearm = None;
+                }
+            }
+            UiMsg::DraftWristX(x) => {
+                if let Some(d) = &mut self.pointer_draft {
+                    d.wrist.0 = x;
+                }
+            }
+            UiMsg::DraftWristY(y) => {
+                if let Some(d) = &mut self.pointer_draft {
+                    d.wrist.1 = y;
+                }
+            }
+            UiMsg::DraftJointWidth(width) => {
+                if let Some(d) = &mut self.pointer_draft {
+                    d.joint_width = width;
+                }
+            }
+            UiMsg::DraftForearmAnchor(x, y) => {
+                if let Some(arm) = self.pointer_draft.as_mut().and_then(|d| d.forearm.as_mut()) {
+                    arm.set_anchor((x, y));
+                }
+            }
+            UiMsg::CopyPointerPrompt => {
+                self.notice = Some(
+                    "Pointer prompt copied. Attach your character reference when using it.".into(),
+                );
+                return iced::clipboard::write(packs::POINTER_PROMPT.to_owned());
+            }
+            UiMsg::CopyForearmPrompt => {
+                self.notice = Some(
+                    "Forearm prompt copied. Attach your character reference and pointer artwork."
+                        .into(),
+                );
+                return iced::clipboard::write(packs::FOREARM_PROMPT.to_owned());
+            }
             UiMsg::PickPack(id) => {
                 out.sets.push((point::STYLE, Value::Choice("paw")));
                 out.sets.push((point::PACK, Value::Choice(id)));
@@ -422,14 +785,28 @@ impl App {
                     d.name = name.chars().take(40).collect();
                 }
             }
-            UiMsg::CancelDraft => self.pointer_draft = None,
+            UiMsg::CancelDraft => {
+                self.pointer_draft = None;
+                self.editing_pack = None;
+            }
             UiMsg::SaveDraft => {
                 if let Some(draft) = &self.pointer_draft {
                     let taken: Vec<&str> = self.packs.iter().map(|p| p.id).collect();
-                    match packs::install(draft, &taken) {
+                    let result = if let Some(id) = self.editing_pack {
+                        self.packs
+                            .iter()
+                            .find(|p| p.id == id)
+                            .ok_or("pointer missing".into())
+                            .and_then(|p| packs::reaim(p, draft))
+                    } else {
+                        packs::install(draft, &taken)
+                    };
+                    match result {
                         Ok(pack) => {
                             let id = pack.id;
+                            self.packs.retain(|p| p.id != id);
                             self.packs.push(pack);
+                            self.editing_pack = None;
                             self.pointer_draft = None;
                             self.notice = None;
                             out.sets.push((point::STYLE, Value::Choice("paw")));
@@ -442,6 +819,8 @@ impl App {
             UiMsg::PreviewSound => {
                 let s = self.session.settings();
                 let (tap, volume) = (s.choice(sound::TAP), s.float(sound::VOLUME) as f32);
+                self.audio
+                    .set_pack(self.current_pack().and_then(|p| p.tap.clone()));
                 self.audio.play(tap, volume);
             }
             UiMsg::ImportWav => {
@@ -472,7 +851,14 @@ impl App {
         Task::none()
     }
 
-    fn pointer(&mut self, kind: PointerKind, p: Point, now: Millis, out: &mut Outcomes) {
+    fn pointer(
+        &mut self,
+        output: OutputId,
+        kind: PointerKind,
+        p: Point,
+        now: Millis,
+        out: &mut Outcomes,
+    ) {
         if let Some(w) = self.ui.wheel.as_mut() {
             match kind {
                 PointerKind::Moved => w.track(p),
@@ -490,7 +876,7 @@ impl App {
         out.effects.extend(self.session.handle(
             Event::Pointer(PointerEvent {
                 kind,
-                output: PRIMARY,
+                output,
                 pos: Pt::new(p.x, p.y),
                 at: now,
             }),
@@ -534,6 +920,25 @@ impl App {
 
     /// The single update path for settings: validate, apply, persist.
     fn apply_setting(&mut self, id: &'static str, value: Value, now: Millis) {
+        if id == crate::features::display::TARGET {
+            if let Value::Choice(target) = &value
+                && displays::selected(&self.displays, target).is_empty()
+            {
+                self.notice = Some("Choose an available display".into());
+                return;
+            }
+            for effect in self.session.handle(Event::Interrupted, now) {
+                match effect {
+                    Effect::ReturnFocus => platform::restore_foreground(self.previous_focus.take()),
+                    Effect::ReleaseStill => self.still = None,
+                    _ => {}
+                }
+            }
+        }
+        #[cfg(windows)]
+        if id == crate::features::upcoming::SOURCE {
+            self.lens = None;
+        }
         // A pack must be installed and valid before it can be selected.
         if id == point::PACK
             && let Value::Choice(pack) = &value
@@ -561,6 +966,8 @@ impl App {
             return;
         }
         let (tap, volume) = (s.choice(sound::TAP), s.float(sound::VOLUME) as f32);
+        self.audio
+            .set_pack(self.current_pack().and_then(|p| p.tap.clone()));
         self.audio.play(tap, volume);
     }
 
@@ -574,7 +981,8 @@ impl App {
             true,
         ));
         self.settings_window = Some(id);
-        open.map(Message::WindowOpened).chain(window::gain_focus(id))
+        open.map(Message::WindowOpened)
+            .chain(window::gain_focus(id))
     }
 
     fn quit(&mut self, now: Millis) {
@@ -627,7 +1035,11 @@ impl App {
 
     fn status(&self) -> String {
         let marks = self.session.scene().marks().len();
-        let scene = if self.session.frozen_frame().is_some() { "frozen" } else { "live" };
+        let scene = if self.session.frozen_frame().is_some() {
+            "frozen"
+        } else {
+            "live"
+        };
         let tool = self.session.active_tool();
         match self.session.mode() {
             Mode::Off => "TinyPaw is Off".into(),
@@ -638,7 +1050,11 @@ impl App {
         }
     }
 
-    fn overlay_shortcut(&self, key: &keyboard::Key, m: keyboard::Modifiers) -> Option<&'static str> {
+    fn overlay_shortcut(
+        &self,
+        key: &keyboard::Key,
+        m: keyboard::Modifiers,
+    ) -> Option<&'static str> {
         let pressed = match key.as_ref() {
             keyboard::Key::Named(Named::Escape) => Key::Escape,
             keyboard::Key::Named(Named::Space) => Key::Space,
@@ -648,7 +1064,10 @@ impl App {
         self.registry
             .shortcuts(ShortcutContext::Overlay)
             .find(|(s, _)| {
-                s.key == pressed && s.ctrl == m.control() && s.alt == m.alt() && s.shift == m.shift()
+                s.key == pressed
+                    && s.ctrl == m.control()
+                    && s.alt == m.alt()
+                    && s.shift == m.shift()
             })
             .map(|(_, def)| def.id)
     }
@@ -656,86 +1075,196 @@ impl App {
     fn sync_tray(&mut self) {
         let label = self.registry.shortcut_label(system::MASTER_TOGGLE);
         if let Some(tray) = &mut self.tray {
-            tray.sync(self.registry, &self.session, label.as_deref());
+            tray.sync(&self.registry, &self.session, label.as_deref());
         }
     }
 
     /// Brings the overlay window in line with the session's overlay state.
     fn reconcile(&mut self) -> Task<Message> {
         let want = self.session.overlay_state();
-        match (want, &mut self.overlay) {
-            (OverlayState::Hidden, None) => Task::none(),
-            (OverlayState::Hidden, Some(o)) => {
-                let id = o.id;
-                self.overlay = None;
-                window::close(id)
+        if want == OverlayState::Hidden {
+            return Task::batch(self.overlays.drain(..).map(|o| window::close(o.id)));
+        }
+        if self.overlays.is_empty() {
+            let selected = displays::selected(
+                &self.displays,
+                self.session
+                    .settings()
+                    .choice(crate::features::display::TARGET),
+            );
+            if selected.is_empty() {
+                self.session.handle(Event::Interrupted, self.now());
+                self.notice = Some("The selected display is unavailable. Choose a display.".into());
+                self.page = Page::Display;
+                return self.open_settings();
             }
-            (_, None) => {
-                if want == OverlayState::Interactive {
-                    self.previous_focus = platform::foreground_window();
-                }
-                let (id, opened) = window::open(overlay_settings());
-                self.overlay = Some(Overlay {
+            if want == OverlayState::Interactive {
+                self.previous_focus = platform::foreground_window();
+            }
+            let mut tasks = Vec::new();
+            for display in selected {
+                let (id, open) = window::open(overlay_settings());
+                self.overlays.push(Overlay {
                     id,
                     ready: false,
                     applied: None,
+                    display,
+                    ink: InkCache::default(),
+                    hwnd: 0,
                 });
-                opened.map(Message::WindowOpened).chain(Task::done(Message::Frame))
+                tasks.push(open.map(Message::WindowOpened));
             }
-            (_, Some(o)) if !o.ready => Task::none(),
-            (OverlayState::ClickThrough, Some(o)) => {
-                if o.applied == Some(false) {
-                    return Task::none();
-                }
-                o.applied = Some(false);
-                window::enable_mouse_passthrough(o.id)
+            return Task::batch(tasks);
+        }
+        let mut tasks = Vec::new();
+        let all_ready = self
+            .overlays
+            .iter()
+            .all(|o| o.ready && (!cfg!(windows) || o.hwnd != 0));
+        for o in &mut self.overlays {
+            if !o.ready {
+                continue;
             }
-            (OverlayState::Interactive, Some(o)) => {
-                let id = o.id;
-                let mut task = Task::none();
-                if o.applied != Some(true) {
-                    if o.applied == Some(false) {
-                        self.previous_focus = platform::foreground_window();
-                    }
-                    o.applied = Some(true);
-                    task = window::disable_mouse_passthrough(id).chain(window::gain_focus(id));
-                }
-                match self.session.pending_ticket() {
-                    Some(t) => task.chain(Task::done(Message::Acquired(t))),
-                    None => task,
-                }
+            let interactive = want == OverlayState::Interactive;
+            if o.applied != Some(interactive) {
+                o.applied = Some(interactive);
+                tasks.push(if interactive {
+                    window::disable_mouse_passthrough(o.id)
+                } else {
+                    window::enable_mouse_passthrough(o.id)
+                });
             }
+        }
+        let buttons_up = {
+            #[cfg(windows)]
+            {
+                platform::windows::buttons_up()
+            }
+            #[cfg(not(windows))]
+            {
+                true
+            }
+        };
+        if all_ready
+            && want == OverlayState::Interactive
+            && buttons_up
+            && let Some(ticket) = self.session.pending_ticket()
+        {
+            self.previous_focus = platform::foreground_window().or(self.previous_focus);
+            let target = self
+                .session
+                .pointer()
+                .and_then(|(id, _)| self.overlays.iter().find(|o| o.display.id == id))
+                .unwrap_or(&self.overlays[0]);
+            tasks.push(window::gain_focus(target.id).chain(Task::done(Message::Acquired(ticket))));
+        }
+        Task::batch(tasks)
+    }
+
+    fn update_lens(&mut self, now: Millis, out: &mut Outcomes) {
+        let wanted = self.session.is_pointing()
+            && self.session.active_tool() == crate::features::upcoming::TOOL
+            && !self.session.capturing()
+            && self.session.frozen_frame().is_none();
+        #[cfg(windows)]
+        {
+            if !wanted {
+                self.lens = None;
+                return;
+            }
+            let output = self.session.pointer().map(|(o, _)| o);
+            let Some(o) = self
+                .overlays
+                .iter()
+                .find(|o| Some(o.display.id) == output && o.hwnd != 0)
+            else {
+                self.lens = None;
+                return;
+            };
+            if self
+                .lens
+                .as_ref()
+                .is_some_and(|l| l.destination() != o.hwnd)
+            {
+                self.lens = None;
+            }
+            let result = (|| {
+                if self.lens.is_none() {
+                    self.lens = Some(platform::windows::Lens::new(
+                        o.hwnd,
+                        if self
+                            .session
+                            .settings()
+                            .choice(crate::features::upcoming::SOURCE)
+                            == "foreground"
+                        {
+                            self.previous_focus.ok_or("Select a game window before turning on TinyPaw, or choose a Lens source in Settings")?
+                        } else {
+                            self.sources.iter().find(|s| s.id == self.session.settings().choice(crate::features::upcoming::SOURCE)).map(|s| s.handle).ok_or("Lens source is no longer available; refresh the source list in Settings")?
+                        },
+                    )?);
+                }
+                let s = self.session.settings();
+                self.lens.as_ref().unwrap().update(
+                    &o.display,
+                    s.float(crate::features::upcoming::SIZE) as f32,
+                    if s.choice(crate::features::upcoming::ZOOM) == "4" {
+                        4.0
+                    } else {
+                        2.0
+                    },
+                )
+            })();
+            if let Err(e) = result {
+                self.lens = None;
+                self.overlay_notice = Some((e, now));
+                out.collect(self.dispatch(point::SELECT, now).ok());
+            }
+        }
+        #[cfg(not(windows))]
+        if wanted {
+            self.overlay_notice = Some(("Lens is unavailable on this desktop".into(), now));
+            out.collect(self.dispatch(point::SELECT, now).ok());
         }
     }
 
     fn view(&self, window: window::Id) -> Element<'_, Message> {
-        if self.overlay.as_ref().is_some_and(|o| o.id == window) {
+        if let Some(o) = self.overlays.iter().find(|o| o.id == window) {
             return view::overlay(view::Overlay {
-                registry: self.registry,
+                registry: &self.registry,
                 session: &self.session,
-                ink: &self.ink,
+                ink: &o.ink,
                 ui: &self.ui,
-                output: PRIMARY,
+                output: o.display.id,
                 now: self.now(),
                 still: self
                     .still
                     .as_ref()
                     .filter(|(id, _)| Some(*id) == self.session.frozen_frame())
-                    .map(|(_, handle)| handle),
+                    .and_then(|(_, handles)| {
+                        handles
+                            .iter()
+                            .find(|(id, _)| *id == o.display.id)
+                            .map(|(_, h)| h)
+                    }),
                 notice: self.overlay_notice.as_ref().map(|(text, _)| text.as_str()),
                 pack: self.current_pack(),
             });
         }
         if Some(window) == self.settings_window {
             return view::settings::view(view::settings::SettingsView {
-                registry: self.registry,
+                registry: &self.registry,
                 session: &self.session,
+                displays: &self.displays,
+                #[cfg(windows)]
+                sources: &self.sources,
                 page: self.page,
                 has_custom_sound: self.audio.has_custom(),
                 taken: self.hotkeys.as_ref().map_or(&[], |h| h.taken.as_slice()),
                 packs: &self.packs,
                 pack: self.current_pack(),
                 draft: self.pointer_draft.as_ref(),
+                editing: self.editing_pack.is_some(),
                 notice: self.notice.as_deref(),
             });
         }
@@ -750,7 +1279,27 @@ impl App {
         let mut subs = vec![
             Subscription::run(platform::external_stream).map(Message::External),
             event::listen_with(|event, status, window| match event {
-                // Keys a focused editor consumed (typing a label) are not shortcuts.
+                // The draft owns Ctrl+Z, including events captured by text_input.
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    ref key,
+                    modifiers,
+                    repeat: false,
+                    ..
+                }) if modifiers.control()
+                    && matches!(key.as_ref(), keyboard::Key::Character("z" | "Z")) =>
+                {
+                    Some(Message::Key(key.clone(), modifiers, window))
+                }
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    ref key,
+                    modifiers,
+                    repeat: false,
+                    ..
+                }) if modifiers.control()
+                    && matches!(key.as_ref(), keyboard::Key::Character("z" | "Z")) =>
+                {
+                    Some(Message::Key(key.clone(), modifiers, window))
+                }
                 _ if status == event::Status::Captured => None,
                 iced::Event::Keyboard(keyboard::Event::KeyPressed {
                     key,
@@ -762,6 +1311,18 @@ impl App {
             }),
             window::close_requests().map(Message::CloseRequested),
         ];
+        #[cfg(windows)]
+        if self.session.is_enabled()
+            && (!platform::windows::has_keyboard_hook()
+                || self.session.waiting_for_interact_resume()
+                || self.session.pending_ticket().is_some())
+        {
+            subs.push(iced::time::every(Duration::from_millis(16)).map(|_| Message::Tick));
+        } else if self.session.is_pointing()
+            && self.session.active_tool() == crate::features::upcoming::TOOL
+        {
+            subs.push(iced::time::every(Duration::from_millis(250)).map(|_| Message::Tick));
+        }
         // Frames only while something animates; otherwise the process sleeps.
         if self.session.animating(now) {
             subs.push(window::frames().map(|_| Message::Frame));
@@ -782,16 +1343,24 @@ const NOTICE_MS: Millis = 3000;
 /// Takes one still of the primary display off the UI thread. A short wait
 /// first lets the overlay present a frame without marks, so they are not
 /// baked into the still.
-fn capture_still(ticket: Ticket) -> Task<Message> {
+fn capture_still(ticket: Ticket, displays: Vec<Display>) -> Task<Message> {
     let (tx, rx) = iced::futures::channel::oneshot::channel();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(50));
-        let result = platform::capture::primary_display()
-            .map(|s| image::Handle::from_rgba(s.width, s.height, s.rgba));
+        let result = displays
+            .iter()
+            .map(|d| {
+                platform::capture::display(d)
+                    .map(|s| (d.id, image::Handle::from_rgba(s.width, s.height, s.rgba)))
+            })
+            .collect();
         let _ = tx.send(result);
     });
     Task::perform(rx, move |r| {
-        Message::Still(ticket, r.unwrap_or_else(|_| Err("capture thread ended".into())))
+        Message::Still(
+            ticket,
+            r.unwrap_or_else(|_| Err("capture thread ended".into())),
+        )
     })
 }
 

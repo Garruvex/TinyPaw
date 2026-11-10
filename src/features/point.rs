@@ -3,8 +3,7 @@
 use crate::features::system::{INK_COLOR, INK_WIDTH};
 use crate::registry::SettingValues;
 use crate::registry::{
-    CommandDef, Constraint, Outcome, Registrar, SettingDef, Surfaces, ToolDef, Value,
-    when_enabled,
+    CommandDef, Constraint, Outcome, Registrar, SettingDef, Surfaces, ToolDef, Value, when_enabled,
 };
 use crate::session::{
     Effect, Event, Mark, Millis, OutputId, PointerEvent, PointerKind, Pt, Rgba, Stroke, Tip,
@@ -18,6 +17,7 @@ pub const USE_LASER: &str = "point.laser";
 pub const STYLE: &str = "point.style";
 pub const PRESENTATION: &str = "point.presentation";
 pub const SIZE: &str = "point.size";
+pub const ANGLE: &str = "point.angle";
 /// The installed pack the paw draws with (open-ended: user packs have new IDs).
 pub const PACK: &str = "point.pack";
 
@@ -96,8 +96,7 @@ pub fn register(r: &mut Registrar) {
         group: "Appearance",
         order: 1,
         default: Value::Choice("furry"),
-        // "stretch" joins once a pack supplies forearm art.
-        constraint: Constraint::Choices(&["furry", "stick"]),
+        constraint: Constraint::Choices(&["furry", "stick", "stretch"]),
     });
     r.setting(SettingDef {
         id: PACK,
@@ -113,7 +112,21 @@ pub fn register(r: &mut Registrar) {
         group: "Appearance",
         order: 2,
         default: Value::Float(BASE_SIZE as f64),
-        constraint: Constraint::Range { min: 32.0, max: 96.0 },
+        constraint: Constraint::Range {
+            min: 32.0,
+            max: 96.0,
+        },
+    });
+    r.setting(SettingDef {
+        id: ANGLE,
+        label: "Paw angle",
+        group: "Appearance",
+        order: 3,
+        default: Value::Float(20.0),
+        constraint: Constraint::Range {
+            min: -60.0,
+            max: 60.0,
+        },
     });
 }
 
@@ -161,7 +174,11 @@ impl Grip {
     /// Retargets from wherever the grip is now; the first sample snaps.
     fn follow(grip: &mut Option<Grip>, x: f32, now: Millis) {
         let from = grip.map_or(x, |g| g.at(now));
-        *grip = Some(Grip { from, target: x, since: now });
+        *grip = Some(Grip {
+            from,
+            target: x,
+            since: now,
+        });
     }
 }
 
@@ -186,9 +203,9 @@ impl PointTool {
 
 impl ToolState for PointTool {
     fn pointer(&mut self, ev: &PointerEvent, cx: &mut ToolCx<'_>) {
-        // Only the stick has a grip; other presentations never pay for frames.
-        let stick = cx.settings.choice(STYLE) == "paw"
-            && cx.settings.choice(PRESENTATION) == "stick";
+        // Reaching presentations share the elapsed-time grip animation.
+        let stick =
+            cx.settings.choice(STYLE) == "paw" && cx.settings.choice(PRESENTATION) != "furry";
         match ev.kind {
             PointerKind::Left => self.grip = None,
             _ if stick => Grip::follow(&mut self.grip, ev.pos.x, cx.now),
@@ -239,6 +256,7 @@ impl ToolState for PointTool {
                     cx.effects.push(Effect::PlayTap);
                 }
                 Gesture::Drawing(mut mark) => {
+                    self.tap_at = Some(cx.now);
                     if let Mark::Stroke(stroke) = &mut mark
                         && stroke.output == ev.output
                         && stroke.points.last().is_some_and(|l| *l != ev.pos)
@@ -272,11 +290,13 @@ impl ToolState for PointTool {
     }
 
     fn tip(&self, at: Pt, now: Millis, settings: &SettingValues) -> Option<Tip> {
+        let reduced = crate::features::system::reduced(settings);
         let press = match (&self.gesture, self.tap_at) {
-            (Gesture::Pressed { .. }, _) => 1.0,
-            (_, Some(t)) if now.saturating_sub(t) < TAP_MS => {
+            (Gesture::Pressed { .. } | Gesture::Drawing(_), _) => 1.0,
+            (_, Some(t)) if !reduced && now.saturating_sub(t) < TAP_MS => {
                 // Release half of the press: 1.0 back to 0.0 over TAP_MS.
-                1.0 - now.saturating_sub(t) as f32 / TAP_MS as f32
+                let t = now.saturating_sub(t) as f32 / TAP_MS as f32;
+                1.0 - t * t * (3.0 - 2.0 * t)
             }
             _ => 0.0,
         };
@@ -286,8 +306,14 @@ impl ToolState for PointTool {
                 at,
                 press,
                 scale: settings.float(SIZE) as f32 / BASE_SIZE,
+                angle: -(settings.float(ANGLE) as f32).to_radians(),
                 stick: settings.choice(PRESENTATION) == "stick",
-                grip_x: self.grip.map_or(at.x, |g| g.at(now)),
+                stretch: settings.choice(PRESENTATION) == "stretch",
+                grip_x: if reduced {
+                    at.x
+                } else {
+                    self.grip.map_or(at.x, |g| g.at(now))
+                },
             },
         })
     }

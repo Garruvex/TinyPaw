@@ -34,8 +34,20 @@ pub enum Tip {
     /// chosen size relative to the artwork; `stick` mounts it on a rod.
     /// `grip_x` is the pointer x the off-screen grip eases after, so the
     /// rod's entry point trails the tip while the tip itself never lags.
-    Paw { at: Pt, press: f32, scale: f32, stick: bool, grip_x: f32 },
-    Laser { at: Pt, press: f32 },
+    /// `angle` is the Furry Paw rotation in radians around the hotspot.
+    Paw {
+        at: Pt,
+        press: f32,
+        scale: f32,
+        angle: f32,
+        stick: bool,
+        stretch: bool,
+        grip_x: f32,
+    },
+    Laser {
+        at: Pt,
+        press: f32,
+    },
 }
 
 /// Feature-owned state for the active tool.
@@ -80,6 +92,7 @@ pub trait ToolState {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TextInput {
     Changed(String),
+    Undo,
     Submit,
     Cancel,
 }

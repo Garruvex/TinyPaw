@@ -63,6 +63,7 @@ pub enum ShellAction {
 
 pub type Handler = fn(&Session) -> Outcome;
 
+#[derive(Clone)]
 pub struct CommandDef {
     pub id: &'static str,
     pub label: &'static str,
@@ -95,6 +96,7 @@ pub enum Constraint {
 
 /// `label`, `group` and `order` lay out the settings window (phase 2).
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct SettingDef {
     pub id: &'static str,
     pub label: &'static str,
@@ -105,6 +107,7 @@ pub struct SettingDef {
 }
 
 #[allow(dead_code)] // `label` is shown by the tool picker (phase 3).
+#[derive(Clone)]
 pub struct ToolDef {
     pub id: &'static str,
     pub label: &'static str,
@@ -145,16 +148,24 @@ impl SettingValues {
             _ => "",
         }
     }
-
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegistryError {
     DuplicateId(&'static str),
-    DanglingCommand { tool: &'static str, command: &'static str },
+    DanglingCommand {
+        tool: &'static str,
+        command: &'static str,
+    },
     InvalidDefault(&'static str),
-    BadShortcut { command: &'static str, binding: &'static str },
-    AmbiguousShortcut { a: &'static str, b: &'static str },
+    BadShortcut {
+        command: &'static str,
+        binding: &'static str,
+    },
+    AmbiguousShortcut {
+        a: &'static str,
+        b: &'static str,
+    },
 }
 
 impl fmt::Display for RegistryError {
@@ -166,7 +177,10 @@ impl fmt::Display for RegistryError {
             }
             Self::InvalidDefault(id) => write!(f, "setting `{id}` has an invalid default"),
             Self::BadShortcut { command, binding } => {
-                write!(f, "command `{command}` has unparseable shortcut `{binding}`")
+                write!(
+                    f,
+                    "command `{command}` has unparseable shortcut `{binding}`"
+                )
             }
             Self::AmbiguousShortcut { a, b } => {
                 write!(f, "commands `{a}` and `{b}` share a default shortcut")
@@ -202,6 +216,7 @@ impl Registrar {
 pub type RegisterFn = fn(&mut Registrar);
 
 /// Frozen, validated definitions with dispatch indexes.
+#[derive(Clone)]
 pub struct Registry {
     commands: Vec<CommandDef>,
     settings: Vec<SettingDef>,
@@ -242,12 +257,11 @@ impl Registry {
                 return Err(RegistryError::DuplicateId(name));
             }
             if let Some((context, binding)) = c.shortcut {
-                let shortcut = Shortcut::parse(context, binding).ok_or(
-                    RegistryError::BadShortcut {
+                let shortcut =
+                    Shortcut::parse(context, binding).ok_or(RegistryError::BadShortcut {
                         command: c.id,
                         binding,
-                    },
-                )?;
+                    })?;
                 if let Some((_, j)) = shortcuts.iter().find(|(s, _)| s.conflicts(&shortcut)) {
                     return Err(RegistryError::AmbiguousShortcut {
                         a: r.commands[*j].id,
@@ -283,6 +297,58 @@ impl Registry {
         })
     }
 
+    pub fn rebind(&mut self, id: &str, binding: &str) -> Result<(), String> {
+        let i = *self.by_id.get(id).ok_or("unknown command")?;
+        let context = self.commands[i]
+            .shortcut
+            .ok_or("command has no shortcut")?
+            .0;
+        let candidate = Shortcut::parse(context, binding)
+            .ok_or("use a letter, digit, function key, Space or Alt")?;
+        if candidate.key == Key::Alt && id != crate::features::system::INTERACT {
+            return Err("Alt alone is reserved for Hold to interact".into());
+        }
+        if self
+            .shortcuts
+            .iter()
+            .any(|(s, j)| *j != i && s.conflicts(&candidate))
+        {
+            return Err("that shortcut is already assigned in TinyPaw".into());
+        }
+        let old = self
+            .shortcuts
+            .iter_mut()
+            .find(|(_, j)| *j == i)
+            .ok_or("shortcut missing")?;
+        old.0 = candidate;
+        Ok(())
+    }
+
+    pub fn restore_bindings(
+        &mut self,
+        map: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        let mut candidate = self.shortcuts.clone();
+        for (id, binding) in map {
+            let i = *self.by_id.get(id.as_str()).ok_or("unknown command")?;
+            let entry = candidate
+                .iter_mut()
+                .find(|(_, j)| *j == i)
+                .ok_or("command has no shortcut")?;
+            entry.0 = Shortcut::parse(entry.0.context, binding).ok_or("invalid shortcut")?;
+            if entry.0.key == Key::Alt && id != crate::features::system::INTERACT {
+                return Err("Alt reserved for interact".into());
+            }
+        }
+        for (n, (a, _)) in candidate.iter().enumerate() {
+            if candidate[n + 1..].iter().any(|(b, _)| a.conflicts(b)) {
+                return Err("shortcut conflict".into());
+            }
+        }
+        self.shortcuts = candidate;
+        Ok(())
+    }
+
     pub fn command(&self, id: &str) -> Option<&CommandDef> {
         self.by_id.get(id).map(|&i| &self.commands[i])
     }
@@ -312,7 +378,10 @@ impl Registry {
         list
     }
 
-    pub fn shortcuts(&self, context: ShortcutContext) -> impl Iterator<Item = (&Shortcut, &CommandDef)> {
+    pub fn shortcuts(
+        &self,
+        context: ShortcutContext,
+    ) -> impl Iterator<Item = (&Shortcut, &CommandDef)> {
         self.shortcuts
             .iter()
             .filter(move |(s, _)| s.context == context)
@@ -328,11 +397,21 @@ impl Registry {
     }
 
     pub fn defaults(&self) -> SettingValues {
-        SettingValues(self.settings.iter().map(|s| (s.id, s.default.clone())).collect())
+        SettingValues(
+            self.settings
+                .iter()
+                .map(|s| (s.id, s.default.clone()))
+                .collect(),
+        )
     }
 
     /// The one typed update path for every editor of a setting.
-    pub fn set(&self, values: &mut SettingValues, id: &str, value: Value) -> Result<(), Unavailable> {
+    pub fn set(
+        &self,
+        values: &mut SettingValues,
+        id: &str,
+        value: Value,
+    ) -> Result<(), Unavailable> {
         let def = self
             .settings
             .iter()
@@ -410,7 +489,12 @@ impl Registry {
     }
 
     /// Runs a hold command's release half. Release is never refused.
-    pub fn dispatch_release(&self, id: &str, session: &mut Session, now: Millis) -> Option<Dispatched> {
+    pub fn dispatch_release(
+        &self,
+        id: &str,
+        session: &mut Session,
+        now: Millis,
+    ) -> Option<Dispatched> {
         let def = self.command(id)?;
         let handler = def.on_release?;
         Some(Self::apply(handler(session), session, now))
@@ -447,7 +531,9 @@ pub enum Dispatched {
 fn valid(value: &Value, constraint: &Constraint) -> bool {
     match (value, constraint) {
         (_, Constraint::None) => true,
-        (Value::Float(v), Constraint::Range { min, max }) => v.is_finite() && *v >= *min && *v <= *max,
+        (Value::Float(v), Constraint::Range { min, max }) => {
+            v.is_finite() && *v >= *min && *v <= *max
+        }
         (Value::Choice(c), Constraint::Choices(list)) => list.contains(c),
         _ => false,
     }
@@ -465,11 +551,6 @@ pub fn when_enabled(s: &Session) -> Result<(), Unavailable> {
     } else {
         Err(Unavailable("TinyPaw is Off"))
     }
-}
-
-/// For tools that are registered and shown but land in a later phase.
-pub fn later_phase(_: &Session) -> Result<(), Unavailable> {
-    Err(Unavailable("Coming in a later alpha"))
 }
 
 #[cfg(test)]

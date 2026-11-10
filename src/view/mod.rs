@@ -11,11 +11,11 @@ pub mod wheel;
 
 use std::cell::Cell;
 
-use iced::mouse;
-use iced::widget::canvas::{self, Cache, Frame, Geometry, LineCap, LineJoin, Path, Stroke};
 use iced::advanced::image;
 use iced::alignment;
+use iced::mouse;
 use iced::widget::canvas::fill::Rule;
+use iced::widget::canvas::{self, Cache, Frame, Geometry, LineCap, LineJoin, Path, Stroke};
 use iced::widget::{
     button, canvas as canvas_widget, column, container, mouse_area, pin as place, row, space,
     stack, text, text_input, tooltip,
@@ -23,7 +23,9 @@ use iced::widget::{
 use iced::{Alignment, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::app::Message;
-use crate::features::{display, freeze, pin, point, sound, spotlight, system, text as text_tool, upcoming};
+use crate::features::{
+    display, freeze, pin, point, sound, spotlight, system, text as text_tool, upcoming,
+};
 use crate::registry::{Registry, Value};
 use crate::session::{Mark, Millis, OutputId, PointerKind, Session};
 
@@ -59,7 +61,23 @@ pub enum UiMsg {
     TurnOn,
     OpenSettings,
     PickPack(&'static str),
+    Rebind(&'static str),
+    ResetShortcuts,
+    RefreshSources,
     AddPointer,
+    ImportPack,
+    EditPack,
+    RemovePack,
+    AddForearm,
+    AddPressed,
+    AddPackTap,
+    RemoveForearm,
+    DraftWristX(f32),
+    DraftWristY(f32),
+    DraftJointWidth(f32),
+    DraftForearmAnchor(f32, f32),
+    CopyPointerPrompt,
+    CopyForearmPrompt,
     DraftHotspot(f32, f32),
     DraftName(String),
     SaveDraft,
@@ -125,7 +143,12 @@ pub fn overlay(o: Overlay<'_>) -> Element<'_, Message> {
     }
     layers.push(scene.into());
     if let Some(draft) = o.session.text_draft().filter(|d| d.output == o.output) {
-        layers.push(text_editor(draft.at, draft.text, draft.size));
+        layers.push(text_editor(
+            draft.at,
+            draft.text,
+            draft.size,
+            o.session.settings(),
+        ));
     }
 
     let hidden = o.session.settings().bool(display::HIDE_BAR);
@@ -159,17 +182,31 @@ pub fn overlay(o: Overlay<'_>) -> Element<'_, Message> {
 }
 
 /// The label editor, placed where the label will sit and styled like one.
-fn text_editor<'a>(at: crate::session::Pt, value: &str, size: f32) -> Element<'a, Message> {
+fn text_editor<'a>(
+    at: crate::session::Pt,
+    value: &str,
+    size: f32,
+    settings: &crate::registry::SettingValues,
+) -> Element<'a, Message> {
+    let color = theme::rgba(settings.color(text_tool::COLOR));
+    let backing = settings.bool(text_tool::BACKING);
     let input = text_input("Type a label, Enter to place", value)
         .id(TEXT_EDITOR)
         .size(size)
         .font(theme::MEDIUM)
         .padding([4, 8])
-        .width(Length::Fixed(label_width(value, size).max(size * 12.0) + 24.0))
+        .width(Length::Fixed(
+            label_width(value, size).max(size * 12.0) + 24.0,
+        ))
         .on_input(Message::TextChanged)
         .on_submit(Message::TextSubmit)
-        .style(|_, status| text_input::Style {
-            background: theme::LABEL_BG.into(),
+        .style(move |_, status| text_input::Style {
+            background: (if backing {
+                theme::LABEL_BG
+            } else {
+                Color::TRANSPARENT
+            })
+            .into(),
             border: iced::Border {
                 radius: 8.0.into(),
                 width: 1.5,
@@ -181,7 +218,7 @@ fn text_editor<'a>(at: crate::session::Pt, value: &str, size: f32) -> Element<'a
             },
             icon: theme::MUTED,
             placeholder: theme::FAINT,
-            value: iced::Color::WHITE,
+            value: color,
             selection: theme::CYAN_BG,
         });
     // The editor owns its area so typing clicks never start a new label.
@@ -202,7 +239,10 @@ fn status_chip<'a>(frozen: bool, notice: Option<&'a str>) -> Element<'a, Message
     } else if frozen {
         row![
             icon(Glyph::Freeze, 16.0, theme::CYAN_TEXT),
-            text("Frozen").font(theme::MEDIUM).size(13).color(theme::TEXT),
+            text("Frozen")
+                .font(theme::MEDIUM)
+                .size(13)
+                .color(theme::TEXT),
             text("·").size(13).color(theme::FAINT),
             button(text("Return live").font(theme::MEDIUM).size(13))
                 .padding([2, 8])
@@ -215,7 +255,10 @@ fn status_chip<'a>(frozen: bool, notice: Option<&'a str>) -> Element<'a, Message
     } else {
         row![
             dot,
-            text("Annotating").font(theme::MEDIUM).size(13).color(theme::TEXT),
+            text("Annotating")
+                .font(theme::MEDIUM)
+                .size(13)
+                .color(theme::TEXT),
             text("·").size(13).color(theme::FAINT),
             text("Esc to exit").size(13).color(theme::SUBTLE),
         ]
@@ -223,9 +266,13 @@ fn status_chip<'a>(frozen: bool, notice: Option<&'a str>) -> Element<'a, Message
         .align_y(Alignment::Center)
         .into()
     };
-    mouse_area(container(content).padding([7, 14]).style(theme::panel(999.0)))
-        .interaction(mouse::Interaction::Idle)
-        .into()
+    mouse_area(
+        container(content)
+            .padding([7, 14])
+            .style(theme::panel(999.0)),
+    )
+    .interaction(mouse::Interaction::Idle)
+    .into()
 }
 
 fn keycap<'a>(label: String) -> Element<'a, Message> {
@@ -299,7 +346,11 @@ fn command_button<'a>(
     if let Some(why) = reason {
         label = format!("{label} · {why}");
     }
-    tip(icon_button(glyph, tone, msg), label, registry.shortcut_label(id))
+    tip(
+        icon_button(glyph, tone, msg),
+        label,
+        registry.shortcut_label(id),
+    )
 }
 
 fn tool_tone(session: &Session, tool: &str) -> Tone {
@@ -313,11 +364,23 @@ fn tool_tone(session: &Session, tool: &str) -> Tone {
 fn quick_bar<'a>(registry: &'a Registry, session: &'a Session) -> Element<'a, Message> {
     let laser = session.settings().choice(point::STYLE) == "laser";
     let pointing = matches!(session.active_tool(), point::TOOL);
-    let pointer_tone = if pointing { Tone::Selected } else { Tone::Plain };
-    let pointer_color = if pointing { theme::CYAN_TEXT } else { theme::TEXT_SOFT };
+    let pointer_tone = if pointing {
+        Tone::Selected
+    } else {
+        Tone::Plain
+    };
+    let pointer_color = if pointing {
+        theme::CYAN_TEXT
+    } else {
+        theme::TEXT_SOFT
+    };
     let pointer = button(
         row![
-            icon(if laser { Glyph::Laser } else { Glyph::Paw }, 20.0, pointer_color),
+            icon(
+                if laser { Glyph::Laser } else { Glyph::Paw },
+                20.0,
+                pointer_color
+            ),
             icon(Glyph::ChevronUp, 14.0, pointer_color),
         ]
         .spacing(4)
@@ -336,7 +399,11 @@ fn quick_bar<'a>(registry: &'a Registry, session: &'a Session) -> Element<'a, Me
             container(space())
                 .width(18)
                 .height(18)
-                .style(theme::outlined(color, 9.0, Color::from_rgba8(255, 255, 255, 0.18))),
+                .style(theme::outlined(
+                    color,
+                    9.0,
+                    Color::from_rgba8(255, 255, 255, 0.18)
+                )),
             text(format!("{width:.0} px")).size(13).color(theme::SUBTLE),
         ]
         .spacing(8)
@@ -355,7 +422,12 @@ fn quick_bar<'a>(registry: &'a Registry, session: &'a Session) -> Element<'a, Me
             if muted { Tone::Warm } else { Tone::Plain },
             Some(Message::Command(sound::TOGGLE_MUTE)),
         ),
-        if muted { "Unmute tap sound" } else { "Mute tap sound" }.into(),
+        if muted {
+            "Unmute tap sound"
+        } else {
+            "Mute tap sound"
+        }
+        .into(),
         None,
     );
 
@@ -375,16 +447,38 @@ fn quick_bar<'a>(registry: &'a Registry, session: &'a Session) -> Element<'a, Me
 
     let bar = row![
         pointer,
-        command_button(registry, session, text_tool::SELECT, Glyph::Text, tool_tone(session, text_tool::TOOL)),
-        command_button(registry, session, pin::SELECT, Glyph::Pin, tool_tone(session, pin::TOOL)),
-        command_button(registry, session, spotlight::SELECT, Glyph::Spotlight, tool_tone(session, spotlight::TOOL)),
+        command_button(
+            registry,
+            session,
+            text_tool::SELECT,
+            Glyph::Text,
+            tool_tone(session, text_tool::TOOL)
+        ),
+        command_button(
+            registry,
+            session,
+            pin::SELECT,
+            Glyph::Pin,
+            tool_tone(session, pin::TOOL)
+        ),
+        command_button(
+            registry,
+            session,
+            spotlight::SELECT,
+            Glyph::Spotlight,
+            tool_tone(session, spotlight::TOOL)
+        ),
         command_button(registry, session, upcoming::LENS, Glyph::Lens, Tone::Plain),
         command_button(
             registry,
             session,
             freeze::TOGGLE,
             Glyph::Freeze,
-            if session.frozen_frame().is_some() { Tone::Selected } else { Tone::Plain },
+            if session.frozen_frame().is_some() {
+                Tone::Selected
+            } else {
+                Tone::Plain
+            },
         ),
         divider(),
         ink,
@@ -409,7 +503,15 @@ fn pointer_menu<'a>(session: &Session) -> Element<'a, Message> {
     let choice = |glyph, label: &'static str, on: bool, id: &'static str| {
         button(
             row![
-                icon(glyph, 20.0, if on { theme::CYAN_TEXT } else { theme::TEXT_SOFT }),
+                icon(
+                    glyph,
+                    20.0,
+                    if on {
+                        theme::CYAN_TEXT
+                    } else {
+                        theme::TEXT_SOFT
+                    }
+                ),
                 text(label).font(theme::MEDIUM).size(14),
             ]
             .spacing(8)
@@ -417,7 +519,11 @@ fn pointer_menu<'a>(session: &Session) -> Element<'a, Message> {
         )
         .height(44)
         .padding([12, 14])
-        .style(theme::tool_button(if on { Tone::Selected } else { Tone::Plain }))
+        .style(theme::tool_button(if on {
+            Tone::Selected
+        } else {
+            Tone::Plain
+        }))
         .on_press(Message::Command(id))
     };
     mouse_area(
@@ -462,7 +568,9 @@ fn ink_menu<'a>(session: &Session, pack: Option<&crate::packs::Pack>) -> Element
         container(
             column![
                 swatches,
-                container(widths).padding(4).style(theme::fill(theme::WELL, 10.0)),
+                container(widths)
+                    .padding(4)
+                    .style(theme::fill(theme::WELL, 10.0)),
             ]
             .spacing(10)
             .align_x(Alignment::Center),
@@ -501,19 +609,33 @@ fn stroke_style(color: Color, width: f32) -> Stroke<'static> {
 /// Rough single-line width; wide (CJK) characters take a full em.
 fn label_width(text: &str, size: f32) -> f32 {
     text.chars()
-        .map(|c| if (c as u32) >= 0x1100 { size } else { size * 0.56 })
+        .map(|c| {
+            if (c as u32) >= 0x1100 {
+                size
+            } else {
+                size * 0.56
+            }
+        })
         .sum()
 }
 
 fn draw_label(frame: &mut Frame, l: &crate::session::Label) {
     let pad = (8.0, 4.0);
-    let size = Size::new(label_width(&l.text, l.size) + pad.0 * 2.0, l.size * 1.4 + pad.1 * 2.0);
+    let size = Size::new(
+        label_width(&l.text, l.size) + pad.0 * 2.0,
+        l.size * 1.4 + pad.1 * 2.0,
+    );
     let corner = Point::new(l.at.x - pad.0, l.at.y - pad.1);
-    frame.fill(&Path::rounded_rectangle(corner, size, 8.0.into()), theme::LABEL_BG);
+    if l.backing {
+        frame.fill(
+            &Path::rounded_rectangle(corner, size, 8.0.into()),
+            theme::LABEL_BG,
+        );
+    }
     frame.fill_text(canvas::Text {
         content: l.text.clone(),
         position: Point::new(l.at.x, l.at.y + l.size * 0.7),
-        color: Color::WHITE,
+        color: theme::rgba(l.color.0),
         size: l.size.into(),
         font: theme::MEDIUM,
         align_y: alignment::Vertical::Center,
@@ -523,7 +645,10 @@ fn draw_label(frame: &mut Frame, l: &crate::session::Label) {
 
 fn draw_pin(frame: &mut Frame, p: &crate::session::Pin) {
     let c = Point::new(p.at.x, p.at.y);
-    frame.fill(&Path::circle(Point::new(c.x, c.y + 2.0), 15.0), Color::from_rgba8(0, 0, 0, 0.35));
+    frame.fill(
+        &Path::circle(Point::new(c.x, c.y + 2.0), 15.0),
+        Color::from_rgba8(0, 0, 0, 0.35),
+    );
     frame.fill(&Path::circle(c, 14.0), theme::rgba(p.color.0));
     frame.fill_text(canvas::Text {
         content: p.number.to_string(),
@@ -543,8 +668,11 @@ pub fn match_pointer<'a>(accent: [u8; 4], current: [u8; 4]) -> Element<'a, Messa
     tip(
         button(
             row![
-                container(space().width(16).height(16))
-                    .style(theme::outlined(theme::rgba(accent), 8.0, theme::LINE_STRONG)),
+                container(space().width(16).height(16)).style(theme::outlined(
+                    theme::rgba(accent),
+                    8.0,
+                    theme::LINE_STRONG
+                )),
                 text("Match").size(12),
             ]
             .spacing(6)
@@ -602,20 +730,24 @@ impl canvas::Program<Message> for OverlayCanvas<'_> {
                 }
                 state.inside = true;
                 state.last = Some(p);
-                Message::Pointer(PointerKind::Moved, p)
+                Message::Pointer(self.output, PointerKind::Moved, p)
             }
             (mouse::Event::CursorMoved { .. } | mouse::Event::CursorLeft, None) if state.inside => {
                 state.inside = false;
-                Message::Pointer(PointerKind::Left, state.last.unwrap_or(Point::ORIGIN))
+                Message::Pointer(
+                    self.output,
+                    PointerKind::Left,
+                    state.last.unwrap_or(Point::ORIGIN),
+                )
             }
             (mouse::Event::ButtonPressed(mouse::Button::Left), Some(p)) => {
                 state.last = Some(p);
-                Message::Pointer(PointerKind::Down, p)
+                Message::Pointer(self.output, PointerKind::Down, p)
             }
             // Always report the release so a swallowed button-up is observed.
             (mouse::Event::ButtonReleased(mouse::Button::Left), p) => {
                 let p = p.or(state.last).unwrap_or(Point::ORIGIN);
-                Message::Pointer(PointerKind::Up, p)
+                Message::Pointer(self.output, PointerKind::Up, p)
             }
             _ => return None,
         };
@@ -722,6 +854,10 @@ pub struct PreviewTile {
     pub ink: Color,
     pub width: f32,
     pub laser: bool,
+    pub stick: bool,
+    pub stretch: bool,
+    pub scale: f32,
+    pub angle: f32,
     pub pack: Option<crate::packs::Pack>,
 }
 
@@ -743,42 +879,31 @@ impl<Message> canvas::Program<Message> for PreviewTile {
             self.background,
         );
         let (w, h) = (size.width, size.height);
+        let tip = Point::new(w * 0.56, h * 0.25);
         let curve = Path::new(|b| {
             b.move_to(Point::new(w * 0.15, h * 0.68));
             b.bezier_curve_to(
                 Point::new(w * 0.27, h * 0.25),
                 Point::new(w * 0.6, h * 0.2),
-                Point::new(w * 0.72, h * 0.47),
+                tip,
             );
         });
         frame.stroke(&curve, stroke_style(self.ink, self.width));
-        let tip = Point::new(w * 0.74, h * 0.5);
-        if self.laser {
-            paw::draw_tip(
-                &mut frame,
-                crate::session::Tip::Laser {
-                    at: crate::session::Pt::new(tip.x, tip.y),
-                    press: 0.0,
-                },
-                size,
-                None,
-            );
-        } else if let Some(pack) = &self.pack {
-            paw::draw_tip(
-                &mut frame,
-                crate::session::Tip::Paw {
-                    at: crate::session::Pt::new(tip.x, tip.y),
-                    press: 0.0,
-                    scale: h * 0.36 / crate::features::point::BASE_SIZE,
-                    stick: false,
-                    grip_x: tip.x,
-                },
-                size,
-                Some(pack),
-            );
+        let at = crate::session::Pt::new(tip.x, tip.y);
+        let pose = if self.laser {
+            crate::session::Tip::Laser { at, press: 0.0 }
         } else {
-            paw::draw_preview_paw(&mut frame, tip, h * 0.42);
-        }
+            crate::session::Tip::Paw {
+                at,
+                press: 0.0,
+                scale: self.scale,
+                angle: self.angle,
+                stick: self.stick,
+                stretch: self.stretch,
+                grip_x: tip.x,
+            }
+        };
+        paw::draw_tip(&mut frame, pose, size, self.pack.as_ref());
         vec![frame.into_geometry()]
     }
 }

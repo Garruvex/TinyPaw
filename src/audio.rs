@@ -14,7 +14,7 @@ use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Source};
 const RATE: u32 = 44_100;
 
 /// A predecoded clip.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Clip {
     channels: u16,
     rate: u32,
@@ -101,7 +101,9 @@ fn normalize(mut s: Vec<f32>, peak: f32) -> Vec<f32> {
 fn synth(len_s: f32, f: impl Fn(f32, &mut u32) -> f32) -> Vec<f32> {
     let n = (len_s * RATE as f32) as usize;
     let mut seed = 0x9E37_79B9;
-    (0..n).map(|i| f(i as f32 / RATE as f32, &mut seed)).collect()
+    (0..n)
+        .map(|i| f(i as f32 / RATE as f32, &mut seed))
+        .collect()
 }
 
 /// A short, hollow pointer knock against a chalkboard.
@@ -146,6 +148,7 @@ pub struct Audio {
     pop: Clip,
     bonk: Clip,
     custom: Option<Clip>,
+    pack: Option<Clip>,
 }
 
 impl Audio {
@@ -159,11 +162,16 @@ impl Audio {
             pop: pop(),
             bonk: bonk(),
             custom,
+            pack: None,
         }
     }
 
     pub fn has_custom(&self) -> bool {
         self.custom.is_some()
+    }
+
+    pub fn set_pack(&mut self, clip: Option<Clip>) {
+        self.pack = clip;
     }
 
     pub fn set_custom(&mut self, clip: Clip) {
@@ -189,6 +197,7 @@ impl Audio {
 
     fn clip(&self, id: &str) -> &Clip {
         match id {
+            "pack" => self.pack.as_ref().unwrap_or(&self.knock),
             "pop" => &self.pop,
             "bonk" => &self.bonk,
             "custom" => self.custom.as_ref().unwrap_or(&self.knock),
@@ -200,7 +209,8 @@ impl Audio {
     pub fn play(&mut self, id: &str, volume: f32) {
         self.open();
         if let Some(sink) = &self.sink {
-            sink.mixer().add(self.clip(id).source(volume.clamp(0.0, 1.0)));
+            sink.mixer()
+                .add(self.clip(id).source(volume.clamp(0.0, 1.0)));
         }
     }
 }

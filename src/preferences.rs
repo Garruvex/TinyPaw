@@ -33,13 +33,22 @@ pub struct Loaded {
 pub fn load(registry: &Registry) -> Loaded {
     let mut values = registry.defaults();
     let Some(path) = file() else {
-        return Loaded { values, first_run: true };
+        return Loaded {
+            values,
+            first_run: true,
+        };
     };
     let Ok(text) = fs::read_to_string(&path) else {
-        return Loaded { values, first_run: true };
+        return Loaded {
+            values,
+            first_run: true,
+        };
     };
     if let Ok(Json::Object(map)) = serde_json::from_str::<Json>(&text) {
         for (id, json) in map {
+            if id == crate::features::upcoming::SOURCE {
+                continue;
+            }
             let text = match json {
                 Json::Bool(b) => b.to_string(),
                 Json::Number(n) => n.to_string(),
@@ -51,7 +60,10 @@ pub fn load(registry: &Registry) -> Loaded {
             }
         }
     }
-    Loaded { values, first_run: false }
+    Loaded {
+        values,
+        first_run: false,
+    }
 }
 
 pub fn save(values: &SettingValues) -> io::Result<()> {
@@ -61,6 +73,10 @@ pub fn save(values: &SettingValues) -> io::Result<()> {
     }
     let mut map = Map::new();
     for (id, value) in values.iter() {
+        // Native window handles are valid only for this process session.
+        if id == crate::features::upcoming::SOURCE {
+            continue;
+        }
         let json = match value {
             Value::Bool(b) => Json::Bool(*b),
             Value::Float(f) => serde_json::Number::from_f64(*f).map_or(Json::Null, Json::Number),
@@ -73,4 +89,36 @@ pub fn save(values: &SettingValues) -> io::Result<()> {
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, text)?;
     fs::rename(&tmp, &path)
+}
+
+pub fn load_shortcuts(registry: &mut Registry) {
+    let Some(path) = data_dir().map(|d| d.join("shortcuts.json")) else {
+        return;
+    };
+    let Ok(text) = fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(map) = serde_json::from_str::<std::collections::BTreeMap<String, String>>(&text) else {
+        return;
+    };
+    // Validate the complete set against defaults before exposing it.
+    let _ = registry.restore_bindings(&map);
+}
+
+pub fn save_shortcuts(registry: &Registry) -> io::Result<()> {
+    let path = data_dir()
+        .ok_or_else(|| io::Error::other("no per-user data folder"))?
+        .join("shortcuts.json");
+    let map: std::collections::BTreeMap<_, _> = [
+        crate::registry::ShortcutContext::Global,
+        crate::registry::ShortcutContext::Overlay,
+    ]
+    .into_iter()
+    .flat_map(|c| registry.shortcuts(c))
+    .map(|(s, d)| (d.id, s.label()))
+    .collect();
+    fs::create_dir_all(path.parent().unwrap())?;
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, serde_json::to_vec_pretty(&map)?)?;
+    fs::rename(tmp, path)
 }

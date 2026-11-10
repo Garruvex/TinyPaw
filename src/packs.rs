@@ -29,6 +29,10 @@ const BUNDLED: &[(&str, &[u8])] = &[
 ];
 
 pub const DEFAULT: &str = "yohta";
+
+pub const POINTER_PROMPT: &str = "Create a desktop pointer using my attached character reference. Show the back of one right paw or claw. Preserve the reference's digit count, colours, markings and proportions. Raise the digit next to the thumb straight upward and curl the remaining digits inward. Make the pointing tip the highest part of the silhouette. Centre the wrist at the bottom with a clean, flat end suitable for joining a separate forearm. Keep the source artwork upright. The app applies rotation. Fit the entire paw inside a transparent portrait PNG with a small margin. Use a clear outline and a silhouette readable at cursor size. Omit the forearm, stick, arrows, lettering, cast shadow and glow.";
+
+pub const FOREARM_PROMPT: &str = "Create a separate forearm asset that matches my attached character reference and pointer paw artwork. Preserve the character's colours, fur or scale texture, outline style and wrist width. Show only a straight upright forearm strip in a transparent portrait PNG. Place the narrow wrist joint at top centre and extend the limb downward, widening gently toward the bottom. Give both ends clean, flat cuts. Keep the middle simple so it can stretch and curve smoothly. Keep identifying wrist tufts and detailed distal markings on the separate paw artwork. Omit the paw, fingers, claws, shoulder, body, stick, arrows, lettering, cast shadow and glow.";
 const MAX_SIDE: u32 = 4096;
 /// Imported art is scaled so its height fits this, like the bundled sprites.
 const SPRITE_HEIGHT: u32 = 256;
@@ -46,6 +50,54 @@ pub struct Pack {
     pub hotspot: (f32, f32),
     pub wrist: Option<(f32, f32)>,
     pub accent: Option<[u8; 4]>,
+    pub forearm: Option<Forearm>,
+    /// Forearm image width relative to paw image width.
+    pub joint_width: f32,
+    pub pressed: Option<Handle>,
+    pub tap: Option<crate::audio::Clip>,
+    pub folder: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Forearm {
+    pub image: Handle,
+    pub width: u32,
+    pub height: u32,
+    pub rgba: std::sync::Arc<Vec<u8>>,
+    pub anchor: (f32, f32),
+    pub strips: Vec<Handle>,
+}
+
+impl Forearm {
+    pub fn set_anchor(&mut self, anchor: (f32, f32)) {
+        self.anchor = (anchor.0.clamp(0.0, 1.0), anchor.1.clamp(0.0, 0.8));
+        let image =
+            image::RgbaImage::from_raw(self.width, self.height, self.rgba.to_vec()).unwrap();
+        let top = (self.anchor.1 * self.height as f32) as u32;
+        let count = (self.height - top).min(32);
+        self.strips = (0..count)
+            .map(|i| {
+                let y = top + i * (self.height - top) / count;
+                let end = top + (i + 1) * (self.height - top) / count;
+                let strip = image::imageops::crop_imm(&image, 0, y, self.width, end - y).to_image();
+                Handle::from_rgba(self.width, end - y, strip.into_raw())
+            })
+            .collect();
+    }
+}
+
+pub fn forearm_from_file(path: &Path) -> Result<Forearm, String> {
+    let draft = draft_from_file(path)?;
+    let mut arm = Forearm {
+        image: draft.image,
+        width: draft.width,
+        height: draft.height,
+        rgba: draft.rgba,
+        anchor: (0.5, 0.0),
+        strips: Vec::new(),
+    };
+    arm.set_anchor(guess_hotspot(arm.width, arm.height, &arm.rgba));
+    Ok(arm)
 }
 
 /// Decoded pixels kept while a new pointer is being set up.
@@ -57,6 +109,31 @@ pub struct Draft {
     pub height: u32,
     pub rgba: std::sync::Arc<Vec<u8>>,
     pub hotspot: (f32, f32),
+    pub wrist: (f32, f32),
+    pub joint_width: f32,
+    pub forearm: Option<Forearm>,
+    pub pressed: Option<(Handle, std::sync::Arc<Vec<u8>>)>,
+    pub tap: Option<(crate::audio::Clip, PathBuf)>,
+}
+
+impl Draft {
+    pub fn preview(&self) -> Pack {
+        Pack {
+            id: "preview",
+            name: self.name.clone(),
+            image: self.image.clone(),
+            width: self.width,
+            height: self.height,
+            hotspot: self.hotspot,
+            wrist: Some(self.wrist),
+            accent: None,
+            forearm: self.forearm.clone(),
+            joint_width: self.joint_width,
+            pressed: self.pressed.as_ref().map(|(h, _)| h.clone()),
+            tap: self.tap.as_ref().map(|(c, _)| c.clone()),
+            folder: None,
+        }
+    }
 }
 
 pub fn user_dir() -> Option<PathBuf> {
@@ -93,7 +170,9 @@ fn decode(png: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
         .to_rgba8();
     let (w, h) = img.dimensions();
     if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE {
-        return Err(format!("the image must be at most {MAX_SIDE}×{MAX_SIDE} pixels"));
+        return Err(format!(
+            "the image must be at most {MAX_SIDE}×{MAX_SIDE} pixels"
+        ));
     }
     let alpha = img.pixels().map(|p| p.0[3]);
     let (mut clear, mut solid) = (false, false);
@@ -112,11 +191,18 @@ fn decode(png: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
 
 /// Parses a manifest and its PNG into a validated pack.
 pub fn parse(manifest: &str, png: &[u8]) -> Result<Pack, String> {
+    parse_assets(manifest, png, None)
+}
+
+fn parse_assets(manifest: &str, png: &[u8], arm_png: Option<&[u8]>) -> Result<Pack, String> {
     let m: Json = serde_json::from_str(manifest).map_err(|e| format!("manifest: {e}"))?;
     if m["schemaVersion"].as_u64() != Some(1) {
         return Err("unsupported manifest schemaVersion".into());
     }
-    let id = m["id"].as_str().filter(|id| valid_id(id)).ok_or("invalid pack id")?;
+    let id = m["id"]
+        .as_str()
+        .filter(|id| valid_id(id))
+        .ok_or("invalid pack id")?;
     let name = m["name"]
         .as_str()
         .map(str::trim)
@@ -132,6 +218,38 @@ pub fn parse(manifest: &str, png: &[u8]) -> Result<Pack, String> {
     }
     let accent = m["accent"].as_str().and_then(parse_color);
     let (width, height, rgba) = decode(png)?;
+    let joint_width = match &m["pointer"]["jointWidth"] {
+        Json::Null => 0.4,
+        value => value.as_f64().ok_or("invalid joint width")? as f32,
+    };
+    if !(0.05..=1.5).contains(&joint_width) {
+        return Err("joint width must be between 0.05 and 1.5".into());
+    }
+    let forearm = if !m["pointer"]["forearm"].is_null() {
+        if wrist.is_none() {
+            return Err("a forearm needs a paw wrist anchor".into());
+        }
+        let (w, h, rgba) = decode(arm_png.ok_or("missing forearm image")?)?;
+        let anchor = match &m["pointer"]["forearmAnchor"] {
+            Json::Null => (0.5, 0.0),
+            value => fraction_pair(value).ok_or("invalid forearm anchor")?,
+        };
+        if anchor.1 > 0.8 {
+            return Err("forearm anchor must be in the upper 80%".into());
+        }
+        let mut arm = Forearm {
+            image: Handle::from_rgba(w, h, rgba.clone()),
+            width: w,
+            height: h,
+            rgba: std::sync::Arc::new(rgba),
+            anchor,
+            strips: Vec::new(),
+        };
+        arm.set_anchor(anchor);
+        Some(arm)
+    } else {
+        None
+    };
     Ok(Pack {
         id: Box::leak(id.to_owned().into_boxed_str()),
         name: name.to_owned(),
@@ -141,6 +259,11 @@ pub fn parse(manifest: &str, png: &[u8]) -> Result<Pack, String> {
         hotspot,
         wrist,
         accent,
+        forearm,
+        joint_width,
+        pressed: None,
+        tap: None,
+        folder: None,
     })
 }
 
@@ -161,7 +284,11 @@ pub fn load_all() -> (Vec<Pack>, Vec<String>) {
             let folder = entry.path();
             match load_folder(&folder) {
                 Ok(p) if packs.iter().any(|q| q.id == p.id) => {
-                    problems.push(format!("{}: duplicate pack id `{}`", folder.display(), p.id));
+                    problems.push(format!(
+                        "{}: duplicate pack id `{}`",
+                        folder.display(),
+                        p.id
+                    ));
                 }
                 Ok(p) => packs.push(p),
                 Err(e) => problems.push(format!("{}: {e}", folder.display())),
@@ -174,13 +301,143 @@ pub fn load_all() -> (Vec<Pack>, Vec<String>) {
 fn load_folder(folder: &Path) -> Result<Pack, String> {
     let manifest = fs::read_to_string(folder.join("manifest.json")).map_err(|e| e.to_string())?;
     let m: Json = serde_json::from_str(&manifest).map_err(|e| format!("manifest: {e}"))?;
-    let idle = m["pointer"]["idle"].as_str().ok_or("manifest has no idle image")?;
+    let idle = m["pointer"]["idle"]
+        .as_str()
+        .ok_or("manifest has no idle image")?;
     // Resolve inside the pack folder only.
-    if idle.contains(['/', '\\']) || idle.contains("..") {
+    if idle.is_empty() || idle.contains(['/', '\\', ':']) || idle.contains("..") {
         return Err("the idle image must sit in the pack folder".into());
     }
     let png = fs::read(folder.join(idle)).map_err(|e| e.to_string())?;
-    parse(&manifest, &png)
+    let arm_png = match &m["pointer"]["forearm"] {
+        Json::Null => None,
+        value => {
+            let file = value.as_str().ok_or("invalid forearm filename")?;
+            if file.is_empty() || file.contains(['/', '\\', ':']) || file.contains("..") {
+                return Err("the forearm image must sit in the pack folder".into());
+            }
+            Some(fs::read(folder.join(file)).map_err(|e| e.to_string())?)
+        }
+    };
+    let mut pack = parse_assets(&manifest, &png, arm_png.as_deref())?;
+    if let Some(file) = asset_name(&m["pointer"]["pressed"])? {
+        let (w, h, rgba) = decode(&fs::read(folder.join(file)).map_err(|e| e.to_string())?)?;
+        if (w, h) != (pack.width, pack.height) {
+            return Err("pressed pose must use the idle canvas dimensions".into());
+        }
+        pack.pressed = Some(Handle::from_rgba(w, h, rgba));
+    }
+    if let Some(file) = asset_name(&m["sounds"]["tap"])? {
+        pack.tap = Some(crate::audio::decode_wav(&folder.join(file))?);
+    }
+    pack.folder = Some(folder.to_path_buf());
+    Ok(pack)
+}
+
+fn asset_name(value: &Json) -> Result<Option<&str>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let file = value.as_str().ok_or("invalid asset filename")?;
+    if file.is_empty() || file.contains(['/', '\\', ':']) || file.contains("..") {
+        return Err("assets must sit in the pack folder".into());
+    }
+    Ok(Some(file))
+}
+
+/// Copy only validated manifest assets, never arbitrary directory contents.
+pub fn import_folder(source: &Path, taken: &[&str]) -> Result<Pack, String> {
+    import_folder_into(&user_dir().ok_or("no per-user data folder")?, source, taken)
+}
+
+fn import_folder_into(root: &Path, source: &Path, taken: &[&str]) -> Result<Pack, String> {
+    let pack = load_folder(source)?;
+    if taken.contains(&pack.id) {
+        return Err("a pointer with this id is already installed".into());
+    }
+    fs::create_dir_all(root).map_err(|e| e.to_string())?;
+    let target = root.join(pack.id);
+    fs::create_dir(&target).map_err(|e| e.to_string())?;
+    let result = (|| {
+        let manifest = fs::read(source.join("manifest.json")).map_err(|e| e.to_string())?;
+        let m: Json = serde_json::from_slice(&manifest).map_err(|e| e.to_string())?;
+        for v in [
+            &m["pointer"]["idle"],
+            &m["pointer"]["pressed"],
+            &m["pointer"]["forearm"],
+            &m["sounds"]["tap"],
+        ] {
+            if let Some(file) = asset_name(v)? {
+                fs::copy(source.join(file), target.join(file)).map_err(|e| e.to_string())?;
+            }
+        }
+        fs::write(target.join("manifest.json"), manifest).map_err(|e| e.to_string())?;
+        load_folder(&target)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&target);
+    }
+    result
+}
+
+fn installed_folder(pack: &Pack) -> Result<PathBuf, String> {
+    let root = user_dir()
+        .ok_or("no per-user data folder")?
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let folder = pack
+        .folder
+        .as_ref()
+        .ok_or("bundled pointers cannot be removed")?
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    if folder.parent() != Some(root.as_path())
+        || folder.file_name().and_then(|n| n.to_str()) != Some(pack.id)
+    {
+        return Err("pointer is outside installed packs".into());
+    }
+    Ok(folder)
+}
+
+pub fn remove(pack: &Pack) -> Result<(), String> {
+    fs::remove_dir_all(installed_folder(pack)?).map_err(|e| e.to_string())
+}
+
+pub fn edit_draft(pack: &Pack) -> Result<Draft, String> {
+    let folder = installed_folder(pack)?;
+    let m: Json = serde_json::from_str(
+        &fs::read_to_string(folder.join("manifest.json")).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let file = asset_name(&m["pointer"]["idle"])?.ok_or("missing idle")?;
+    let mut d = draft_from_file(&folder.join(file))?;
+    d.name = pack.name.clone();
+    d.hotspot = pack.hotspot;
+    d.wrist = pack.wrist.unwrap_or((0.5, 1.0));
+    d.forearm = pack.forearm.clone();
+    d.joint_width = pack.joint_width;
+    Ok(d)
+}
+
+pub fn reaim(pack: &Pack, draft: &Draft) -> Result<Pack, String> {
+    let folder = installed_folder(pack)?;
+    let path = folder.join("manifest.json");
+    let mut m: Json = serde_json::from_str(&fs::read_to_string(&path).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    m["pointer"]["hotspot"] = json!([draft.hotspot.0, draft.hotspot.1]);
+    m["pointer"]["wrist"] = json!([draft.wrist.0, draft.wrist.1]);
+    m["pointer"]["jointWidth"] = json!(draft.joint_width);
+    let png = fs::read(folder.join(asset_name(&m["pointer"]["idle"])?.ok_or("missing idle")?))
+        .map_err(|e| e.to_string())?;
+    let arm = asset_name(&m["pointer"]["forearm"])?
+        .map(|n| fs::read(folder.join(n)).map_err(|e| e.to_string()))
+        .transpose()?;
+    let text = serde_json::to_string_pretty(&m).map_err(|e| e.to_string())?;
+    parse_assets(&text, &png, arm.as_deref())?;
+    let tmp = folder.join("manifest.tmp");
+    fs::write(&tmp, text).map_err(|e| e.to_string())?;
+    fs::rename(tmp, path).map_err(|e| e.to_string())?;
+    load_folder(&folder)
 }
 
 /// Topmost solid pixel, as a fraction: the pointing tip of upright art.
@@ -208,7 +465,12 @@ pub fn draft_from_file(path: &Path) -> Result<Draft, String> {
     let img = image::RgbaImage::from_raw(w, h, rgba).ok_or("bad image buffer")?;
     let img = if h > SPRITE_HEIGHT {
         let nw = ((w as f32 * SPRITE_HEIGHT as f32 / h as f32).round() as u32).max(1);
-        image::imageops::resize(&img, nw, SPRITE_HEIGHT, image::imageops::FilterType::Lanczos3)
+        image::imageops::resize(
+            &img,
+            nw,
+            SPRITE_HEIGHT,
+            image::imageops::FilterType::Lanczos3,
+        )
     } else {
         img
     };
@@ -229,7 +491,35 @@ pub fn draft_from_file(path: &Path) -> Result<Draft, String> {
         height: h,
         rgba: std::sync::Arc::new(rgba),
         hotspot,
+        wrist: (0.5, 1.0),
+        joint_width: 0.4,
+        forearm: None,
+        pressed: None,
+        tap: None,
     })
+}
+
+pub fn set_pressed(draft: &mut Draft, path: &Path) -> Result<(), String> {
+    let (w, h, rgba) = decode(&fs::read(path).map_err(|e| e.to_string())?)?;
+    if (w as f32 / h as f32 - draft.width as f32 / draft.height as f32).abs() > 0.01 {
+        return Err("pressed image must use the same canvas shape as idle".into());
+    }
+    let image = image::RgbaImage::from_raw(w, h, rgba).ok_or("invalid image")?;
+    let image = image::imageops::resize(
+        &image,
+        draft.width,
+        draft.height,
+        image::imageops::FilterType::Lanczos3,
+    );
+    let mut png = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    draft.pressed = Some((
+        Handle::from_rgba(draft.width, draft.height, image.into_raw()),
+        std::sync::Arc::new(png.into_inner()),
+    ));
+    Ok(())
 }
 
 fn slug(name: &str) -> String {
@@ -259,30 +549,58 @@ fn install_into(root: &Path, draft: &Draft, taken: &[&str]) -> Result<Pack, Stri
     let base = slug(name);
     let mut id = base.clone();
     let mut n = 2;
-    while taken.contains(&id.as_str()) || BUNDLED.iter().any(|(m, _)| m.contains(&format!("\"{id}\""))) {
+    while root.join(&id).exists()
+        || taken.contains(&id.as_str())
+        || BUNDLED
+            .iter()
+            .any(|(m, _)| m.contains(&format!("\"{id}\"")))
+    {
         id = format!("{base}-{n}");
         n += 1;
     }
+    fs::create_dir_all(root).map_err(|e| e.to_string())?;
     let dir = root.join(&id);
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let img = image::RgbaImage::from_raw(draft.width, draft.height, draft.rgba.to_vec())
-        .ok_or("bad image buffer")?;
-    img.save_with_format(dir.join("paw.png"), image::ImageFormat::Png)
-        .map_err(|e| e.to_string())?;
-    let (hx, hy) = draft.hotspot;
-    let manifest = json!({
-        "schemaVersion": 1,
-        "id": id,
-        "name": name,
-        "pointer": {
-            "idle": "paw.png",
-            "hotspot": [hx, hy],
-            "wrist": [0.5, 1.0],
-        },
-    });
-    let text = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
-    fs::write(dir.join("manifest.json"), text).map_err(|e| e.to_string())?;
-    load_folder(&dir).inspect_err(|_| {
+    fs::create_dir(&dir).map_err(|e| e.to_string())?;
+    let result = (|| {
+        let img = image::RgbaImage::from_raw(draft.width, draft.height, draft.rgba.to_vec())
+            .ok_or("bad image buffer")?;
+        img.save_with_format(dir.join("paw.png"), image::ImageFormat::Png)
+            .map_err(|e| e.to_string())?;
+        let (hx, hy) = draft.hotspot;
+        let mut manifest = json!({
+            "schemaVersion": 1,
+            "id": id,
+            "name": name,
+            "pointer": {
+                "idle": "paw.png",
+                "hotspot": [hx, hy],
+                "wrist": [draft.wrist.0, draft.wrist.1],
+                "jointWidth": draft.joint_width,
+            },
+        });
+        if let Some((_, png)) = &draft.pressed {
+            fs::write(dir.join("pressed.png"), png.as_slice()).map_err(|e| e.to_string())?;
+            manifest["pointer"]["pressed"] = json!("pressed.png");
+        }
+        if let Some((_, path)) = &draft.tap {
+            crate::audio::decode_wav(path)?;
+            fs::copy(path, dir.join("tap.wav")).map_err(|e| e.to_string())?;
+            manifest["sounds"]["tap"] = json!("tap.wav");
+        }
+        if let Some(arm) = &draft.forearm {
+            let image = image::RgbaImage::from_raw(arm.width, arm.height, arm.rgba.to_vec())
+                .ok_or("bad forearm buffer")?;
+            image
+                .save_with_format(dir.join("forearm.png"), image::ImageFormat::Png)
+                .map_err(|e| e.to_string())?;
+            manifest["pointer"]["forearm"] = json!("forearm.png");
+            manifest["pointer"]["forearmAnchor"] = json!([arm.anchor.0, arm.anchor.1]);
+        }
+        let text = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
+        fs::write(dir.join("manifest.json"), text).map_err(|e| e.to_string())?;
+        load_folder(&dir)
+    })();
+    result.inspect_err(|_| {
         let _ = fs::remove_dir_all(&dir);
     })
 }
@@ -346,7 +664,10 @@ mod tests {
         let mut draft = draft_from_file(&png_path).unwrap();
         assert_eq!(draft.height, SPRITE_HEIGHT, "scaled to sprite size");
         assert_eq!(draft.name, "Big Paw");
-        assert!(draft.hotspot.1 > 0.15 && draft.hotspot.1 < 0.2, "tip guessed at the top of the shape");
+        assert!(
+            draft.hotspot.1 > 0.15 && draft.hotspot.1 < 0.2,
+            "tip guessed at the top of the shape"
+        );
         draft.hotspot = (0.5, 0.2);
 
         let root = src.join("packs");
@@ -357,15 +678,56 @@ mod tests {
         std::fs::remove_file(&png_path).unwrap();
         let again = load_folder(&root.join("big-paw-2")).unwrap();
         assert_eq!(again.name, "Big Paw");
+        assert!(
+            again.forearm.is_none(),
+            "legacy single-image packs remain supported"
+        );
+        let arm_path = src.join("Arm.png");
+        img.save(&arm_path).unwrap();
+        draft.forearm = Some(forearm_from_file(&arm_path).unwrap());
+        draft.forearm.as_mut().unwrap().set_anchor((0.4, 0.2));
+        draft.wrist = (0.6, 0.9);
+        draft.joint_width = 0.7;
+        let pair = install_into(&root, &draft, &[]).unwrap();
+        assert_ne!(pair.id, again.id, "existing folders cannot be overwritten");
+        fs::remove_file(&arm_path).unwrap();
+        let reloaded = load_folder(&root.join(pair.id)).unwrap();
+        assert_eq!(reloaded.wrist, Some((0.6, 0.9)));
+        assert_eq!(reloaded.joint_width, 0.7);
+        let arm = reloaded.forearm.unwrap();
+        assert_eq!(arm.anchor, (0.4, 0.2));
+        assert!(!arm.strips.is_empty());
+        assert_eq!(arm.rgba, draft.forearm.as_ref().unwrap().rgba);
+        let manifest_path = root.join(pair.id).join("manifest.json");
+        let mut manifest: Json =
+            serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        manifest["pointer"]["forearm"] = json!("../Arm.png");
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert!(
+            load_folder(&root.join(pair.id))
+                .unwrap_err()
+                .contains("pack folder")
+        );
+        manifest["pointer"]["forearm"] = json!("forearm.png");
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        draft.hotspot = draft.wrist;
+        assert!(install_into(&root, &draft, &[]).is_err());
+        assert_eq!(
+            fs::read_dir(&root).unwrap().count(),
+            2,
+            "failed installs leave no partial pack"
+        );
         std::fs::remove_dir_all(&src).unwrap();
     }
 
     #[test]
     fn opaque_png_is_rejected() {
         let mut img = image::RgbaImage::new(4, 4);
-        img.pixels_mut().for_each(|p| *p = image::Rgba([1, 2, 3, 255]));
+        img.pixels_mut()
+            .for_each(|p| *p = image::Rgba([1, 2, 3, 255]));
         let mut png = Vec::new();
-        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
         assert!(decode(&png).unwrap_err().contains("transparent"));
     }
 
@@ -374,5 +736,59 @@ mod tests {
         assert_eq!(slug("My Cool Paw!"), "my-cool-paw");
         assert_eq!(slug("你好"), "pointer");
         assert!(valid_id(&slug("A  b--c")));
+    }
+
+    #[test]
+    fn pressed_pose_and_pack_sound_survive_folder_import() {
+        let root = std::env::temp_dir().join(format!("tinypaw-extras-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let png = root.join("paw.png");
+        fs::write(&png, BUNDLED[0].1).unwrap();
+        let mut draft = draft_from_file(&png).unwrap();
+        set_pressed(&mut draft, &png).unwrap();
+        // A short mono PCM WAV, decoded without opening an audio device.
+        let wav = root.join("tap.wav");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&44u32.to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&44100u32.to_le_bytes());
+        bytes.extend_from_slice(&88200u32.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&8u32.to_le_bytes());
+        bytes.extend_from_slice(&[0, 0, 1, 0, 0, 0, 255, 255]);
+        fs::write(&wav, bytes).unwrap();
+        draft.tap = Some((crate::audio::decode_wav(&wav).unwrap(), wav.clone()));
+        let source_root = root.join("source");
+        let pack = install_into(&source_root, &draft, &[]).unwrap();
+        assert!(pack.pressed.is_some());
+        assert!(pack.tap.is_some());
+        let destination = root.join("installed");
+        let imported = import_folder_into(&destination, &source_root.join(pack.id), &[]).unwrap();
+        fs::remove_dir_all(&source_root).unwrap();
+        fs::remove_file(&png).unwrap();
+        fs::remove_file(&wav).unwrap();
+        let reloaded = load_folder(&destination.join(imported.id)).unwrap();
+        assert!(reloaded.pressed.is_some());
+        assert!(reloaded.tap.is_some());
+        assert!(
+            import_folder_into(&destination, &destination.join(imported.id), &[imported.id])
+                .is_err()
+        );
+        let path = destination.join(imported.id).join("manifest.json");
+        let mut m: Json = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        m["sounds"]["tap"] = json!("../private.wav");
+        fs::write(&path, serde_json::to_vec(&m).unwrap()).unwrap();
+        assert!(
+            load_folder(&destination.join(imported.id))
+                .unwrap_err()
+                .contains("pack folder")
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 }

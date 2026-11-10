@@ -88,16 +88,25 @@ pub enum Event {
     /// Enabled-only: annotate without holding a key.
     Latch,
     HoldDown,
+    InteractDown,
+    InteractUp,
+    ButtonsReleased,
     HoldUp,
     InputAcquired(Ticket),
     InputFailed(Ticket),
     Pointer(PointerEvent),
     Undo,
     Clear,
-    SelectTool { id: &'static str, factory: ToolFactory },
+    SelectTool {
+        id: &'static str,
+        factory: ToolFactory,
+    },
     /// Freeze from Live, or Return Live when frozen.
     FreezeToggle,
-    StillReady { ticket: Ticket, frame: u64 },
+    StillReady {
+        ticket: Ticket,
+        frame: u64,
+    },
     StillFailed(Ticket),
     Text(TextInput),
     /// Lock, suspend or loss of the target display.
@@ -139,6 +148,8 @@ pub struct Session {
     /// Set when enabled while the hold key was already down: needs a fresh press.
     hold_blocked: bool,
     hold_seq: u64,
+    interacting: bool,
+    interact_released: bool,
     /// Hold released while a button was down: swallow the button-up first.
     awaiting_button_up: bool,
     pointer: Option<(OutputId, Pt)>,
@@ -161,6 +172,8 @@ impl Session {
             hold_down: false,
             hold_blocked: false,
             hold_seq: 0,
+            interacting: false,
+            interact_released: false,
             awaiting_button_up: false,
             pointer: None,
             live: Scene::default(),
@@ -171,6 +184,10 @@ impl Session {
             tool: factory(&settings),
             settings,
         }
+    }
+
+    pub fn waiting_for_interact_resume(&self) -> bool {
+        self.interacting && self.interact_released
     }
 
     pub fn mode(&self) -> Mode {
@@ -197,6 +214,10 @@ impl Session {
 
     /// True between a Freeze request and its still: the overlay shows nothing
     /// so marks are not baked into the capture.
+    pub fn capture_ticket(&self) -> Option<Ticket> {
+        self.capture.map(|c| c.ticket)
+    }
+
     pub fn capturing(&self) -> bool {
         self.capture.is_some()
     }
@@ -260,7 +281,9 @@ impl Session {
             return None;
         }
         let (output, at) = self.pointer?;
-        self.tool.tip(at, now, &self.settings).map(|tip| (output, tip))
+        self.tool
+            .tip(at, now, &self.settings)
+            .map(|tip| (output, tip))
     }
 
     pub fn pointer(&self) -> Option<(OutputId, Pt)> {
@@ -277,6 +300,9 @@ impl Session {
             return 1.0;
         };
         let age = now.saturating_sub(born);
+        if crate::features::system::reduced(&self.settings) {
+            return if age <= FADE_HOLD_MS { 1.0 } else { 0.0 };
+        }
         if age <= FADE_HOLD_MS {
             1.0
         } else {
@@ -287,10 +313,16 @@ impl Session {
     /// True while any mark is visibly fading, so the view needs frames.
     pub fn fade_animating(&self, now: Millis) -> bool {
         self.fading()
-            && self.scene().marks().iter().filter_map(Mark::born).any(|born| {
-                let age = now.saturating_sub(born);
-                age > FADE_HOLD_MS && age <= FADE_HOLD_MS + FADE_OUT_MS
-            })
+            && !crate::features::system::reduced(&self.settings)
+            && self
+                .scene()
+                .marks()
+                .iter()
+                .filter_map(Mark::born)
+                .any(|born| {
+                    let age = now.saturating_sub(born);
+                    age > FADE_HOLD_MS && age <= FADE_HOLD_MS + FADE_OUT_MS
+                })
     }
 
     /// When the next fade starts, if one is waiting.
@@ -308,13 +340,22 @@ impl Session {
     }
 
     pub fn animating(&self, now: Millis) -> bool {
-        (self.is_pointing() && self.tool.animating(now)) || self.fade_animating(now)
+        (self.is_pointing()
+            && !crate::features::system::reduced(&self.settings)
+            && self.tool.animating(now))
+            || self.fade_animating(now)
     }
 
     pub fn handle(&mut self, event: Event, now: Millis) -> Vec<Effect> {
         let mut effects = Vec::new();
         if self.fading() {
-            let cutoff = now.saturating_sub(FADE_HOLD_MS + FADE_OUT_MS);
+            let duration = FADE_HOLD_MS
+                + if crate::features::system::reduced(&self.settings) {
+                    0
+                } else {
+                    FADE_OUT_MS
+                };
+            let cutoff = now.saturating_sub(duration);
             self.live.expire(cutoff);
             if let Some(f) = &mut self.frozen {
                 f.scene.expire(cutoff);
@@ -337,6 +378,8 @@ impl Session {
             Event::Latch => match self.mode {
                 Mode::Off => {}
                 Mode::Passthrough => {
+                    self.interacting = false;
+                    self.interact_released = false;
                     if !self.awaiting_button_up {
                         self.request_input(Ownership::Latched);
                     }
@@ -346,6 +389,31 @@ impl Session {
                 }
                 Mode::Annotating(Ownership::Latched) => {}
             },
+            Event::InteractDown => {
+                if self.mode == Mode::Annotating(Ownership::Latched)
+                    && self.tool_id == "point"
+                    && !self.tool.button_down()
+                    && self.frozen.is_none()
+                    && !self.capturing()
+                {
+                    self.interacting = true;
+                    self.interact_released = false;
+                    self.pending = None;
+                    self.release_to_passthrough(now, &mut effects);
+                }
+            }
+            Event::InteractUp => {
+                if self.interacting {
+                    self.interact_released = true;
+                }
+            }
+            Event::ButtonsReleased => {
+                if self.interacting && self.interact_released && self.mode == Mode::Passthrough {
+                    self.interacting = false;
+                    self.interact_released = false;
+                    self.request_input(Ownership::Latched);
+                }
+            }
             Event::HoldDown => {
                 if self.hold_down {
                     return effects; // auto-repeat or duplicate edge
@@ -409,7 +477,8 @@ impl Session {
             Event::SelectTool { id, factory } => self.select_tool(id, factory, now, &mut effects),
             Event::Text(input) => {
                 if self.is_pointing() {
-                    let done = self.with_tool(&mut effects, now, |tool, cx| tool.text_input(input, cx));
+                    let done =
+                        self.with_tool(&mut effects, now, |tool, cx| tool.text_input(input, cx));
                     if done {
                         let (id, factory) = self.default_tool;
                         self.select_tool(id, factory, now, &mut effects);
@@ -444,7 +513,9 @@ impl Session {
             Event::StillFailed(ticket) => {
                 if self.capture.map(|c| c.ticket) == Some(ticket) {
                     self.capture = None;
-                    effects.push(Effect::Notice("Freeze needs a screen capture, which failed"));
+                    effects.push(Effect::Notice(
+                        "Freeze needs a screen capture, which failed",
+                    ));
                 }
             }
             Event::SettingsChanged(values) => {
@@ -553,6 +624,8 @@ impl Session {
         let had_input = matches!(self.mode, Mode::Annotating(_))
             || self.pending.is_some()
             || self.awaiting_button_up;
+        self.interacting = false;
+        self.interact_released = false;
         self.mode = Mode::Off;
         self.pending = None;
         self.awaiting_button_up = false;
@@ -605,6 +678,9 @@ impl Session {
             return;
         }
         match ev.kind {
+            PointerKind::Left if self.pointer.is_some_and(|(output, _)| output != ev.output) => {
+                return;
+            }
             PointerKind::Left => self.pointer = None,
             _ => self.pointer = Some((ev.output, ev.pos)),
         }

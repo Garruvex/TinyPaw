@@ -7,12 +7,14 @@ use crate::registry::{
     Value, when_enabled,
 };
 use crate::session::{
-    Event, Label, Mark, Millis, OutputId, PointerEvent, PointerKind, Pt, TextDraft, TextInput,
-    Tip, ToolCx, ToolState,
+    Event, Label, Mark, Millis, OutputId, PointerEvent, PointerKind, Pt, TextDraft, TextInput, Tip,
+    ToolCx, ToolState,
 };
 
 pub const TOOL: &str = "text";
 pub const SELECT: &str = "text.select";
+pub const COLOR: &str = "text.color";
+pub const BACKING: &str = "text.backing";
 pub const SIZE: &str = "text.size";
 
 /// Longest label accepted, in characters.
@@ -43,12 +45,31 @@ pub fn register(r: &mut Registrar) {
         on_release: None,
     });
     r.setting(SettingDef {
+        id: COLOR,
+        label: "Label colour",
+        group: "Appearance",
+        order: 21,
+        default: Value::Color([255, 255, 255, 255]),
+        constraint: Constraint::None,
+    });
+    r.setting(SettingDef {
+        id: BACKING,
+        label: "Label backing",
+        group: "Appearance",
+        order: 22,
+        default: Value::Bool(true),
+        constraint: Constraint::None,
+    });
+    r.setting(SettingDef {
         id: SIZE,
         label: "Label size",
         group: "Appearance",
         order: 20,
         default: Value::Float(18.0),
-        constraint: Constraint::Range { min: 12.0, max: 48.0 },
+        constraint: Constraint::Range {
+            min: 12.0,
+            max: 48.0,
+        },
     });
 }
 
@@ -62,6 +83,9 @@ struct Draft {
     at: Pt,
     text: String,
     size: f32,
+    history: Vec<String>,
+    color: crate::session::Rgba,
+    backing: bool,
 }
 
 #[derive(Debug, Default)]
@@ -79,6 +103,8 @@ impl TextTool {
                     at: d.at,
                     text,
                     size: d.size,
+                    color: d.color,
+                    backing: d.backing,
                 }));
             }
         }
@@ -99,6 +125,9 @@ impl ToolState for TextTool {
             at: Pt::new(ev.pos.x, ev.pos.y - size * 0.7),
             text: String::new(),
             size,
+            history: Vec::new(),
+            color: crate::session::Rgba(cx.settings.color(COLOR)),
+            backing: cx.settings.bool(BACKING),
         });
     }
 
@@ -133,9 +162,20 @@ impl ToolState for TextTool {
 
     fn text_input(&mut self, input: TextInput, cx: &mut ToolCx<'_>) -> bool {
         match input {
+            TextInput::Undo => {
+                if let Some(d) = &mut self.draft
+                    && let Some(text) = d.history.pop()
+                {
+                    d.text = text;
+                }
+                false
+            }
             TextInput::Changed(text) => {
                 if let Some(d) = &mut self.draft {
                     // One line only; paste with newlines collapses to spaces.
+                    if d.text != text {
+                        d.history.push(d.text.clone());
+                    }
                     d.text = text
                         .replace(['\r', '\n'], " ")
                         .chars()

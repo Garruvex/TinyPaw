@@ -4,6 +4,7 @@
 //! thread stays the only writer of session state and idles without polling.
 
 pub mod capture;
+pub mod displays;
 pub mod hotkeys;
 pub mod ipc;
 pub mod tray;
@@ -17,11 +18,18 @@ use iced::futures::stream::{self, BoxStream, StreamExt};
 
 #[derive(Debug, Clone)]
 pub enum External {
-    Hotkey { id: u32, pressed: bool },
+    Hotkey {
+        id: u32,
+        pressed: bool,
+    },
     /// A tray menu entry, identified by its registered command ID.
     Menu(String),
     /// Left click on the tray icon.
     TrayClick,
+    Interrupted,
+    DisplaysChanged,
+    MotionChanged,
+    InteractKey(bool),
     Cli {
         line: String,
         reply: std::sync::mpsc::Sender<String>,

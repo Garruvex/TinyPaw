@@ -1,1 +1,6 @@
 /target
+
+# Local agent tooling and test runtime data
+/.codex/
+/.tmp-runtime/
+/.tmp-transfer/

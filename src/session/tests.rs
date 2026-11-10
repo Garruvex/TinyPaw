@@ -33,7 +33,14 @@ fn ack(s: &mut Session) {
 
 fn draw_line(s: &mut Session, from: (f32, f32), to: (f32, f32)) -> Vec<Effect> {
     let mut fx = s.handle(ptr(PointerKind::Down, from.0, from.1), 0);
-    fx.extend(s.handle(ptr(PointerKind::Moved, (from.0 + to.0) / 2.0, (from.1 + to.1) / 2.0), 0));
+    fx.extend(s.handle(
+        ptr(
+            PointerKind::Moved,
+            (from.0 + to.0) / 2.0,
+            (from.1 + to.1) / 2.0,
+        ),
+        0,
+    ));
     fx.extend(s.handle(ptr(PointerKind::Moved, to.0, to.1), 0));
     fx.extend(s.handle(ptr(PointerKind::Up, to.0, to.1), 0));
     fx
@@ -91,11 +98,46 @@ fn drag_draws_from_original_press_without_tap() {
     let fx = draw_line(&mut s, (10.0, 10.0), (60.0, 10.0));
     assert!(!fx.contains(&Effect::PlayTap));
     assert_eq!(s.scene().marks().len(), 1);
-    let Mark::Stroke(stroke) = &s.scene().marks()[0] else { panic!("expected a stroke") };
+    let Mark::Stroke(stroke) = &s.scene().marks()[0] else {
+        panic!("expected a stroke")
+    };
     assert_eq!(stroke.points[0], Pt::new(10.0, 10.0));
     assert_eq!(*stroke.points.last().unwrap(), Pt::new(60.0, 10.0));
     assert_eq!(stroke.width, 4.0);
     assert_eq!(stroke.color, Rgba::CYAN);
+}
+
+#[test]
+fn stretch_grip_animates_and_drag_stays_pressed_until_release() {
+    let reg = registry();
+    let mut values = reg.defaults();
+    reg.set(&mut values, point::PRESENTATION, Value::Choice("stretch"))
+        .unwrap();
+    let mut s = Session::new(point::TOOL, point::new_state, values);
+    s.handle(Event::MasterToggle, 0);
+    ack(&mut s);
+    s.handle(ptr(PointerKind::Moved, 10.0, 10.0), 0);
+    s.handle(ptr(PointerKind::Down, 10.0, 10.0), 10);
+    s.handle(ptr(PointerKind::Moved, 60.0, 10.0), 20);
+    let press = |s: &Session, now| match s.tip(now) {
+        Some((
+            _,
+            Tip::Paw {
+                press,
+                stretch: true,
+                ..
+            },
+        )) => press,
+        other => panic!("expected stretch paw, got {other:?}"),
+    };
+    assert_eq!(press(&s, 20), 1.0);
+    assert!(s.animating(30));
+    let fx = s.handle(ptr(PointerKind::Up, 60.0, 10.0), 40);
+    assert!(!fx.contains(&Effect::PlayTap));
+    assert_eq!(press(&s, 40), 1.0);
+    assert!((press(&s, 90) - 0.5).abs() < 0.001);
+    assert_eq!(press(&s, 140), 0.0);
+    assert!(!s.animating(2000));
 }
 
 #[test]
@@ -279,7 +321,8 @@ fn stroke_ends_at_display_boundary() {
 fn faded_ink_expires_and_leaves_undo_history() {
     let reg = registry();
     let mut values = reg.defaults();
-    reg.set(&mut values, system::INK_FADE, Value::Choice("3s")).unwrap();
+    reg.set(&mut values, system::INK_FADE, Value::Choice("3s"))
+        .unwrap();
     let mut s = Session::new(point::TOOL, point::new_state, values);
     s.handle(Event::MasterToggle, 0);
     ack(&mut s);
@@ -329,7 +372,11 @@ fn grip_x(s: &Session, now: Millis) -> (Pt, f32) {
 fn stick_grip_eases_while_tip_stays_on_pointer() {
     let mut s = stick_session();
     s.handle(ptr(PointerKind::Moved, 100.0, 50.0), 0);
-    assert_eq!(grip_x(&s, 0), (Pt::new(100.0, 50.0), 100.0), "first sample snaps");
+    assert_eq!(
+        grip_x(&s, 0),
+        (Pt::new(100.0, 50.0), 100.0),
+        "first sample snaps"
+    );
     assert!(!s.animating(0));
 
     s.handle(ptr(PointerKind::Moved, 500.0, 50.0), 1000);
@@ -398,7 +445,9 @@ fn text_places_a_label_and_returns_to_point() {
     s.handle(Event::Text(TextInput::Changed("Loot here".into())), 0);
     s.handle(Event::Text(TextInput::Submit), 0);
     assert_eq!(s.active_tool(), point::TOOL);
-    let Mark::Label(label) = &s.scene().marks()[0] else { panic!("expected a label") };
+    let Mark::Label(label) = &s.scene().marks()[0] else {
+        panic!("expected a label")
+    };
     assert_eq!(label.text, "Loot here");
 }
 
@@ -493,7 +542,10 @@ fn spotlight_shows_only_while_pointing() {
     s.handle(ptr(PointerKind::Moved, 300.0, 200.0), 0);
     assert_eq!(s.spotlight().map(|(_, _, r)| r), Some(160.0));
     s.handle(Event::HoldUp, 0);
-    assert!(s.spotlight().is_none(), "mask hides when input returns to the game");
+    assert!(
+        s.spotlight().is_none(),
+        "mask hides when input returns to the game"
+    );
 }
 
 fn capture_ticket(fx: &[Effect]) -> Ticket {
@@ -512,7 +564,13 @@ fn freeze_draws_on_a_separate_scene_and_return_live_restores_marks() {
     let t = capture_ticket(&s.handle(Event::FreezeToggle, 0));
     assert!(s.capturing());
     assert!(s.tip(0).is_none(), "nothing drawn until the still is up");
-    s.handle(Event::StillReady { ticket: t, frame: 7 }, 0);
+    s.handle(
+        Event::StillReady {
+            ticket: t,
+            frame: 7,
+        },
+        0,
+    );
     assert_eq!(s.frozen_frame(), Some(7));
     assert!(s.scene().is_empty(), "frozen scene starts empty");
     draw_line(&mut s, (0.0, 20.0), (50.0, 20.0));
@@ -529,8 +587,17 @@ fn freeze_from_passthrough_takes_input_only_after_the_still() {
     let mut s = session_with("hold");
     s.handle(Event::MasterToggle, 0);
     let t = capture_ticket(&s.handle(Event::FreezeToggle, 0));
-    assert!(s.pending_ticket().is_none(), "no focus change before capture");
-    s.handle(Event::StillReady { ticket: t, frame: 1 }, 0);
+    assert!(
+        s.pending_ticket().is_none(),
+        "no focus change before capture"
+    );
+    s.handle(
+        Event::StillReady {
+            ticket: t,
+            frame: 1,
+        },
+        0,
+    );
     assert_eq!(s.overlay_state(), OverlayState::Interactive);
     ack(&mut s);
     assert!(s.is_pointing());
@@ -544,7 +611,13 @@ fn late_still_after_off_is_released() {
     let mut s = on("toggle");
     let t = capture_ticket(&s.handle(Event::FreezeToggle, 0));
     s.handle(Event::MasterOff, 0);
-    let fx = s.handle(Event::StillReady { ticket: t, frame: 3 }, 0);
+    let fx = s.handle(
+        Event::StillReady {
+            ticket: t,
+            frame: 3,
+        },
+        0,
+    );
     assert!(fx.contains(&Effect::ReleaseStill));
     assert_eq!(s.frozen_frame(), None);
     assert_eq!(s.mode(), Mode::Off);
@@ -568,8 +641,126 @@ fn frozen_scene_survives_a_hold_release() {
     s.handle(Event::HoldDown, 0);
     ack(&mut s);
     let t = capture_ticket(&s.handle(Event::FreezeToggle, 0));
-    s.handle(Event::StillReady { ticket: t, frame: 2 }, 0);
+    s.handle(
+        Event::StillReady {
+            ticket: t,
+            frame: 2,
+        },
+        0,
+    );
     s.handle(Event::HoldUp, 0);
     assert!(s.is_pointing(), "frozen annotation is latched");
     assert_eq!(s.frozen_frame(), Some(2));
+}
+
+#[test]
+fn interact_keeps_ink_and_waits_for_gameplay_buttons() {
+    let mut s = session_with("toggle");
+    s.handle(Event::MasterToggle, 0);
+    ack(&mut s);
+    draw_line(&mut s, (0.0, 0.0), (20.0, 20.0));
+    assert_eq!(s.handle(Event::InteractDown, 10), vec![Effect::ReturnFocus]);
+    assert_eq!(s.overlay_state(), OverlayState::ClickThrough);
+    assert!(s.tip(10).is_none());
+    assert_eq!(s.scene().marks().len(), 1);
+    s.handle(Event::ButtonsReleased, 11);
+    assert!(s.pending_ticket().is_none());
+    s.handle(Event::InteractUp, 12);
+    assert!(s.pending_ticket().is_none());
+    s.handle(Event::ButtonsReleased, 13);
+    ack(&mut s);
+    assert!(s.is_pointing());
+    assert_eq!(s.scene().marks().len(), 1);
+}
+
+#[test]
+fn interact_does_not_interrupt_drag_or_hold_to_draw() {
+    let mut s = session_with("toggle");
+    s.handle(Event::MasterToggle, 0);
+    ack(&mut s);
+    s.handle(ptr(PointerKind::Down, 10.0, 10.0), 1);
+    assert!(s.handle(Event::InteractDown, 2).is_empty());
+    assert!(s.is_pointing());
+    let mut held = session_with("hold");
+    held.handle(Event::MasterToggle, 0);
+    held.handle(Event::HoldDown, 1);
+    ack(&mut held);
+    held.handle(Event::InteractDown, 2);
+    assert!(held.is_pointing());
+}
+
+#[test]
+fn interact_release_after_off_cannot_reacquire() {
+    let mut s = session_with("toggle");
+    s.handle(Event::MasterToggle, 0);
+    ack(&mut s);
+    s.handle(Event::InteractDown, 1);
+    s.handle(Event::MasterOff, 2);
+    s.handle(Event::InteractUp, 3);
+    s.handle(Event::ButtonsReleased, 4);
+    assert_eq!(s.mode(), Mode::Off);
+    assert!(s.pending_ticket().is_none());
+}
+
+#[test]
+fn text_undo_and_style_are_independent_of_annotation_history() {
+    let reg = registry();
+    let mut s = session_with("toggle");
+    let mut settings = s.settings().clone();
+    reg.set(
+        &mut settings,
+        crate::features::text::COLOR,
+        Value::Color([255, 90, 100, 255]),
+    )
+    .unwrap();
+    reg.set(
+        &mut settings,
+        crate::features::text::BACKING,
+        Value::Bool(false),
+    )
+    .unwrap();
+    s.handle(Event::SettingsChanged(settings), 0);
+    s.handle(Event::MasterToggle, 0);
+    ack(&mut s);
+    draw_line(&mut s, (0.0, 0.0), (30.0, 30.0));
+    reg.dispatch(crate::features::text::SELECT, &mut s, 1)
+        .unwrap();
+    s.handle(ptr(PointerKind::Down, 80.0, 80.0), 2);
+    s.handle(Event::Text(TextInput::Changed("Hello".into())), 3);
+    s.handle(Event::Text(TextInput::Changed("Hello world".into())), 4);
+    s.handle(Event::Text(TextInput::Undo), 5);
+    assert_eq!(s.text_draft().unwrap().text, "Hello");
+    assert_eq!(s.scene().marks().len(), 1);
+    s.handle(Event::Text(TextInput::Submit), 6);
+    let Mark::Label(label) = &s.scene().marks()[1] else {
+        panic!("label")
+    };
+    assert_eq!(label.text, "Hello");
+    assert_eq!(label.color, Rgba([255, 90, 100, 255]));
+    assert!(!label.backing);
+}
+
+#[test]
+fn reduced_motion_snaps_grip_and_expires_ink_without_fading() {
+    let reg = registry();
+    let mut s = session_with("toggle");
+    let mut settings = s.settings().clone();
+    reg.set(&mut settings, system::MOTION, Value::Choice("reduced"))
+        .unwrap();
+    reg.set(&mut settings, point::PRESENTATION, Value::Choice("stretch"))
+        .unwrap();
+    reg.set(&mut settings, system::INK_FADE, Value::Choice("3s"))
+        .unwrap();
+    s.handle(Event::SettingsChanged(settings), 0);
+    s.handle(Event::MasterToggle, 0);
+    ack(&mut s);
+    draw_line(&mut s, (0.0, 0.0), (100.0, 100.0));
+    let (_, Tip::Paw { grip_x, at, .. }) = s.tip(1).unwrap() else {
+        panic!("paw")
+    };
+    assert_eq!(grip_x, at.x);
+    assert!(!s.animating(1));
+    assert_eq!(s.mark_alpha(&s.scene().marks()[0], 3001), 0.0);
+    s.handle(Event::Tick, 3001);
+    assert!(s.scene().is_empty());
 }

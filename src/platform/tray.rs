@@ -17,7 +17,7 @@ pub struct Tray {
     shown: Option<bool>,
 }
 
-pub fn build(registry: &'static Registry) -> Result<Tray, String> {
+pub fn build(registry: &Registry) -> Result<Tray, String> {
     let menu = Menu::new();
     let mut master = None;
     let mut items = Vec::new();
@@ -95,16 +95,22 @@ impl Tray {
             None => format!("TinyPaw: {state}"),
         };
         let _ = self.icon.set_tooltip(Some(tip));
-        let _ = self
-            .icon
-            .set_icon(Some(if on { self.on_icon.clone() } else { self.off_icon.clone() }));
+        let _ = self.icon.set_icon(Some(if on {
+            self.on_icon.clone()
+        } else {
+            self.off_icon.clone()
+        }));
     }
 }
 
 /// A 32×32 placeholder paw print: warm when On, grey when Off.
 fn paw_icon(on: bool) -> Result<Icon, String> {
     const N: usize = 32;
-    let color: [u8; 3] = if on { [0xF2, 0x8C, 0x28] } else { [0x9A, 0x9A, 0x9A] };
+    let color: [u8; 3] = if on {
+        [0xF2, 0x8C, 0x28]
+    } else {
+        [0x9A, 0x9A, 0x9A]
+    };
     let blobs: [(f32, f32, f32); 5] = [
         (16.0, 21.0, 8.0),
         (7.0, 12.0, 3.6),
@@ -118,7 +124,9 @@ fn paw_icon(on: bool) -> Result<Icon, String> {
             let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
             let coverage = blobs
                 .iter()
-                .map(|&(cx, cy, r)| (r + 0.5 - ((px - cx).powi(2) + (py - cy).powi(2)).sqrt()).clamp(0.0, 1.0))
+                .map(|&(cx, cy, r)| {
+                    (r + 0.5 - ((px - cx).powi(2) + (py - cy).powi(2)).sqrt()).clamp(0.0, 1.0)
+                })
                 .fold(0.0f32, f32::max);
             let i = (y * N + x) * 4;
             rgba[i..i + 3].copy_from_slice(&color);
