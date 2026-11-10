@@ -1,20 +1,26 @@
-//! Point: tap with the paw, drag to draw.
+//! Point: tap with the paw or laser, drag to draw.
 
 use crate::features::system::{INK_COLOR, INK_WIDTH};
+use crate::registry::SettingValues;
 use crate::registry::{
     CommandDef, Constraint, Outcome, Registrar, SettingDef, Surfaces, ToolDef, Value,
     when_enabled,
 };
 use crate::session::{
-    Event, Mark, Millis, OutputId, PointerEvent, PointerKind, Pt, Rgba, Stroke, Tip, ToolCx,
-    ToolState, Effect,
+    Effect, Event, Mark, Millis, OutputId, PointerEvent, PointerKind, Pt, Rgba, Stroke, Tip,
+    ToolCx, ToolState,
 };
-use crate::registry::SettingValues;
 
 pub const TOOL: &str = "point";
 pub const SELECT: &str = "point.select";
+pub const USE_PAW: &str = "point.paw";
+pub const USE_LASER: &str = "point.laser";
 pub const STYLE: &str = "point.style";
+pub const PRESENTATION: &str = "point.presentation";
+pub const SIZE: &str = "point.size";
 
+/// Paw height in logical pixels that the artwork is drawn at by default.
+pub const BASE_SIZE: f32 = 56.0;
 /// Movement in logical pixels before a press becomes a stroke.
 pub const DRAG_THRESHOLD: f32 = 4.0;
 /// Length of the press-and-release tap animation.
@@ -38,10 +44,36 @@ pub fn register(r: &mut Registrar) {
         order: 0,
         shortcut: None,
         available: when_enabled,
-        handler: |_| Outcome::Session(Event::SelectTool {
-            id: TOOL,
-            factory: new_state,
-        }),
+        handler: |_| {
+            Outcome::Session(Event::SelectTool {
+                id: TOOL,
+                factory: new_state,
+            })
+        },
+        on_release: None,
+    });
+    r.command(CommandDef {
+        id: USE_PAW,
+        label: "Paw",
+        cli: Some("paw"),
+        surfaces: Surfaces::PICKER.with(Surfaces::CLI),
+        group: "tools",
+        order: 0,
+        shortcut: None,
+        available: |_| Ok(()),
+        handler: |_| Outcome::Set(STYLE, Value::Choice("paw")),
+        on_release: None,
+    });
+    r.command(CommandDef {
+        id: USE_LASER,
+        label: "Laser",
+        cli: Some("laser"),
+        surfaces: Surfaces::PICKER.with(Surfaces::CLI),
+        group: "tools",
+        order: 1,
+        shortcut: None,
+        available: |_| Ok(()),
+        handler: |_| Outcome::Set(STYLE, Value::Choice("laser")),
         on_release: None,
     });
     r.setting(SettingDef {
@@ -51,6 +83,23 @@ pub fn register(r: &mut Registrar) {
         order: 0,
         default: Value::Choice("paw"),
         constraint: Constraint::Choices(&["paw", "laser"]),
+    });
+    r.setting(SettingDef {
+        id: PRESENTATION,
+        label: "Presentation",
+        group: "Appearance",
+        order: 1,
+        default: Value::Choice("furry"),
+        // "stretch" joins once a pack supplies forearm art.
+        constraint: Constraint::Choices(&["furry", "stick"]),
+    });
+    r.setting(SettingDef {
+        id: SIZE,
+        label: "Size",
+        group: "Appearance",
+        order: 2,
+        default: Value::Float(BASE_SIZE as f64),
+        constraint: Constraint::Range { min: 32.0, max: 96.0 },
     });
 }
 
@@ -81,12 +130,14 @@ fn new_stroke(output: OutputId, points: Vec<Pt>, settings: &SettingValues) -> Ma
         color: Rgba(settings.color(INK_COLOR)),
         width: settings.float(INK_WIDTH) as f32,
         points,
+        born: 0,
     })
 }
 
 impl PointTool {
     fn commit(&mut self, cx: &mut ToolCx<'_>) {
-        if let Gesture::Drawing(mark) = std::mem::take(&mut self.gesture) {
+        if let Gesture::Drawing(mut mark) = std::mem::take(&mut self.gesture) {
+            mark.set_born(cx.now);
             cx.scene.push(mark);
         }
     }
@@ -143,6 +194,7 @@ impl ToolState for PointTool {
                     {
                         stroke.points.push(ev.pos);
                     }
+                    mark.set_born(cx.now);
                     cx.scene.push(mark);
                 }
             },
@@ -179,7 +231,12 @@ impl ToolState for PointTool {
         };
         Some(match settings.choice(STYLE) {
             "laser" => Tip::Laser { at, press },
-            _ => Tip::Paw { at, press },
+            _ => Tip::Paw {
+                at,
+                press,
+                scale: settings.float(SIZE) as f32 / BASE_SIZE,
+                stick: settings.choice(PRESENTATION) == "stick",
+            },
         })
     }
 

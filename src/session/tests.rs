@@ -274,3 +274,35 @@ fn stroke_ends_at_display_boundary() {
     assert_eq!(s.scene().marks().len(), 1);
     assert_eq!(s.draft().unwrap().output(), OutputId(1));
 }
+
+#[test]
+fn faded_ink_expires_and_leaves_undo_history() {
+    let reg = registry();
+    let mut values = reg.defaults();
+    reg.set(&mut values, system::INK_FADE, Value::Choice("3s")).unwrap();
+    let mut s = Session::new(point::TOOL, point::new_state, values);
+    s.handle(Event::MasterToggle, 0);
+    ack(&mut s);
+    s.handle(ptr(PointerKind::Down, 0.0, 0.0), 100);
+    s.handle(ptr(PointerKind::Moved, 40.0, 0.0), 4000); // held past 3 s
+    s.handle(ptr(PointerKind::Up, 40.0, 0.0), 5000);
+    let mark = s.scene().marks()[0].clone();
+    assert_eq!(mark.born(), 5000, "fade starts on release");
+    assert_eq!(s.mark_alpha(&mark, 7000), 1.0);
+    assert!(s.next_fade(7000).is_some());
+    assert!(s.mark_alpha(&mark, 8200) < 1.0);
+    assert!(s.fade_animating(8200));
+    s.handle(Event::Tick, 8500);
+    assert!(s.scene().is_empty());
+}
+
+#[test]
+fn keep_mode_never_fades() {
+    let mut s = session_with("toggle");
+    s.handle(Event::MasterToggle, 0);
+    ack(&mut s);
+    draw_line(&mut s, (0.0, 0.0), (50.0, 0.0));
+    s.handle(Event::Tick, 60_000);
+    assert_eq!(s.scene().marks().len(), 1);
+    assert_eq!(s.next_fade(0), None);
+}

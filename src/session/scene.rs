@@ -27,7 +27,7 @@ pub struct Rgba(pub [u8; 4]);
 
 impl Rgba {
     #[cfg(test)]
-    pub const CYAN: Rgba = Rgba([0x00, 0xE5, 0xFF, 0xFF]);
+    pub const CYAN: Rgba = Rgba([0x22, 0xD3, 0xEE, 0xFF]);
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -36,6 +36,8 @@ pub struct Stroke {
     pub color: Rgba,
     pub width: f32,
     pub points: Vec<Pt>,
+    /// When the stroke was committed; drives optional fading.
+    pub born: u64,
 }
 
 /// Anything that undo and clear operate on. Labels and pins join in later phases.
@@ -48,6 +50,18 @@ impl Mark {
     pub fn output(&self) -> OutputId {
         match self {
             Mark::Stroke(s) => s.output,
+        }
+    }
+
+    pub fn born(&self) -> u64 {
+        match self {
+            Mark::Stroke(s) => s.born,
+        }
+    }
+
+    pub fn set_born(&mut self, at: u64) {
+        match self {
+            Mark::Stroke(s) => s.born = at,
         }
     }
 }
@@ -85,6 +99,15 @@ impl Scene {
             self.revision += 1;
         }
         mark
+    }
+
+    /// Removes marks committed before `cutoff`, also dropping them from undo.
+    pub fn expire(&mut self, cutoff: u64) {
+        let before = self.marks.len();
+        self.marks.retain(|m| m.born() >= cutoff);
+        if self.marks.len() != before {
+            self.revision += 1;
+        }
     }
 
     pub fn clear(&mut self) {

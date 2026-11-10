@@ -21,7 +21,6 @@ impl Surfaces {
     pub const TOOLBAR: Surfaces = Surfaces(2);
     pub const PICKER: Surfaces = Surfaces(4);
     pub const CLI: Surfaces = Surfaces(8);
-    #[cfg(test)]
     pub const NONE: Surfaces = Surfaces(0);
 
     pub const fn with(self, other: Surfaces) -> Surfaces {
@@ -48,6 +47,8 @@ pub type Availability = fn(&Session) -> Result<(), Unavailable>;
 /// What a command handler asks the session or the shell to do.
 pub enum Outcome {
     Session(Event),
+    /// Change one registered setting through the typed update path.
+    Set(&'static str, Value),
     /// Handled by the shell, such as Quit.
     Shell(ShellAction),
 }
@@ -55,6 +56,9 @@ pub enum Outcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellAction {
     Quit,
+    OpenSettings,
+    WheelOpen,
+    WheelClose,
 }
 
 pub type Handler = fn(&Session) -> Outcome;
@@ -75,7 +79,6 @@ pub struct CommandDef {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)] // Bool backs Mute and Lens toggles in phase 2.
 pub enum Value {
     Bool(bool),
     Float(f64),
@@ -126,6 +129,14 @@ impl SettingValues {
             Some(Value::Color(c)) => *c,
             _ => [0xFF; 4],
         }
+    }
+
+    pub fn bool(&self, id: &str) -> bool {
+        matches!(self.0.get(id), Some(Value::Bool(true)))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&'static str, &Value)> {
+        self.0.iter().map(|(k, v)| (*k, v))
     }
 
     pub fn choice(&self, id: &str) -> &'static str {
@@ -308,6 +319,14 @@ impl Registry {
             .map(|(s, i)| (s, &self.commands[*i]))
     }
 
+    /// The default binding of a command, formatted for tooltips and settings.
+    pub fn shortcut_label(&self, id: &str) -> Option<String> {
+        self.shortcuts
+            .iter()
+            .find(|(_, i)| self.commands[*i].id == id)
+            .map(|(s, _)| s.label())
+    }
+
     pub fn defaults(&self) -> SettingValues {
         SettingValues(self.settings.iter().map(|s| (s.id, s.default.clone())).collect())
     }
@@ -359,6 +378,10 @@ impl Registry {
         })
     }
 
+    pub fn setting(&self, id: &str) -> Option<&SettingDef> {
+        self.settings.iter().find(|s| s.id == id)
+    }
+
     #[cfg(test)]
     pub fn reset(&self, values: &mut SettingValues, id: &str) {
         if let Some(def) = self.settings.iter().find(|s| s.id == id) {
@@ -399,6 +422,7 @@ impl Registry {
     fn apply(outcome: Outcome, session: &mut Session, now: Millis) -> Dispatched {
         match outcome {
             Outcome::Session(event) => Dispatched::Effects(session.handle(event, now)),
+            Outcome::Set(id, value) => Dispatched::Set(id, value),
             Outcome::Shell(action) => Dispatched::Shell(action),
         }
     }
@@ -407,6 +431,8 @@ impl Registry {
 #[derive(Debug, PartialEq)]
 pub enum Dispatched {
     Effects(Vec<Effect>),
+    /// The shell validates, applies and persists the change.
+    Set(&'static str, Value),
     Shell(ShellAction),
 }
 
@@ -431,6 +457,11 @@ pub fn when_enabled(s: &Session) -> Result<(), Unavailable> {
     } else {
         Err(Unavailable("TinyPaw is Off"))
     }
+}
+
+/// For tools that are registered and shown but land in a later phase.
+pub fn later_phase(_: &Session) -> Result<(), Unavailable> {
+    Err(Unavailable("Coming in a later alpha"))
 }
 
 #[cfg(test)]

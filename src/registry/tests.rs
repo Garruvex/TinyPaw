@@ -205,3 +205,25 @@ fn parses_text_into_declared_types() {
     );
     assert!(reg.parse_value("nope", "1").is_err());
 }
+
+#[test]
+fn mute_command_flips_the_setting_through_set() {
+    let reg = Registry::build(features::BUILTINS).unwrap();
+    let mut s = session(&reg);
+    let d = reg.dispatch(features::sound::TOGGLE_MUTE, &mut s, 0).unwrap();
+    assert_eq!(d, Dispatched::Set(features::sound::MUTE, Value::Bool(true)));
+}
+
+#[test]
+fn upcoming_tools_are_listed_but_refused() {
+    let reg = Registry::build(features::BUILTINS).unwrap();
+    let mut s = session(&reg);
+    reg.dispatch(system::MASTER_TOGGLE, &mut s, 0).unwrap();
+    let freeze = reg.command_by_cli("freeze").unwrap();
+    assert!(reg.dispatch(freeze.id, &mut s, 0).is_err());
+    assert_eq!(reg.shortcut_label(freeze.id).as_deref(), Some("Ctrl+Alt+F"));
+    assert_eq!(
+        reg.shortcut_label(features::wheel::OPEN).as_deref(),
+        Some("Ctrl+Alt+W")
+    );
+}

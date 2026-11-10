@@ -1,11 +1,21 @@
 //! Built-in feature modules. Adding a feature means adding its module and one
 //! line to [`BUILTINS`].
 
+pub mod display;
 pub mod point;
+pub mod sound;
 pub mod system;
+pub mod upcoming;
+pub mod wheel;
 
 use crate::registry::RegisterFn;
 
-/// Order matters only for display ordering ties; the first registered tool is
-/// the default tool.
-pub const BUILTINS: &[RegisterFn] = &[point::register, system::register];
+/// The first registered tool is the default tool.
+pub const BUILTINS: &[RegisterFn] = &[
+    point::register,
+    system::register,
+    sound::register,
+    display::register,
+    wheel::register,
+    upcoming::register,
+];

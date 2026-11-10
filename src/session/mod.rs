@@ -13,6 +13,11 @@ use crate::registry::SettingValues;
 /// Milliseconds since the resident process started.
 pub type Millis = u64;
 
+/// With fading on, a stroke stays fully visible this long after release…
+pub const FADE_HOLD_MS: Millis = 3000;
+/// …then fades out over this long and is removed.
+pub const FADE_OUT_MS: Millis = 400;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivationStyle {
     /// On opens Point immediately.
@@ -77,6 +82,8 @@ pub enum Event {
     /// Lock, suspend or loss of the target display.
     Interrupted,
     SettingsChanged(SettingValues),
+    /// Time passed; expires faded ink.
+    Tick,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -190,13 +197,61 @@ impl Session {
         self.tool.tip(at, now, &self.settings).map(|tip| (output, tip))
     }
 
+    pub fn pointer(&self) -> Option<(OutputId, Pt)> {
+        self.pointer
+    }
+
+    pub fn fading(&self) -> bool {
+        self.settings.choice("ink.fade") == "3s"
+    }
+
+    /// Opacity of a committed mark at `now` (1.0 unless it is fading out).
+    pub fn mark_alpha(&self, mark: &Mark, now: Millis) -> f32 {
+        if !self.fading() {
+            return 1.0;
+        }
+        let age = now.saturating_sub(mark.born());
+        if age <= FADE_HOLD_MS {
+            1.0
+        } else {
+            1.0 - ((age - FADE_HOLD_MS) as f32 / FADE_OUT_MS as f32).min(1.0)
+        }
+    }
+
+    /// True while any mark is visibly fading, so the view needs frames.
+    pub fn fade_animating(&self, now: Millis) -> bool {
+        self.fading()
+            && self.live.marks().iter().any(|m| {
+                let age = now.saturating_sub(m.born());
+                age > FADE_HOLD_MS && age <= FADE_HOLD_MS + FADE_OUT_MS
+            })
+    }
+
+    /// When the next fade starts, if one is waiting.
+    pub fn next_fade(&self, now: Millis) -> Option<Millis> {
+        if !self.fading() {
+            return None;
+        }
+        self.live
+            .marks()
+            .iter()
+            .map(|m| m.born() + FADE_HOLD_MS)
+            .filter(|&t| t > now)
+            .min()
+    }
+
     pub fn animating(&self, now: Millis) -> bool {
-        self.is_pointing() && self.tool.animating(now)
+        (self.is_pointing() && self.tool.animating(now)) || self.fade_animating(now)
     }
 
     pub fn handle(&mut self, event: Event, now: Millis) -> Vec<Effect> {
         let mut effects = Vec::new();
+        if self.fading() {
+            self.live
+                .expire(now.saturating_sub(FADE_HOLD_MS + FADE_OUT_MS));
+        }
         match event {
+            Event::Tick => {}
             Event::MasterToggle => {
                 if self.is_enabled() {
                     self.turn_off(&mut effects);

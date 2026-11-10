@@ -15,10 +15,12 @@ pub const HOLD_END: &str = "system.hold_end";
 pub const UNDO: &str = "system.undo";
 pub const CLEAR: &str = "system.clear";
 pub const QUIT: &str = "system.quit";
+pub const SETTINGS: &str = "system.settings";
 
 pub const ACTIVATION_STYLE: &str = "system.activation_style";
 pub const INK_COLOR: &str = "ink.color";
 pub const INK_WIDTH: &str = "ink.width";
+pub const INK_FADE: &str = "ink.fade";
 
 pub fn register(r: &mut Registrar) {
     r.command(CommandDef {
@@ -47,7 +49,7 @@ pub fn register(r: &mut Registrar) {
     });
     r.command(CommandDef {
         id: LATCH,
-        label: "Annotate",
+        label: "Annotate now",
         cli: Some("latch"),
         surfaces: Surfaces::TRAY.with(Surfaces::CLI),
         group: "1-session",
@@ -120,6 +122,18 @@ pub fn register(r: &mut Registrar) {
         on_release: None,
     });
     r.command(CommandDef {
+        id: SETTINGS,
+        label: "Settings…",
+        cli: Some("settings"),
+        surfaces: Surfaces::TRAY.with(Surfaces::CLI),
+        group: "8-app",
+        order: 0,
+        shortcut: None,
+        available: always,
+        handler: |_| Outcome::Shell(ShellAction::OpenSettings),
+        on_release: None,
+    });
+    r.command(CommandDef {
         id: QUIT,
         label: "Quit TinyPaw",
         cli: Some("quit"),
@@ -145,7 +159,7 @@ pub fn register(r: &mut Registrar) {
         label: "Ink color",
         group: "Appearance",
         order: 10,
-        default: Value::Color([0x00, 0xE5, 0xFF, 0xFF]),
+        default: Value::Color([0x22, 0xD3, 0xEE, 0xFF]),
         constraint: Constraint::None,
     });
     r.setting(SettingDef {
@@ -155,5 +169,13 @@ pub fn register(r: &mut Registrar) {
         order: 11,
         default: Value::Float(4.0),
         constraint: Constraint::Range { min: 1.0, max: 32.0 },
+    });
+    r.setting(SettingDef {
+        id: INK_FADE,
+        label: "Fade",
+        group: "Appearance",
+        order: 12,
+        default: Value::Choice("keep"),
+        constraint: Constraint::Choices(&["keep", "3s"]),
     });
 }

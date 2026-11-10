@@ -21,6 +21,20 @@ Machine: Windows 11 Home 10.0.26200, 1920×1080 primary display at 100% scaling.
 
 **Not yet measured.** Per-frame update and submission times, presented frame intervals and missed refreshes at 160 Hz and 60 Hz, game p95 frame time with TinyPaw Off, drawing, and Lens. Mixed-refresh and mixed-DPI displays. Activation time excluding CLI launch overhead; measure it from the hotkey with a frame timestamp.
 
+## Interface build (Graphite quick bar, wheel, settings), 10 November 2026
+
+Same machine and method as above, tiny-skia renderer. The build adds SVG icons, rodio tap playback and native file dialogs.
+
+| Scenario | Result | Target |
+| --- | --- | --- |
+| Idle in tray, Off, cold start | 12 MiB WS / 2 MiB private, 0.000% CPU over 10 s | < 50 MiB, < 0.1% CPU |
+| Annotating, quick bar shown | 28 MiB WS / 14 MiB private | — |
+| Idle after Off | 19 MiB WS / 4 MiB private, 0.000% CPU over 10 s | < 50 MiB, < 0.1% CPU |
+| Activation (incl. CLI polling) | 106 ms, 69 ms, 104 ms | Visible paw < 100 ms p95 |
+| Release executable | 7.5 MiB | < 25 MiB compressed download |
+
+The audio device opens on the first tap after switching On and closes on Off, so the idle process holds no audio stream. Ctrl+Alt+Space was already registered by another app on the test machine, so the wheel defaults to Ctrl+Alt+W. Settings > Controls now marks any shortcut another app holds.
+
 ## Phase 1 behavior checks (scripted on Windows 11)
 
 Passed with synthetic input on the primary display:

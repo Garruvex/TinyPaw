@@ -3,8 +3,10 @@
 //! forwards a command to it.
 
 mod app;
+mod audio;
 mod features;
 mod platform;
+mod preferences;
 mod registry;
 mod session;
 mod view;

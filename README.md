@@ -3,9 +3,17 @@ A paw version pointer to point and draw for presentation
 
 TinyPaw is a desktop helper for pointing and drawing over presentations and game streams. See the [scope](docs/scope.md), [architecture](docs/architecture.md) and [measurements](docs/measurements.md).
 
-## Status: alpha, Phase 1 (Windows vertical slice)
+## Status: alpha (Windows)
 
-Working on Windows: a tray icon, the global On/Off shortcut, a transparent overlay on the primary display, a placeholder paw, cyan ink, tap animation, Undo, Clear and Exit. Toggle and Hold-to-draw activation styles are supported, along with a CLI that forwards to the running instance. Sound, pointer packs, settings UI, Niri and macOS come in later phases.
+Working on Windows:
+
+- **Overlay:** a transparent overlay on the primary display with a placeholder Yohta paw or a laser dot, ink in six colours and four widths, optional fade after 3 seconds, and a tap animation.
+- **Quick bar and wheel:** the Graphite quick bar holds the tools, ink, Undo, Clear, Mute and Exit, with shortcut tooltips. The quick wheel opens with a held **Ctrl+Alt+W**.
+- **Settings window:** Controls, Display, Appearance and Sound sections with a live preview and a master switch. Choices are saved to `%APPDATA%\TinyPaw\preferences.json`.
+- **Sound:** three synthesized tap sounds (Blackboard Knock, Bubble Pop, Rubber Bonk) or an imported WAV, with volume and mute.
+- **Activation:** Toggle and Hold-to-draw styles, a tray menu, a first-run card, and a CLI that forwards to the running instance.
+
+Text, Pin, Spotlight, Lens and Freeze appear in the interface but are not built yet. Pointer packs and Add your pointer, Stretch Paw, shortcut rebinding, multiple monitors, Niri and macOS also come later. The interface design is the Graphite canvas (TinyPaw Interface artifact).
 
 ## Build and run
 
@@ -27,15 +35,14 @@ TinyPaw starts Off in the tray. Left-click the tray icon or press **Ctrl+Alt+P**
 | Ctrl+Z / X | Undo / Clear |
 | Escape | Exit (switches Off and clears marks) |
 | Ctrl+Alt+D (held) | Point and draw in Hold-to-draw mode |
+| Ctrl+Alt+W (held) | Quick wheel: point at a tool, release to pick |
 
 ## CLI
 
-`tinypaw <command>` talks to the running instance: `status`, `toggle`, `off`, `latch`, `undo`, `clear`, `point`, `hold-begin`, `hold-end`, `quit`, and `set <setting> <value>`. For example, to switch to Hold-to-draw:
+`tinypaw <command>` talks to the running instance: `status`, `toggle`, `off`, `latch`, `undo`, `clear`, `point`, `paw`, `laser`, `mute`, `settings`, `hold-begin`, `hold-end`, `quit`, and `set <setting> <value>`. For example, to switch to Hold-to-draw:
 
 ```bash
 tinypaw set system.activation_style hold
 ```
-
-Settings are not saved between launches yet.
 
 Set `TINYPAW_TRACE=1` to log every event the resident instance handles.

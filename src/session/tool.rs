@@ -30,8 +30,9 @@ pub struct ToolCx<'a> {
 /// Shared scene primitive for the moving tip. The view owns how each is painted.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Tip {
-    /// `press` runs 0.0 (idle) to 1.0 (fully pressed).
-    Paw { at: Pt, press: f32 },
+    /// `press` runs 0.0 (idle) to 1.0 (fully pressed); `scale` is the
+    /// chosen size relative to the artwork; `stick` mounts it on a rod.
+    Paw { at: Pt, press: f32, scale: f32, stick: bool },
     Laser { at: Pt, press: f32 },
 }
 

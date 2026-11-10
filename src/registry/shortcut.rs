@@ -13,6 +13,7 @@ pub enum Key {
     /// A letter or digit, stored uppercase.
     Char(char),
     Escape,
+    Space,
     F(u8),
 }
 
@@ -41,6 +42,7 @@ impl Shortcut {
                 "alt" | "option" => s.alt = true,
                 "shift" => s.shift = true,
                 "esc" | "escape" => key = Some(Key::Escape),
+                "space" => key = Some(Key::Space),
                 p if p.len() > 1 && p.starts_with('f') => {
                     let n: u8 = p[1..].parse().ok()?;
                     if !(1..=24).contains(&n) {
@@ -85,6 +87,7 @@ impl Shortcut {
         match self.key {
             Key::Char(c) => out.push(c),
             Key::Escape => out.push_str("Esc"),
+            Key::Space => out.push_str("Space"),
             Key::F(n) => out.push_str(&format!("F{n}")),
         }
         out

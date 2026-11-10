@@ -4,10 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-iced = { version = "0.14.0", default-features = false, features = ["tiny-skia", "canvas", "thread-pool"] }
+iced = { version = "0.14.0", default-features = false, features = ["tiny-skia", "canvas", "svg", "crisp", "smol", "advanced"] }
 global-hotkey = "0.10.0"
 tray-icon = "0.26.1"
 interprocess = "2.4.8"
+rodio = { version = "0.23", default-features = false, features = ["playback", "wav"] }
+rfd = { version = "0.18", default-features = false }
+serde_json = "1.0"
 
 [features]
 # Opt-in GPU renderer for comparisons. tiny-skia measured faster to activate

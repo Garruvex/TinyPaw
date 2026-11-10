@@ -1,34 +1,44 @@
 //! Iced event loop: normalizes input into session events, runs requested
-//! effects and keeps the overlay window in step with the session.
+//! effects and keeps the overlay, settings and first-run windows in step with
+//! the session.
 
-use std::time::Instant;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use iced::keyboard::{self, key::Named};
 use iced::window::{self, settings::PlatformSpecific};
 use iced::{Element, Point, Size, Subscription, Task, Theme, event, theme};
 
-use crate::features::system;
+use crate::audio::{self, Audio};
+use crate::features::{point, sound, system, wheel as wheel_feature};
 use crate::platform::{self, External};
-use crate::registry::{Dispatched, Key, Registry, ShellAction, ShortcutContext, Unavailable};
+use crate::preferences;
+use crate::registry::{
+    Dispatched, Key, Registry, ShellAction, ShortcutContext, Unavailable, Value,
+};
 use crate::session::{
     Effect, Event, Millis, Mode, OutputId, OverlayState, PointerEvent, PointerKind, Pt, Session,
     Ticket,
 };
-use crate::view::{self, InkCache};
+use crate::view::{self, InkCache, OverlayUi, UiMsg, settings::Page, wheel};
 
-/// Phase 1 drives a single overlay on the primary display.
+/// This alpha drives a single overlay on the primary display.
 const PRIMARY: OutputId = OutputId(0);
 
 #[derive(Debug, Clone)]
 pub enum Message {
     External(External),
-    OverlayOpened(window::Id),
+    WindowOpened(window::Id),
     CloseRequested(window::Id),
     Pointer(PointerKind, Point),
     Key(keyboard::Key, keyboard::Modifiers, window::Id),
     Command(&'static str),
+    Set(&'static str, Value),
+    Ui(UiMsg),
+    WavPicked(Option<PathBuf>),
     Acquired(Ticket),
     Frame,
+    Tick,
 }
 
 struct Overlay {
@@ -43,21 +53,28 @@ pub struct App {
     session: Session,
     started: Instant,
     overlay: Option<Overlay>,
+    settings_window: Option<window::Id>,
+    first_run_window: Option<window::Id>,
+    page: Page,
+    notice: Option<String>,
+    ui: OverlayUi,
     previous_focus: Option<isize>,
     hotkeys: Option<platform::hotkeys::Hotkeys>,
     tray: Option<platform::tray::Tray>,
+    audio: Audio,
     ink: InkCache,
 }
 
 pub fn run(registry: &'static Registry) -> iced::Result {
     iced::daemon(move || App::boot(registry), App::update, App::view)
-        .title(|_: &App, _| "TinyPaw".to_owned())
+        .title(App::title)
         .subscription(App::subscription)
         .style(|_: &App, _: &Theme| theme::Style {
             background_color: iced::Color::TRANSPARENT,
-            text_color: iced::Color::WHITE,
+            text_color: view::theme::TEXT,
         })
         .theme(|_: &App, _| Theme::Dark)
+        .default_font(view::theme::BODY)
         .antialiasing(true)
         .run()
 }
@@ -83,10 +100,26 @@ fn overlay_settings() -> window::Settings {
     }
 }
 
+fn panel_settings(size: Size, min: Option<Size>, resizable: bool) -> window::Settings {
+    window::Settings {
+        size,
+        min_size: min,
+        position: window::Position::Centered,
+        resizable,
+        exit_on_close_request: false,
+        platform_specific: PlatformSpecific {
+            drag_and_drop: false,
+            ..PlatformSpecific::default()
+        },
+        ..window::Settings::default()
+    }
+}
+
 impl App {
     fn boot(registry: &'static Registry) -> (Self, Task<Message>) {
+        let loaded = preferences::load(registry);
         let tool = registry.default_tool();
-        let session = Session::new(tool.id, tool.factory, registry.defaults());
+        let session = Session::new(tool.id, tool.factory, loaded.values);
         let hotkeys = match platform::hotkeys::register(registry) {
             Ok(h) => {
                 for failure in &h.failures {
@@ -107,26 +140,52 @@ impl App {
             session,
             started: Instant::now(),
             overlay: None,
+            settings_window: None,
+            first_run_window: None,
+            page: Page::default(),
+            notice: None,
+            ui: OverlayUi::default(),
             previous_focus: None,
             hotkeys,
             tray,
+            audio: Audio::new(),
             ink: InkCache::default(),
         };
         app.sync_tray();
-        (app, Task::none())
+        let task = if loaded.first_run {
+            // Saving now means the card shows once.
+            let _ = preferences::save(app.session.settings());
+            let (id, open) = window::open(panel_settings(Size::new(420.0, 330.0), None, false));
+            app.first_run_window = Some(id);
+            open.map(Message::WindowOpened)
+        } else {
+            Task::none()
+        };
+        (app, task)
     }
 
     fn now(&self) -> Millis {
         self.started.elapsed().as_millis() as Millis
     }
 
+    fn title(&self, window: window::Id) -> String {
+        if Some(window) == self.settings_window {
+            "TinyPaw Settings".into()
+        } else {
+            "TinyPaw".into()
+        }
+    }
+
     fn update(&mut self, message: Message) -> Task<Message> {
         let now = self.now();
-        if std::env::var_os("TINYPAW_TRACE").is_some() && !matches!(message, Message::Frame) {
+        if std::env::var_os("TINYPAW_TRACE").is_some()
+            && !matches!(message, Message::Frame | Message::Tick)
+        {
             eprintln!("[{now:>7}] {message:?} mode={:?}", self.session.mode());
         }
-        let mut effects = Vec::new();
-        let mut shell = None;
+        let was_enabled = self.session.is_enabled();
+        let mut out = Outcomes::default();
+        let mut tasks = Vec::new();
 
         match message {
             Message::External(External::Hotkey { id, pressed }) => {
@@ -136,79 +195,252 @@ impl App {
                     } else {
                         self.registry.dispatch_release(cmd, &mut self.session, now)
                     };
-                    collect(result, &mut effects, &mut shell);
+                    out.collect(result);
                 }
             }
             Message::External(External::Menu(id)) => {
-                collect(self.dispatch(&id, now).ok(), &mut effects, &mut shell);
+                out.collect(self.dispatch(&id, now).ok());
             }
             Message::External(External::TrayClick) => {
-                collect(
-                    self.dispatch(system::MASTER_TOGGLE, now).ok(),
-                    &mut effects,
-                    &mut shell,
-                );
+                out.collect(self.dispatch(system::MASTER_TOGGLE, now).ok());
             }
             Message::External(External::Cli { line, reply }) => {
                 let (answer, result) = self.cli(&line, now);
-                collect(result, &mut effects, &mut shell);
+                out.collect(result);
                 let _ = reply.send(answer);
             }
             Message::Command(id) => {
-                collect(self.dispatch(id, now).ok(), &mut effects, &mut shell);
-            }
-            Message::Key(key, modifiers, window) => {
-                if self.overlay.as_ref().is_some_and(|o| o.id == window)
-                    && let Some(cmd) = self.overlay_shortcut(&key, modifiers)
-                {
-                    collect(self.dispatch(cmd, now).ok(), &mut effects, &mut shell);
+                self.ui.close_menus();
+                out.collect(self.dispatch(id, now).ok());
+                if id == point::USE_PAW || id == point::USE_LASER {
+                    out.collect(self.dispatch(point::SELECT, now).ok());
                 }
             }
-            Message::Pointer(kind, p) => {
-                effects.extend(self.session.handle(
-                    Event::Pointer(PointerEvent {
-                        kind,
-                        output: PRIMARY,
-                        pos: Pt::new(p.x, p.y),
-                        at: now,
-                    }),
-                    now,
-                ));
+            Message::Set(id, value) => out.sets.push((id, value)),
+            Message::Ui(ui) => tasks.push(self.ui_message(ui, now, &mut out)),
+            Message::WavPicked(path) => {
+                if let Some(path) = path {
+                    match audio::import_wav(&path) {
+                        Ok(clip) => {
+                            self.audio.set_custom(clip);
+                            self.notice = None;
+                            out.sets.push((sound::TAP, Value::Choice("custom")));
+                        }
+                        Err(e) => self.notice = Some(format!("Could not use that WAV: {e}")),
+                    }
+                }
             }
+            Message::Key(key, modifiers, window) => {
+                if self.overlay.as_ref().is_some_and(|o| o.id == window) {
+                    let escape = matches!(key.as_ref(), keyboard::Key::Named(Named::Escape));
+                    if escape && (self.ui.wheel.take().is_some() || self.ui.close_menus()) {
+                        // Escape closes the wheel or a menu before it exits.
+                    } else if let Some(cmd) = self.overlay_shortcut(&key, modifiers) {
+                        out.collect(self.dispatch(cmd, now).ok());
+                    }
+                }
+            }
+            Message::Pointer(kind, p) => self.pointer(kind, p, now, &mut out),
             Message::Acquired(ticket) => {
-                effects.extend(self.session.handle(Event::InputAcquired(ticket), now));
+                out.effects
+                    .extend(self.session.handle(Event::InputAcquired(ticket), now));
             }
-            Message::OverlayOpened(id) => {
+            Message::WindowOpened(id) => {
                 if let Some(o) = self.overlay.as_mut().filter(|o| o.id == id) {
                     o.ready = true;
                 }
             }
             Message::CloseRequested(id) => {
                 if self.overlay.as_ref().is_some_and(|o| o.id == id) {
-                    effects.extend(self.session.handle(Event::MasterOff, now));
+                    out.effects.extend(self.session.handle(Event::MasterOff, now));
+                } else if Some(id) == self.settings_window {
+                    self.settings_window = None;
+                    self.notice = None;
+                    tasks.push(window::close(id));
+                } else if Some(id) == self.first_run_window {
+                    self.first_run_window = None;
+                    tasks.push(window::close(id));
                 }
+            }
+            Message::Tick => {
+                out.effects.extend(self.session.handle(Event::Tick, now));
             }
             Message::Frame => {}
         }
 
-        for effect in effects {
+        for (id, value) in std::mem::take(&mut out.sets) {
+            self.apply_setting(id, value, now);
+        }
+        for effect in std::mem::take(&mut out.effects) {
             match effect {
-                Effect::PlayTap => {} // Sound arrives with the pack workflow.
+                Effect::PlayTap => self.play_tap(),
                 Effect::ReturnFocus => platform::restore_foreground(self.previous_focus.take()),
             }
         }
-        self.sync_tray();
-
-        if shell == Some(ShellAction::Quit) {
-            self.session.handle(Event::MasterOff, now);
-            platform::restore_foreground(self.previous_focus.take());
-            // Remove the tray icon now rather than leaving a ghost entry.
-            self.tray = None;
-            // Renderer teardown can hang on Windows after the overlay closed
-            // (seen with iced 0.14 + wgpu); nothing else needs flushing.
-            std::process::exit(0);
+        for action in std::mem::take(&mut out.shell) {
+            match action {
+                ShellAction::Quit => self.quit(now),
+                ShellAction::OpenSettings => tasks.push(self.open_settings()),
+                ShellAction::WheelOpen => self.open_wheel(now),
+                ShellAction::WheelClose => self.close_wheel(now),
+            }
         }
-        self.reconcile()
+
+        if was_enabled && !self.session.is_enabled() {
+            // Off stops tap playback and closes transient overlay UI.
+            self.ui = OverlayUi::default();
+            if self.settings_window.is_none() {
+                self.audio.close();
+            }
+        }
+        self.sync_tray();
+        tasks.push(self.reconcile());
+        Task::batch(tasks)
+    }
+
+    fn ui_message(&mut self, ui: UiMsg, now: Millis, out: &mut Outcomes) -> Task<Message> {
+        match ui {
+            UiMsg::TogglePointerMenu => {
+                self.ui.ink_menu = false;
+                self.ui.pointer_menu = !self.ui.pointer_menu;
+            }
+            UiMsg::ToggleInkMenu => {
+                self.ui.pointer_menu = false;
+                self.ui.ink_menu = !self.ui.ink_menu;
+            }
+            UiMsg::Nav(page) => self.page = page,
+            UiMsg::PreviewSound => {
+                let s = self.session.settings();
+                let (tap, volume) = (s.choice(sound::TAP), s.float(sound::VOLUME) as f32);
+                self.audio.play(tap, volume);
+            }
+            UiMsg::ImportWav => {
+                return Task::perform(
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Choose a tap sound")
+                        .add_filter("WAV audio", &["wav"])
+                        .pick_file(),
+                    |file| Message::WavPicked(file.map(|f| f.path().to_path_buf())),
+                );
+            }
+            UiMsg::TurnOn => {
+                if !self.session.is_enabled() {
+                    out.collect(self.dispatch(system::MASTER_TOGGLE, now).ok());
+                }
+                if let Some(id) = self.first_run_window.take() {
+                    return window::close(id);
+                }
+            }
+            UiMsg::OpenSettings => {
+                let open = self.open_settings();
+                return match self.first_run_window.take() {
+                    Some(id) => window::close(id).chain(open),
+                    None => open,
+                };
+            }
+        }
+        Task::none()
+    }
+
+    fn pointer(&mut self, kind: PointerKind, p: Point, now: Millis, out: &mut Outcomes) {
+        if let Some(w) = self.ui.wheel.as_mut() {
+            match kind {
+                PointerKind::Moved => w.track(p),
+                PointerKind::Down => {
+                    w.track(p);
+                    self.close_wheel(now);
+                }
+                _ => {}
+            }
+            return;
+        }
+        if kind == PointerKind::Down && self.ui.close_menus() {
+            return; // A click outside a menu only dismisses it.
+        }
+        out.effects.extend(self.session.handle(
+            Event::Pointer(PointerEvent {
+                kind,
+                output: PRIMARY,
+                pos: Pt::new(p.x, p.y),
+                at: now,
+            }),
+            now,
+        ));
+    }
+
+    fn open_wheel(&mut self, now: Millis) {
+        if !self.session.is_pointing() {
+            let _ = self.dispatch(system::LATCH, now);
+        }
+        self.ui.close_menus();
+        self.ui.wheel = Some(wheel::WheelState {
+            center: self.session.pointer().map(|(_, p)| Point::new(p.x, p.y)),
+            hover: None,
+        });
+    }
+
+    fn close_wheel(&mut self, now: Millis) {
+        let Some(state) = self.ui.wheel.take() else {
+            return;
+        };
+        if let Some(i) = state.hover {
+            let cmd = wheel::ITEMS[i].command;
+            let mut out = Outcomes::default();
+            out.collect(self.dispatch(cmd, now).ok());
+            if cmd == point::USE_PAW || cmd == point::USE_LASER {
+                out.collect(self.dispatch(point::SELECT, now).ok());
+            }
+            for (id, value) in out.sets {
+                self.apply_setting(id, value, now);
+            }
+        }
+    }
+
+    /// The single update path for settings: validate, apply, persist.
+    fn apply_setting(&mut self, id: &'static str, value: Value, now: Millis) {
+        let mut values = self.session.settings().clone();
+        match self.registry.set(&mut values, id, value) {
+            Ok(()) => {
+                self.session.handle(Event::SettingsChanged(values), now);
+                if let Err(e) = preferences::save(self.session.settings()) {
+                    self.notice = Some(format!("Settings could not be saved: {e}"));
+                }
+            }
+            Err(why) => self.notice = Some(format!("{id}: {why}")),
+        }
+    }
+
+    fn play_tap(&mut self) {
+        let s = self.session.settings();
+        let laser = s.choice(point::STYLE) == "laser";
+        if s.bool(sound::MUTE) || (laser && !s.bool(sound::LASER)) {
+            return;
+        }
+        let (tap, volume) = (s.choice(sound::TAP), s.float(sound::VOLUME) as f32);
+        self.audio.play(tap, volume);
+    }
+
+    fn open_settings(&mut self) -> Task<Message> {
+        if let Some(id) = self.settings_window {
+            return window::gain_focus(id);
+        }
+        let (id, open) = window::open(panel_settings(
+            Size::new(1040.0, 680.0),
+            Some(Size::new(860.0, 560.0)),
+            true,
+        ));
+        self.settings_window = Some(id);
+        open.map(Message::WindowOpened).chain(window::gain_focus(id))
+    }
+
+    fn quit(&mut self, now: Millis) {
+        self.session.handle(Event::MasterOff, now);
+        platform::restore_foreground(self.previous_focus.take());
+        // Remove the tray icon now rather than leaving a ghost entry.
+        self.tray = None;
+        // Renderer teardown can hang on Windows after the overlay closed
+        // (seen with iced 0.14); nothing else needs flushing.
+        std::process::exit(0);
     }
 
     fn dispatch(&mut self, id: &str, now: Millis) -> Result<Dispatched, Unavailable> {
@@ -225,15 +457,17 @@ impl App {
             let (Some(id), Some(text)) = (parts.next(), parts.next()) else {
                 return ("error: usage: tinypaw set <setting> <value>".into(), None);
             };
-            let mut values = self.session.settings().clone();
-            let result = self
-                .registry
-                .parse_value(id, text)
-                .and_then(|v| self.registry.set(&mut values, id, v));
-            return match result {
-                Ok(()) => {
-                    self.session.handle(Event::SettingsChanged(values), now);
-                    (format!("ok: {id} = {text}"), None)
+            let Some(def) = self.registry.setting(id) else {
+                return (format!("error: unknown setting `{id}`"), None);
+            };
+            return match self.registry.parse_value(id, text) {
+                Ok(value) => {
+                    self.notice = None;
+                    self.apply_setting(def.id, value, now);
+                    match self.notice.take() {
+                        Some(why) => (format!("error: {why}"), None),
+                        None => (format!("ok: {id} = {text}"), None),
+                    }
                 }
                 Err(why) => (format!("error: {id}: {why}"), None),
             };
@@ -259,6 +493,7 @@ impl App {
     fn overlay_shortcut(&self, key: &keyboard::Key, m: keyboard::Modifiers) -> Option<&'static str> {
         let pressed = match key.as_ref() {
             keyboard::Key::Named(Named::Escape) => Key::Escape,
+            keyboard::Key::Named(Named::Space) => Key::Space,
             keyboard::Key::Character(c) => Key::Char(c.chars().next()?.to_ascii_uppercase()),
             _ => return None,
         };
@@ -271,11 +506,7 @@ impl App {
     }
 
     fn sync_tray(&mut self) {
-        let label = self
-            .hotkeys
-            .as_ref()
-            .and_then(|h| h.label(system::MASTER_TOGGLE))
-            .map(str::to_owned);
+        let label = self.registry.shortcut_label(system::MASTER_TOGGLE);
         if let Some(tray) = &mut self.tray {
             tray.sync(self.registry, &self.session, label.as_deref());
         }
@@ -301,7 +532,7 @@ impl App {
                     ready: false,
                     applied: None,
                 });
-                opened.map(Message::OverlayOpened).chain(Task::done(Message::Frame))
+                opened.map(Message::WindowOpened).chain(Task::done(Message::Frame))
             }
             (_, Some(o)) if !o.ready => Task::none(),
             (OverlayState::ClickThrough, Some(o)) => {
@@ -330,15 +561,34 @@ impl App {
     }
 
     fn view(&self, window: window::Id) -> Element<'_, Message> {
-        match &self.overlay {
-            Some(o) if o.id == window => {
-                view::overlay(self.registry, &self.session, &self.ink, PRIMARY, self.now())
-            }
-            _ => iced::widget::space().into(),
+        if self.overlay.as_ref().is_some_and(|o| o.id == window) {
+            return view::overlay(view::Overlay {
+                registry: self.registry,
+                session: &self.session,
+                ink: &self.ink,
+                ui: &self.ui,
+                output: PRIMARY,
+                now: self.now(),
+            });
         }
+        if Some(window) == self.settings_window {
+            return view::settings::view(view::settings::SettingsView {
+                registry: self.registry,
+                session: &self.session,
+                page: self.page,
+                has_custom_sound: self.audio.has_custom(),
+                taken: self.hotkeys.as_ref().map_or(&[], |h| h.taken.as_slice()),
+                notice: self.notice.as_deref(),
+            });
+        }
+        if Some(window) == self.first_run_window {
+            return view::first_run::view(self.registry.shortcut_label(system::MASTER_TOGGLE));
+        }
+        iced::widget::space().into()
     }
 
     fn subscription(&self) -> Subscription<Message> {
+        let now = self.now();
         let mut subs = vec![
             Subscription::run(platform::external_stream).map(Message::External),
             event::listen_with(|event, _status, window| match event {
@@ -352,18 +602,36 @@ impl App {
             }),
             window::close_requests().map(Message::CloseRequested),
         ];
-        // Frames only while an animation runs; otherwise the process sleeps.
-        if self.session.animating(self.now()) {
+        // Frames only while something animates; otherwise the process sleeps.
+        if self.session.animating(now) {
             subs.push(window::frames().map(|_| Message::Frame));
+        } else if let Some(at) = self.session.next_fade(now) {
+            // Wake when the next stroke starts fading.
+            let wait = Duration::from_millis(at.saturating_sub(now).clamp(16, 1000));
+            subs.push(iced::time::every(wait).map(|_| Message::Tick));
         }
         Subscription::batch(subs)
     }
 }
 
-fn collect(result: Option<Dispatched>, effects: &mut Vec<Effect>, shell: &mut Option<ShellAction>) {
-    match result {
-        Some(Dispatched::Effects(fx)) => effects.extend(fx),
-        Some(Dispatched::Shell(action)) => *shell = Some(action),
-        None => {}
+/// What handlers asked for during one update, applied in a fixed order.
+#[derive(Default)]
+struct Outcomes {
+    effects: Vec<Effect>,
+    sets: Vec<(&'static str, Value)>,
+    shell: Vec<ShellAction>,
+}
+
+impl Outcomes {
+    fn collect(&mut self, result: Option<Dispatched>) {
+        match result {
+            Some(Dispatched::Effects(fx)) => self.effects.extend(fx),
+            Some(Dispatched::Set(id, value)) => self.sets.push((id, value)),
+            Some(Dispatched::Shell(action)) => self.shell.push(action),
+            None => {}
+        }
     }
 }
+
+// Keep the wheel feature's command ID referenced for the registry lookup.
+const _: &str = wheel_feature::OPEN;
