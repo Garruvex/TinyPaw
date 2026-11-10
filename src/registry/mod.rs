@@ -60,7 +60,8 @@ pub enum ShellAction {
     WheelOpen,
     WheelClose,
     /// Show or hide the lens anywhere, independent of annotation.
-    ToggleLens,
+    LensShow,
+    LensHide,
 }
 
 pub type Handler = fn(&Session) -> Outcome;

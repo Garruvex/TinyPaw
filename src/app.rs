@@ -102,7 +102,7 @@ pub struct App {
     /// until Lens is next selected.
     #[cfg(windows)]
     desktop_lens_failed: bool,
-    /// The lens is on by its global shortcut, with annotation on or off.
+    /// The lens shortcut is held, with annotation on or off.
     lens_anywhere: bool,
     /// The desktop character window, while enabled.
     #[cfg(windows)]
@@ -663,7 +663,8 @@ impl App {
                 ShellAction::OpenSettings => tasks.push(self.open_settings()),
                 ShellAction::WheelOpen => self.open_wheel(now),
                 ShellAction::WheelClose => self.close_wheel(now, &mut out),
-                ShellAction::ToggleLens => self.lens_anywhere = !self.lens_anywhere,
+                ShellAction::LensShow => self.lens_anywhere = true,
+                ShellAction::LensHide => self.lens_anywhere = false,
             }
         }
         for (id, value) in std::mem::take(&mut out.sets) {

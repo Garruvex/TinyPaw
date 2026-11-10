@@ -6,8 +6,10 @@ use crate::registry::{
 };
 use crate::session::Event;
 pub const LENS: &str = "lens.select";
-/// Shows or hides the desktop lens anywhere, with annotation on or off.
+/// Shows the desktop lens while held, with annotation on or off.
 pub const ANYWHERE: &str = "lens.anywhere";
+/// Hides it again; the CLI's counterpart to releasing the key.
+pub const ANYWHERE_END: &str = "lens.anywhere_end";
 pub const TOOL: &str = "lens";
 pub const SOURCE: &str = "lens.source";
 pub const ZOOM: &str = "lens.zoom";
@@ -43,14 +45,27 @@ pub fn register(r: &mut Registrar) {
     });
     r.command(CommandDef {
         id: ANYWHERE,
-        label: "Lens anywhere",
-        cli: Some("lens-anywhere"),
+        label: "Hold for lens",
+        cli: Some("lens-begin"),
         surfaces: Surfaces::CLI,
         group: "tools",
         order: 6,
-        shortcut: Some((ShortcutContext::Global, "Ctrl+Alt+L")),
+        // Left hand only, beside the other held keys (D draw, W wheel).
+        shortcut: Some((ShortcutContext::Global, "Ctrl+Alt+Z")),
         available: always,
-        handler: |_| Outcome::Shell(ShellAction::ToggleLens),
+        handler: |_| Outcome::Shell(ShellAction::LensShow),
+        on_release: Some(|_| Outcome::Shell(ShellAction::LensHide)),
+    });
+    r.command(CommandDef {
+        id: ANYWHERE_END,
+        label: "End lens",
+        cli: Some("lens-end"),
+        surfaces: Surfaces::CLI,
+        group: "tools",
+        order: 7,
+        shortcut: None,
+        available: always,
+        handler: |_| Outcome::Shell(ShellAction::LensHide),
         on_release: None,
     });
     r.setting(SettingDef {
