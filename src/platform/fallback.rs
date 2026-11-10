@@ -1,5 +1,5 @@
-//! Non-Windows stand-in for `platform::windows`, mounted under the same path so
-//! the app compiles on Linux and macOS before their native ports land. Every
+//! Stand-in for `platform::windows`, mounted under the same path so the app
+//! compiles on macOS before its native port lands. Linux uses `wayland` instead. Every
 //! item mirrors the Win32 signature and does nothing: no focus handoff, no
 //! Lens, no window sources, no keyboard hook.
 

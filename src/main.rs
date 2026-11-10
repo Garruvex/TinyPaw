@@ -2,6 +2,10 @@
 //! game streams. `tinypaw` starts the resident instance; `tinypaw <command>`
 //! forwards a command to it.
 
+// The tray, native global keys and the Win32 interact hook are not built on
+// Linux yet (see docs/niri.md), which leaves their shared plumbing unused there.
+#![cfg_attr(target_os = "linux", allow(dead_code))]
+
 mod app;
 mod audio;
 mod features;
