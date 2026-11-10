@@ -306,3 +306,65 @@ fn keep_mode_never_fades() {
     assert_eq!(s.scene().marks().len(), 1);
     assert_eq!(s.next_fade(0), None);
 }
+
+fn stick_session() -> Session {
+    let reg = registry();
+    let mut values = reg.defaults();
+    reg.set(&mut values, point::PRESENTATION, Value::Choice("stick"))
+        .unwrap();
+    let mut s = Session::new(point::TOOL, point::new_state, values);
+    s.handle(Event::MasterToggle, 0);
+    ack(&mut s);
+    s
+}
+
+fn grip_x(s: &Session, now: Millis) -> (Pt, f32) {
+    match s.tip(now) {
+        Some((_, Tip::Paw { at, grip_x, .. })) => (at, grip_x),
+        other => panic!("expected a paw tip, got {other:?}"),
+    }
+}
+
+#[test]
+fn stick_grip_eases_while_tip_stays_on_pointer() {
+    let mut s = stick_session();
+    s.handle(ptr(PointerKind::Moved, 100.0, 50.0), 0);
+    assert_eq!(grip_x(&s, 0), (Pt::new(100.0, 50.0), 100.0), "first sample snaps");
+    assert!(!s.animating(0));
+
+    s.handle(ptr(PointerKind::Moved, 500.0, 50.0), 1000);
+    let (tip, early) = grip_x(&s, 1000);
+    assert_eq!(tip, Pt::new(500.0, 50.0), "claw never lags");
+    assert_eq!(early, 100.0);
+    assert!(s.animating(1050));
+    let (_, mid) = grip_x(&s, 1090);
+    assert!(mid > 100.0 && mid < 500.0, "grip trails the pointer: {mid}");
+    assert!(!s.animating(2000), "settles and stops requesting frames");
+    assert!((grip_x(&s, 2000).1 - 500.0).abs() < 0.5);
+}
+
+#[test]
+fn grip_easing_depends_on_elapsed_time_not_frame_count() {
+    let mut s = stick_session();
+    s.handle(ptr(PointerKind::Moved, 0.0, 0.0), 0);
+    s.handle(ptr(PointerKind::Moved, 300.0, 0.0), 0);
+    // Sampling more often must not change where the grip is at a given time.
+    for t in (0..=60).step_by(6) {
+        let _ = s.tip(t);
+    }
+    let a = grip_x(&s, 60).1;
+    let mut t2 = stick_session();
+    t2.handle(ptr(PointerKind::Moved, 0.0, 0.0), 0);
+    t2.handle(ptr(PointerKind::Moved, 300.0, 0.0), 0);
+    assert_eq!(a, grip_x(&t2, 60).1);
+}
+
+#[test]
+fn furry_paw_movement_needs_no_frames() {
+    let mut s = session_with("toggle");
+    s.handle(Event::MasterToggle, 0);
+    ack(&mut s);
+    s.handle(ptr(PointerKind::Moved, 0.0, 0.0), 0);
+    s.handle(ptr(PointerKind::Moved, 800.0, 0.0), 10);
+    assert!(!s.animating(11));
+}

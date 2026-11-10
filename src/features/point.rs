@@ -27,6 +27,10 @@ pub const DRAG_THRESHOLD: f32 = 4.0;
 pub const TAP_MS: Millis = 100;
 /// Minimum spacing between recorded stroke points.
 const MIN_SPACING: f32 = 0.75;
+/// Time constant of the stick grip easing toward the pointer.
+pub const GRIP_TAU_MS: f32 = 90.0;
+/// The grip counts as settled once it is this close to its target.
+const GRIP_SETTLED: f32 = 0.5;
 
 pub fn register(r: &mut Registrar) {
     r.tool(ToolDef {
@@ -122,6 +126,33 @@ enum Gesture {
 pub struct PointTool {
     gesture: Gesture,
     tap_at: Option<Millis>,
+    grip: Option<Grip>,
+}
+
+/// Exponential approach of the stick grip toward the latest pointer x,
+/// evaluated from elapsed time so it looks the same at 60 and 160 Hz.
+#[derive(Debug, Clone, Copy)]
+struct Grip {
+    from: f32,
+    target: f32,
+    since: Millis,
+}
+
+impl Grip {
+    fn at(&self, now: Millis) -> f32 {
+        let t = now.saturating_sub(self.since) as f32 / GRIP_TAU_MS;
+        self.target + (self.from - self.target) * (-t).exp()
+    }
+
+    fn settled(&self, now: Millis) -> bool {
+        (self.at(now) - self.target).abs() < GRIP_SETTLED
+    }
+
+    /// Retargets from wherever the grip is now; the first sample snaps.
+    fn follow(grip: &mut Option<Grip>, x: f32, now: Millis) {
+        let from = grip.map_or(x, |g| g.at(now));
+        *grip = Some(Grip { from, target: x, since: now });
+    }
 }
 
 fn new_stroke(output: OutputId, points: Vec<Pt>, settings: &SettingValues) -> Mark {
@@ -145,6 +176,14 @@ impl PointTool {
 
 impl ToolState for PointTool {
     fn pointer(&mut self, ev: &PointerEvent, cx: &mut ToolCx<'_>) {
+        // Only the stick has a grip; other presentations never pay for frames.
+        let stick = cx.settings.choice(STYLE) == "paw"
+            && cx.settings.choice(PRESENTATION) == "stick";
+        match ev.kind {
+            PointerKind::Left => self.grip = None,
+            _ if stick => Grip::follow(&mut self.grip, ev.pos.x, cx.now),
+            _ => self.grip = None,
+        }
         match ev.kind {
             PointerKind::Down => {
                 if matches!(self.gesture, Gesture::Idle) {
@@ -236,11 +275,13 @@ impl ToolState for PointTool {
                 press,
                 scale: settings.float(SIZE) as f32 / BASE_SIZE,
                 stick: settings.choice(PRESENTATION) == "stick",
+                grip_x: self.grip.map_or(at.x, |g| g.at(now)),
             },
         })
     }
 
     fn animating(&self, now: Millis) -> bool {
         self.tap_at.is_some_and(|t| now.saturating_sub(t) < TAP_MS)
+            || self.grip.is_some_and(|g| !g.settled(now))
     }
 }

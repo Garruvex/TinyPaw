@@ -26,10 +26,11 @@ pub fn draw_tip(frame: &mut Frame, tip: Tip, area: Size) {
             press,
             scale,
             stick,
+            grip_x,
         } => {
             let at = Point::new(at.x, at.y);
             if stick {
-                draw_stick(frame, at, press, scale, area);
+                draw_stick(frame, at, grip_x, press, scale, area);
             } else {
                 draw_paw(frame, at, press, scale, FURRY_LEAN);
             }
@@ -43,10 +44,11 @@ fn outline(width: f32) -> Stroke<'static> {
 }
 
 /// Classic Stick: a slim rod from an off-screen grip below and right of the
-/// pointer, with the paw rotated along it. Reduced-motion style: no easing.
-fn draw_stick(frame: &mut Frame, tip: Point, press: f32, scale: f32, area: Size) {
+/// pointer, with the paw rotated along it. The grip follows `grip_x`, which
+/// eases after the pointer; the claw stays on `tip` exactly.
+fn draw_stick(frame: &mut Frame, tip: Point, grip_x: f32, press: f32, scale: f32, area: Size) {
     let grip = Point::new(
-        (tip.x + area.width * 0.3).clamp(area.width * 0.2, area.width * 1.05),
+        (grip_x + area.width * 0.3).clamp(area.width * 0.2, area.width * 1.05),
         area.height * 1.12,
     );
     let dir = Vector::new(grip.x - tip.x, grip.y - tip.y);

@@ -32,7 +32,9 @@ pub struct ToolCx<'a> {
 pub enum Tip {
     /// `press` runs 0.0 (idle) to 1.0 (fully pressed); `scale` is the
     /// chosen size relative to the artwork; `stick` mounts it on a rod.
-    Paw { at: Pt, press: f32, scale: f32, stick: bool },
+    /// `grip_x` is the pointer x the off-screen grip eases after, so the
+    /// rod's entry point trails the tip while the tip itself never lags.
+    Paw { at: Pt, press: f32, scale: f32, stick: bool, grip_x: f32 },
     Laser { at: Pt, press: f32 },
 }
 
