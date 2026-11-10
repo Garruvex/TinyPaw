@@ -39,14 +39,16 @@ use theme::Tone;
 pub struct OverlayUi {
     pub pointer_menu: bool,
     pub ink_menu: bool,
+    pub more_menu: bool,
     pub wheel: Option<wheel::WheelState>,
 }
 
 impl OverlayUi {
     pub fn close_menus(&mut self) -> bool {
-        let was = self.pointer_menu || self.ink_menu;
+        let was = self.pointer_menu || self.ink_menu || self.more_menu;
         self.pointer_menu = false;
         self.ink_menu = false;
+        self.more_menu = false;
         was
     }
 }
@@ -55,6 +57,7 @@ impl OverlayUi {
 pub enum UiMsg {
     TogglePointerMenu,
     ToggleInkMenu,
+    ToggleMoreMenu,
     Nav(settings::Page),
     ImportWav,
     PreviewSound,
@@ -107,20 +110,23 @@ pub struct Overlay<'a> {
     pub pack: Option<&'a crate::packs::Pack>,
 }
 
-fn available(registry: &Registry, session: &Session, id: &str) -> bool {
-    registry
-        .command(id)
-        .is_some_and(|d| (d.available)(session).is_ok())
+/// Why a command can't run right now, or `None` when it can.
+fn unavailable(registry: &Registry, session: &Session, id: &str) -> Option<&'static str> {
+    match registry.command(id) {
+        Some(d) => (d.available)(session).err().map(|why| why.0),
+        None => Some("Not available"),
+    }
 }
 
 pub fn overlay(o: Overlay<'_>) -> Element<'_, Message> {
-    let wheel_available: [bool; 8] =
-        std::array::from_fn(|i| available(o.registry, o.session, wheel::ITEMS[i].command));
+    let wheel_blocked: wheel::Availability =
+        std::array::from_fn(|i| unavailable(o.registry, o.session, wheel::ITEMS[i].command));
     let scene = canvas_widget(OverlayCanvas {
         session: o.session,
         ink: o.ink,
         wheel: o.ui.wheel,
-        wheel_available,
+        wheel_blocked,
+        lens_hint: wheel::lens_hint(o.session.settings().choice(upcoming::SOURCE)),
         output: o.output,
         now: o.now,
         pack: o.pack,
@@ -164,12 +170,15 @@ pub fn overlay(o: Overlay<'_>) -> Element<'_, Message> {
 
     let mut controls = column![].spacing(8).align_x(Alignment::Center);
     if o.ui.pointer_menu {
-        controls = controls.push(pointer_menu(o.session));
+        controls = controls.push(pointer_menu(o.session, o.pack));
     }
     if o.ui.ink_menu {
         controls = controls.push(ink_menu(o.session, o.pack));
     }
-    controls = controls.push(quick_bar(o.registry, o.session));
+    if o.ui.more_menu {
+        controls = controls.push(more_menu(o.registry, o.session));
+    }
+    controls = controls.push(quick_bar(o.registry, o.session, o.ui.more_menu));
     let bar = container(controls)
         .width(Length::Fill)
         .height(Length::Fill)
@@ -362,7 +371,15 @@ fn tool_tone(session: &Session, tool: &str) -> Tone {
     }
 }
 
-fn quick_bar<'a>(registry: &'a Registry, session: &'a Session) -> Element<'a, Message> {
+/// Tools that live in the More panel, with the glyph the More button borrows
+/// while one of them is active.
+const MORE_TOOLS: [(&str, Glyph); 2] = [(spotlight::TOOL, Glyph::Spotlight), (upcoming::TOOL, Glyph::Lens)];
+
+fn quick_bar<'a>(
+    registry: &'a Registry,
+    session: &'a Session,
+    more_open: bool,
+) -> Element<'a, Message> {
     let laser = session.settings().choice(point::STYLE) == "laser";
     let pointing = matches!(session.active_tool(), point::TOOL);
     let pointer_tone = if pointing {
@@ -416,26 +433,50 @@ fn quick_bar<'a>(registry: &'a Registry, session: &'a Session) -> Element<'a, Me
     .on_press(Message::Ui(UiMsg::ToggleInkMenu));
     let ink = tip(ink, "Ink colour and width".into(), None);
 
-    let muted = session.settings().bool(sound::MUTE);
-    let mute = tip(
-        icon_button(
-            if muted { Glyph::Mute } else { Glyph::Sound },
-            if muted { Tone::Warm } else { Tone::Plain },
-            Some(Message::Command(sound::TOGGLE_MUTE)),
+    // The More button shows the tool it is holding, so an active Spotlight or
+    // Lens is still visible on the bar.
+    let held = MORE_TOOLS
+        .iter()
+        .find(|(tool, _)| session.active_tool() == *tool)
+        .map(|&(tool, glyph)| (registry.command(tool_command(tool)).map_or(tool, |d| d.label), glyph));
+    let more_on = more_open || held.is_some();
+    let more_color = if more_on {
+        theme::CYAN_TEXT
+    } else {
+        theme::TEXT_SOFT
+    };
+    let more = button(
+        row![
+            icon(held.map_or(Glyph::More, |(_, g)| g), 20.0, more_color),
+            icon(Glyph::ChevronUp, 14.0, more_color),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center),
+    )
+    .height(44)
+    .padding([12, 10])
+    .style(theme::tool_button(if more_on {
+        Tone::Selected
+    } else {
+        Tone::Plain
+    }))
+    .on_press(Message::Ui(UiMsg::ToggleMoreMenu));
+    let more = tip(
+        more,
+        held.map_or_else(
+            || "More: Spotlight, Lens, Freeze, Clear marks".to_owned(),
+            |(label, _)| format!("More · {label} is active"),
         ),
-        if muted {
-            "Unmute tap sound"
-        } else {
-            "Mute tap sound"
-        }
-        .into(),
         None,
     );
 
-    let exit = button(
+    let end_label = registry
+        .command(system::EXIT)
+        .map_or("End annotation", |d| d.label);
+    let end = button(
         row![
             icon(Glyph::Close, 18.0, theme::TEXT_SOFT),
-            text("Exit").font(theme::MEDIUM).size(14),
+            text(end_label).font(theme::MEDIUM).size(14),
         ]
         .spacing(6)
         .align_y(Alignment::Center),
@@ -444,7 +485,11 @@ fn quick_bar<'a>(registry: &'a Registry, session: &'a Session) -> Element<'a, Me
     .padding([12, 14])
     .style(theme::tool_button(Tone::Exit))
     .on_press(Message::Command(system::EXIT));
-    let exit = tip(exit, "Exit".into(), registry.shortcut_label(system::EXIT));
+    let end = tip(
+        end,
+        format!("{end_label} · clears marks"),
+        registry.shortcut_label(system::EXIT),
+    );
 
     let bar = row![
         pointer,
@@ -462,33 +507,13 @@ fn quick_bar<'a>(registry: &'a Registry, session: &'a Session) -> Element<'a, Me
             Glyph::Pin,
             tool_tone(session, pin::TOOL)
         ),
-        command_button(
-            registry,
-            session,
-            spotlight::SELECT,
-            Glyph::Spotlight,
-            tool_tone(session, spotlight::TOOL)
-        ),
-        command_button(registry, session, upcoming::LENS, Glyph::Lens, Tone::Plain),
-        command_button(
-            registry,
-            session,
-            freeze::TOGGLE,
-            Glyph::Freeze,
-            if session.frozen_frame().is_some() {
-                Tone::Selected
-            } else {
-                Tone::Plain
-            },
-        ),
         divider(),
         ink,
         divider(),
         command_button(registry, session, system::UNDO, Glyph::Undo, Tone::Plain),
-        command_button(registry, session, system::CLEAR, Glyph::Clear, Tone::Plain),
-        mute,
+        more,
         divider(),
-        exit,
+        end,
     ]
     .spacing(4)
     .align_y(Alignment::Center);
@@ -499,20 +524,104 @@ fn quick_bar<'a>(registry: &'a Registry, session: &'a Session) -> Element<'a, Me
         .into()
 }
 
-fn pointer_menu<'a>(session: &Session) -> Element<'a, Message> {
+/// The command that selects a More-panel tool.
+fn tool_command(tool: &str) -> &'static str {
+    if tool == spotlight::TOOL {
+        spotlight::SELECT
+    } else {
+        upcoming::LENS
+    }
+}
+
+/// Labelled tools that don't need a slot on the bar.
+fn more_menu<'a>(registry: &'a Registry, session: &'a Session) -> Element<'a, Message> {
+    let entry = |id: &'static str, glyph: Glyph, tone: Tone, label: Option<String>| {
+        let def = registry.command(id);
+        let reason = def.and_then(|d| (d.available)(session).err());
+        let label = label.unwrap_or_else(|| def.map_or(id, |d| d.label).to_owned());
+        let color = match tone {
+            _ if reason.is_some() => theme::DISABLED,
+            Tone::Selected => theme::CYAN_TEXT,
+            Tone::Warm => theme::AMBER_TEXT,
+            _ => theme::TEXT_SOFT,
+        };
+        let mut body = row![
+            icon(glyph, 20.0, color),
+            text(label).font(theme::MEDIUM).size(14),
+            space().width(Length::Fill),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center);
+        if let Some(why) = &reason {
+            body = body.push(text(why.to_string()).size(12).color(theme::FAINT));
+        } else if let Some(key) = registry.shortcut_label(id) {
+            body = body.push(keycap(key.replace('+', " ")));
+        }
+        button(body)
+            .width(Length::Fill)
+            .height(44)
+            .padding([12, 14])
+            .style(theme::tool_button(tone))
+            .on_press_maybe(reason.is_none().then_some(Message::Command(id)))
+            .into()
+    };
+    let muted = session.settings().bool(sound::MUTE);
+    let items: Vec<Element<'a, Message>> = vec![
+        entry(
+            spotlight::SELECT,
+            Glyph::Spotlight,
+            tool_tone(session, spotlight::TOOL),
+            None,
+        ),
+        entry(
+            upcoming::LENS,
+            Glyph::Lens,
+            tool_tone(session, upcoming::TOOL),
+            None,
+        ),
+        entry(
+            freeze::TOGGLE,
+            Glyph::Freeze,
+            if session.frozen_frame().is_some() {
+                Tone::Selected
+            } else {
+                Tone::Plain
+            },
+            None,
+        ),
+        container(space())
+            .width(Length::Fill)
+            .height(1)
+            .style(theme::fill(theme::LINE_STRONG, 0.0))
+            .into(),
+        entry(system::CLEAR, Glyph::Clear, Tone::Plain, None),
+        entry(
+            sound::TOGGLE_MUTE,
+            if muted { Glyph::Mute } else { Glyph::Sound },
+            if muted { Tone::Warm } else { Tone::Plain },
+            Some(if muted { "Unmute tap sound" } else { "Mute tap sound" }.into()),
+        ),
+    ];
+    mouse_area(
+        container(iced::widget::Column::with_children(items).spacing(2).width(248))
+            .padding(6)
+            .style(theme::panel(12.0)),
+    )
+    .interaction(mouse::Interaction::Idle)
+    .into()
+}
+
+fn pointer_menu<'a>(session: &Session, pack: Option<&crate::packs::Pack>) -> Element<'a, Message> {
     let laser = session.settings().choice(point::STYLE) == "laser";
-    let choice = |glyph, label: &'static str, on: bool, id: &'static str| {
+    let tint = |on: bool| if on { theme::CYAN_TEXT } else { theme::TEXT_SOFT };
+    let choice = |art: Element<'a, Message>, label: String, on: bool, id: &'static str| {
         button(
             row![
-                icon(
-                    glyph,
-                    20.0,
-                    if on {
-                        theme::CYAN_TEXT
-                    } else {
-                        theme::TEXT_SOFT
-                    }
-                ),
+                container(art)
+                    .width(20)
+                    .height(20)
+                    .align_x(Alignment::Center)
+                    .align_y(Alignment::Center),
                 text(label).font(theme::MEDIUM).size(14),
             ]
             .spacing(8)
@@ -530,8 +639,27 @@ fn pointer_menu<'a>(session: &Session) -> Element<'a, Message> {
     mouse_area(
         container(
             row![
-                choice(Glyph::Paw, "Yohta", !laser, point::USE_PAW),
-                choice(Glyph::Laser, "Laser", laser, point::USE_LASER),
+                // The installed paw's own name and thumbnail.
+                match pack {
+                    Some(p) => choice(
+                        iced::widget::image(p.image.clone()).height(20).into(),
+                        p.name.clone(),
+                        !laser,
+                        point::USE_PAW,
+                    ),
+                    None => choice(
+                        icon(Glyph::Paw, 20.0, tint(!laser)).into(),
+                        "Paw".into(),
+                        !laser,
+                        point::USE_PAW,
+                    ),
+                },
+                choice(
+                    icon(Glyph::Laser, 20.0, tint(laser)).into(),
+                    "Laser".into(),
+                    laser,
+                    point::USE_LASER
+                ),
             ]
             .spacing(4),
         )
@@ -587,7 +715,8 @@ struct OverlayCanvas<'a> {
     session: &'a Session,
     ink: &'a InkCache,
     wheel: Option<wheel::WheelState>,
-    wheel_available: [bool; 8],
+    wheel_blocked: wheel::Availability,
+    lens_hint: &'static str,
     output: OutputId,
     now: Millis,
     pack: Option<&'a crate::packs::Pack>,
@@ -813,7 +942,7 @@ impl canvas::Program<Message> for OverlayCanvas<'_> {
             draw_mark(&mut live, draft, 1.0);
         }
         match &self.wheel {
-            Some(state) => wheel::draw(&mut live, bounds, state, &self.wheel_available),
+            Some(state) => wheel::draw(&mut live, bounds, state, &self.wheel_blocked, self.lens_hint),
             None => {
                 if let Some((output, tip)) = self.session.tip(self.now)
                     && output == self.output

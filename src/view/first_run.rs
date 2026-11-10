@@ -6,8 +6,22 @@ use iced::{Alignment, Element, Length};
 use super::icons::{Glyph, icon};
 use super::{UiMsg, theme};
 use crate::app::Message;
+use crate::features::system;
+use crate::registry::Registry;
 
-pub fn view<'a>(shortcut: Option<String>) -> Element<'a, Message> {
+/// The card; its tips name the keys currently bound, so a rebind shows here.
+pub fn view<'a>(registry: &Registry) -> Element<'a, Message> {
+    let key = |id: &str| registry.shortcut_label(id).map(|k| k.replace('+', " "));
+    let shortcut = registry.shortcut_label(system::MASTER_TOGGLE);
+    let edit = match (key(system::UNDO), key(system::CLEAR)) {
+        (Some(u), Some(c)) => format!("2.  {u} undoes, {c} clears."),
+        (Some(u), None) => format!("2.  {u} undoes; Clear marks is under More."),
+        _ => "2.  Undo and Clear marks are on the quick bar.".to_owned(),
+    };
+    let exit = match key(system::EXIT) {
+        Some(e) => format!("3.  {e} hands the mouse back to your game."),
+        None => "3.  End annotation hands the mouse back to your game.".to_owned(),
+    };
     let logo = container(icon(Glyph::PawSolid, 20.0, theme::AMBER))
         .width(36)
         .height(36)
@@ -21,8 +35,8 @@ pub fn view<'a>(shortcut: Option<String>) -> Element<'a, Message> {
     .spacing(2);
     let tips = column![
         text("1.  Click to tap, drag to draw.").size(13).color(theme::SUBTLE),
-        text("2.  Ctrl Z undoes, X clears.").size(13).color(theme::SUBTLE),
-        text("3.  Esc hands the mouse back to your game.").size(13).color(theme::SUBTLE),
+        text(edit).size(13).color(theme::SUBTLE),
+        text(exit).size(13).color(theme::SUBTLE),
     ]
     .spacing(6);
     let mut action = row![

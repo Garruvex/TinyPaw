@@ -11,7 +11,9 @@ pub fn register(r: &mut Registrar) {
         id: TOGGLE,
         label: "Freeze frame",
         cli: Some("freeze"),
-        surfaces: Surfaces::TRAY.with(Surfaces::PICKER).with(Surfaces::CLI),
+        // Freeze lives on the annotation surfaces and its global shortcut, not
+        // the tray.
+        surfaces: Surfaces::PICKER.with(Surfaces::CLI),
         group: "1-session",
         order: 3,
         shortcut: Some((ShortcutContext::Global, "Ctrl+Alt+F")),

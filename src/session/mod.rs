@@ -271,6 +271,11 @@ impl Session {
         }
     }
 
+    /// Annotating without a held key, so "Annotate now" has nothing to do.
+    pub fn is_latched(&self) -> bool {
+        self.mode == Mode::Annotating(Ownership::Latched)
+    }
+
     /// Whether the tip and toolbar should be drawn.
     pub fn is_pointing(&self) -> bool {
         matches!(self.mode, Mode::Annotating(_))

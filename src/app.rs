@@ -72,6 +72,8 @@ pub struct App {
     overlays: Vec<Overlay>,
     displays: Vec<Display>,
     settings_window: Option<window::Id>,
+    /// Whether Settings uses the merged Windows header.
+    settings_framed: bool,
     first_run_window: Option<window::Id>,
     page: Page,
     notice: Option<String>,
@@ -185,6 +187,7 @@ impl App {
             overlays: Vec::new(),
             displays: displays::list(),
             settings_window: None,
+            settings_framed: false,
             first_run_window: None,
             page: Page::default(),
             notice: None,
@@ -259,6 +262,14 @@ impl App {
         let mut tasks = Vec::new();
 
         match message {
+            Message::NativeReady(id, hwnd) if Some(id) == self.settings_window => {
+                #[cfg(windows)]
+                {
+                    self.settings_framed = hwnd != 0 && platform::windows::frame::install(hwnd);
+                }
+            }
+            // Redraws the Settings header for caption-button hover.
+            Message::External(External::FrameChanged) => {}
             Message::NativeReady(id, hwnd) => {
                 if let Some(o) = self.overlays.iter_mut().find(|o| o.id == id) {
                     o.hwnd = hwnd;
@@ -403,7 +414,7 @@ impl App {
                         Ok(draft) => {
                             self.pointer_draft = Some(draft);
                             self.editing_pack = None;
-                            self.page = Page::Appearance;
+                            self.page = Page::Pointer;
                             self.notice = None;
                         }
                         Err(e) => self.notice = Some(format!("Could not use that image: {e}")),
@@ -537,6 +548,17 @@ impl App {
             }
             Message::WindowOpened(id) => {
                 #[cfg(windows)]
+                if Some(id) == self.settings_window {
+                    tasks.push(window::run(id, move |w| {
+                        use iced::window::raw_window_handle::RawWindowHandle;
+                        let hwnd = match w.window_handle().map(|h| h.as_raw()) {
+                            Ok(RawWindowHandle::Win32(h)) => h.hwnd.get(),
+                            _ => 0,
+                        };
+                        Message::NativeReady(id, hwnd)
+                    }));
+                }
+                #[cfg(windows)]
                 if self.mascot.as_ref().is_some_and(|m| m.id == id) {
                     tasks.push(window::run(id, |w| {
                         use iced::window::raw_window_handle::RawWindowHandle;
@@ -566,6 +588,7 @@ impl App {
                         .extend(self.session.handle(Event::MasterOff, now));
                 } else if Some(id) == self.settings_window {
                     self.settings_window = None;
+                    self.settings_framed = false;
                     self.notice = None;
                     tasks.push(window::close(id));
                 } else if Some(id) == self.first_run_window {
@@ -716,12 +739,13 @@ impl App {
                 }
                 out.collect(self.dispatch(id, now).ok());
             }
-            Msg::Set(id, value) => {
+            Msg::CharacterSettings => {
                 #[cfg(windows)]
                 if let Some(m) = &mut self.mascot {
                     m.close_menu();
                 }
-                out.sets.push((id, value));
+                self.page = Page::Character;
+                tasks.push(self.open_settings());
             }
             #[cfg(windows)]
             msg => {
@@ -750,7 +774,8 @@ impl App {
             let want = s.bool(character::ENABLED);
             let size = s.float(character::SIZE) as f32;
             let hidden = self.session.overlay_state() == OverlayState::Interactive;
-            let rows = MASCOT_MENU_ROWS;
+            // The menu is as tall as its visible rows.
+            let rows = self.mascot_menu().len();
             match (&mut self.mascot, want) {
                 (None, true) => {
                     let anchor = (s.float(character::X), s.float(character::Y));
@@ -773,12 +798,13 @@ impl App {
         Task::none()
     }
 
-    /// The character's menu: annotation, sound and app controls, dispatched
-    /// through the registry and disabled when unavailable.
+    /// The character's menu: annotation, its own settings and Hide. Commands
+    /// go through the registry and are disabled when unavailable; eye
+    /// tracking and tap mute live in Settings. A pose choice joins these once
+    /// a pack has more than one pose.
     #[cfg(windows)]
     fn mascot_menu(&self) -> Vec<crate::mascot::desktop::Item> {
         use crate::mascot::{Msg, desktop::Item};
-        let s = self.session.settings();
         let command = |id: &'static str, label: &'static str, checked: Option<bool>| Item {
             label,
             checked,
@@ -791,23 +817,14 @@ impl App {
         vec![
             command(
                 system::MASTER_TOGGLE,
-                "TinyPaw On",
+                "Annotation enabled",
                 Some(self.session.is_enabled()),
             ),
-            command(
-                sound::TOGGLE_MUTE,
-                "Mute tap sound",
-                Some(s.bool(sound::MUTE)),
-            ),
             Item {
-                label: "Eyes follow cursor",
-                checked: Some(s.bool(character::EYES)),
-                on_press: Some(Msg::Set(
-                    character::EYES,
-                    Value::Bool(!s.bool(character::EYES)),
-                )),
+                label: "Character settings…",
+                checked: None,
+                on_press: Some(Msg::CharacterSettings),
             },
-            command(system::SETTINGS, "Settings…", None),
             command(character::HIDE, "Hide character", None),
         ]
     }
@@ -865,12 +882,19 @@ impl App {
                     }
                 }
             }
+            UiMsg::ToggleMoreMenu => {
+                let open = !self.ui.more_menu;
+                self.ui.close_menus();
+                self.ui.more_menu = open;
+            }
             UiMsg::TogglePointerMenu => {
                 self.ui.ink_menu = false;
+                self.ui.more_menu = false;
                 self.ui.pointer_menu = !self.ui.pointer_menu;
             }
             UiMsg::ToggleInkMenu => {
                 self.ui.pointer_menu = false;
+                self.ui.more_menu = false;
                 self.ui.ink_menu = !self.ui.ink_menu;
             }
             UiMsg::Nav(page) => self.page = page,
@@ -1160,6 +1184,19 @@ impl App {
         self.audio
             .set_pack(self.current_pack().and_then(|p| p.tap.clone()));
         self.audio.play(tap, volume);
+    }
+
+    /// The merged header's live state, when it is installed.
+    fn settings_frame(&self) -> Option<view::settings::caption::Frame> {
+        #[cfg(windows)]
+        if self.settings_framed {
+            use platform::windows::frame;
+            return Some(view::settings::caption::Frame {
+                hover: frame::hover(),
+                maximized: frame::maximized(),
+            });
+        }
+        None
     }
 
     fn open_settings(&mut self) -> Task<Message> {
@@ -1460,6 +1497,7 @@ impl App {
                 draft: self.pointer_draft.as_ref(),
                 editing: self.editing_pack.is_some(),
                 notice: self.notice.as_deref(),
+                frame: self.settings_frame(),
             });
         }
         #[cfg(windows)]
@@ -1467,7 +1505,7 @@ impl App {
             return m.view(self.mascot_menu(), &self.mascot_options());
         }
         if Some(window) == self.first_run_window {
-            return view::first_run::view(self.registry.shortcut_label(system::MASTER_TOGGLE));
+            return view::first_run::view(&self.registry);
         }
         iced::widget::space().into()
     }
@@ -1544,9 +1582,6 @@ impl App {
         Subscription::batch(subs)
     }
 }
-
-/// Entries in the character menu; fixes the menu's height.
-const MASCOT_MENU_ROWS: usize = 5;
 
 /// How long an overlay notice stays in the status chip.
 const NOTICE_MS: Millis = 3000;

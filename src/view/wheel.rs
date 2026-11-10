@@ -23,10 +23,25 @@ pub const ITEMS: [Item; 8] = [
     Item { glyph: Glyph::Text, label: "Text", hint: "Click, type, Enter", command: text::SELECT },
     Item { glyph: Glyph::Pin, label: "Pin", hint: "Numbered markers", command: pin::SELECT },
     Item { glyph: Glyph::Spotlight, label: "Spotlight", hint: "Dim everything else", command: spotlight::SELECT },
-    Item { glyph: Glyph::Lens, label: "Lens", hint: "Coming soon", command: upcoming::LENS },
+    Item { glyph: Glyph::Lens, label: "Lens", hint: "Magnify the window behind", command: upcoming::LENS },
     Item { glyph: Glyph::Freeze, label: "Freeze", hint: "Draw on a still", command: freeze::TOGGLE },
-    Item { glyph: Glyph::Clear, label: "Clear", hint: "Remove all marks", command: system::CLEAR },
+    // Undo rather than Clear: a mis-flick here is easy, and Undo reverses it.
+    // Clear marks stays in the bar's More panel and on its key.
+    Item { glyph: Glyph::Undo, label: "Undo", hint: "Remove the last mark", command: system::UNDO },
 ];
+
+/// The Lens hint for its source setting: the desktop source magnifies
+/// whatever is under the pointer, the others one window.
+pub fn lens_hint(source: &str) -> &'static str {
+    match source {
+        "desktop" => "Magnify under the pointer",
+        "foreground" => "Magnify the window behind",
+        _ => "Magnify the chosen window",
+    }
+}
+
+/// Per item: `None` when it can run, otherwise why not.
+pub type Availability = [Option<&'static str>; 8];
 
 const OUTER: f32 = 210.0;
 const INNER: f32 = 80.0;
@@ -72,8 +87,14 @@ fn label(frame: &mut Frame, content: &str, at: Point, size: f32, color: Color, f
     });
 }
 
-/// Draws the wheel; `available[i]` dims items that cannot run yet.
-pub fn draw(frame: &mut Frame, bounds: Rectangle, state: &WheelState, available: &[bool; 8]) {
+/// Draws the wheel, dimming items that cannot run and saying why on hover.
+pub fn draw(
+    frame: &mut Frame,
+    bounds: Rectangle,
+    state: &WheelState,
+    blocked: &Availability,
+    lens_hint: &'static str,
+) {
     let size = bounds.size();
     frame.fill_rectangle(Point::ORIGIN, size, Color::from_rgba8(8, 10, 12, 0.42));
     let c = state
@@ -96,7 +117,8 @@ pub fn draw(frame: &mut Frame, bounds: Rectangle, state: &WheelState, available:
     for (i, item) in ITEMS.iter().enumerate() {
         let p = item_center(c, i);
         let hovered = state.hover == Some(i);
-        let color = match (available[i], hovered) {
+        let available = blocked[i].is_none();
+        let color = match (available, hovered) {
             (false, true) => theme::MUTED,
             (false, false) => theme::DISABLED,
             (true, true) => theme::CYAN_TEXT,
@@ -104,9 +126,9 @@ pub fn draw(frame: &mut Frame, bounds: Rectangle, state: &WheelState, available:
         };
         if hovered {
             let ring = Path::circle(p, ITEM);
-            let bg = if available[i] { theme::CYAN_BG } else { Color::from_rgba8(255, 255, 255, 0.06) };
+            let bg = if available { theme::CYAN_BG } else { Color::from_rgba8(255, 255, 255, 0.06) };
             frame.fill(&ring, bg);
-            if available[i] {
+            if available {
                 frame.stroke(&ring, Stroke::default().with_color(theme::CYAN_RING).with_width(1.5));
             }
         }
@@ -120,7 +142,11 @@ pub fn draw(frame: &mut Frame, bounds: Rectangle, state: &WheelState, available:
     let (title, hint) = match state.hover {
         Some(i) => (
             ITEMS[i].label,
-            if available[i] { ITEMS[i].hint } else { "Coming soon" },
+            match blocked[i] {
+                Some(why) => why,
+                None if ITEMS[i].command == upcoming::LENS => lens_hint,
+                None => ITEMS[i].hint,
+            },
         ),
         None => ("Pick a tool", "Point, then release"),
     };
@@ -142,8 +168,14 @@ mod tests {
         w.track(Point::new(600.0, 500.0));
         assert_eq!(w.hover, Some(2), "right is text");
         w.track(Point::new(430.0, 430.0));
-        assert_eq!(w.hover, Some(7), "up-left is clear");
+        assert_eq!(w.hover, Some(7), "up-left is undo");
         w.track(Point::new(505.0, 505.0));
         assert_eq!(w.hover, None, "back in the centre cancels");
+    }
+
+    #[test]
+    fn no_wedge_clears_marks() {
+        assert!(ITEMS.iter().all(|i| i.command != system::CLEAR));
+        assert_eq!(ITEMS[7].command, system::UNDO);
     }
 }

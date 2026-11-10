@@ -14,9 +14,10 @@ pub enum Msg {
     /// Cursor, drag and hit-test polling while visible.
     Poll,
     Native(isize),
-    /// A menu entry: run a registered command, or change a setting.
+    /// A menu entry that runs a registered command.
     Command(&'static str),
-    Set(&'static str, crate::registry::Value),
+    /// Open Settings on the Character page.
+    CharacterSettings,
 }
 
 use iced::widget::canvas::{self as drawing, Frame, Geometry};

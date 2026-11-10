@@ -45,6 +45,8 @@ pub enum External {
     Interrupted,
     DisplaysChanged,
     MotionChanged,
+    /// Settings caption-button hover or maximized state changed.
+    FrameChanged,
     InteractKey(bool),
     Cli {
         line: String,

@@ -526,3 +526,201 @@ pub fn unoccluding(hwnd: isize) {
         );
     }
 }
+
+/// The Settings window's merged header: TinyPaw draws one row in place of the
+/// system title bar, and this subclass tells Windows which parts of that row
+/// drag, which are caption buttons and which are ordinary controls. The real
+/// frame stays, so resizing, Snap Layouts, the system menu and Alt+F4 keep
+/// their native behaviour.
+pub mod frame {
+    use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+
+    use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
+    use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
+    use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TrackMouseEvent,
+    };
+    use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+
+    // The header's drawn layout and this hit test share one set of sizes.
+    pub use crate::view::settings::caption::{BUTTON_W, Button, CONTROLS_W, HEADER};
+
+    static HOVER: AtomicU8 = AtomicU8::new(0);
+    static PRESSED: AtomicU8 = AtomicU8::new(0);
+    static MAXIMIZED: AtomicBool = AtomicBool::new(false);
+
+    fn button(code: u8) -> Option<Button> {
+        match code as u32 {
+            HTMINBUTTON => Some(Button::Minimize),
+            HTMAXBUTTON => Some(Button::Maximize),
+            HTCLOSE => Some(Button::Close),
+            _ => None,
+        }
+    }
+
+    /// The caption button under the pointer, for hover drawing.
+    pub fn hover() -> Option<Button> {
+        button(HOVER.load(Ordering::Relaxed))
+    }
+
+    pub fn maximized() -> bool {
+        MAXIMIZED.load(Ordering::Relaxed)
+    }
+
+    /// Installs the merged header on `hwnd`. Returns false if Windows refused,
+    /// in which case the window keeps its normal title bar.
+    pub fn install(hwnd: isize) -> bool {
+        let hwnd = hwnd as HWND;
+        unsafe {
+            if SetWindowSubclass(hwnd, Some(proc), 0x4652, 0) == 0 {
+                return false;
+            }
+            MAXIMIZED.store(IsZoomed(hwnd) != 0, Ordering::Relaxed);
+            HOVER.store(0, Ordering::Relaxed);
+            // Recompute the frame now that WM_NCCALCSIZE drops the caption.
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
+        }
+        true
+    }
+
+    /// Resize-border thickness and scale at the window's current DPI.
+    fn border(hwnd: HWND) -> (i32, i32, f32) {
+        unsafe {
+            let dpi = GetDpiForWindow(hwnd).max(96);
+            let pad = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            (
+                GetSystemMetricsForDpi(SM_CXFRAME, dpi) + pad,
+                GetSystemMetricsForDpi(SM_CYFRAME, dpi) + pad,
+                dpi as f32 / 96.0,
+            )
+        }
+    }
+
+    fn set_hover(code: u8) {
+        if HOVER.swap(code, Ordering::Relaxed) != code {
+            crate::platform::send(crate::platform::External::FrameChanged);
+        }
+    }
+
+    /// Where a client-space point falls in the header.
+    fn hit(hwnd: HWND, x: i32, y: i32) -> u32 {
+        let (frame_x, frame_y, k) = border(hwnd);
+        let mut rc = RECT::default();
+        unsafe { GetClientRect(hwnd, &mut rc) };
+        let width = rc.right - rc.left;
+        // The top resize band replaces the caption's own top border.
+        if !maximized() && y < frame_y {
+            return if x < frame_x {
+                HTTOPLEFT
+            } else if x >= width - frame_x {
+                HTTOPRIGHT
+            } else {
+                HTTOP
+            };
+        }
+        if (y as f32) >= HEADER * k {
+            return HTCLIENT;
+        }
+        let from_right = (width - x) as f32 / k;
+        if from_right <= BUTTON_W {
+            HTCLOSE
+        } else if from_right <= BUTTON_W * 2.0 {
+            HTMAXBUTTON
+        } else if from_right <= BUTTON_W * 3.0 {
+            HTMINBUTTON
+        } else if from_right <= BUTTON_W * 3.0 + CONTROLS_W {
+            HTCLIENT
+        } else {
+            HTCAPTION
+        }
+    }
+
+    unsafe extern "system" fn proc(
+        hwnd: HWND,
+        msg: u32,
+        w: usize,
+        l: isize,
+        _: usize,
+        _: usize,
+    ) -> isize {
+        unsafe {
+            match msg {
+                // Keep the side and bottom borders; give the caption to the
+                // client. A maximized window overhangs the monitor by its
+                // border, so inset the top by that much.
+                WM_NCCALCSIZE if w != 0 => {
+                    let params = &mut *(l as *mut NCCALCSIZE_PARAMS);
+                    let top = params.rgrc[0].top;
+                    let result = DefSubclassProc(hwnd, msg, w, l);
+                    let zoomed = IsZoomed(hwnd) != 0;
+                    params.rgrc[0].top = top + if zoomed { border(hwnd).1 } else { 0 };
+                    if MAXIMIZED.swap(zoomed, Ordering::Relaxed) != zoomed {
+                        crate::platform::send(crate::platform::External::FrameChanged);
+                    }
+                    return result;
+                }
+                WM_NCHITTEST => {
+                    let native = DefSubclassProc(hwnd, msg, w, l);
+                    if native as u32 != HTCLIENT {
+                        return native; // side and bottom borders
+                    }
+                    let mut p = POINT {
+                        x: (l & 0xFFFF) as i16 as i32,
+                        y: ((l >> 16) & 0xFFFF) as i16 as i32,
+                    };
+                    ScreenToClient(hwnd, &mut p);
+                    return hit(hwnd, p.x, p.y) as isize;
+                }
+                WM_NCMOUSEMOVE => {
+                    let code = if button(w as u8).is_some() { w as u8 } else { 0 };
+                    if code != 0 && HOVER.load(Ordering::Relaxed) == 0 {
+                        let mut track = TRACKMOUSEEVENT {
+                            cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                            dwFlags: TME_LEAVE | TME_NONCLIENT,
+                            hwndTrack: hwnd,
+                            dwHoverTime: 0,
+                        };
+                        TrackMouseEvent(&mut track);
+                    }
+                    set_hover(code);
+                }
+                WM_NCMOUSELEAVE | WM_MOUSEMOVE => {
+                    set_hover(0);
+                    PRESSED.store(0, Ordering::Relaxed);
+                }
+                // TinyPaw draws the buttons: keep Windows from drawing classic
+                // ones on press, and act on release over the same button.
+                WM_NCLBUTTONDOWN | WM_NCLBUTTONDBLCLK if button(w as u8).is_some() => {
+                    PRESSED.store(w as u8, Ordering::Relaxed);
+                    return 0;
+                }
+                WM_NCLBUTTONUP if button(w as u8).is_some() => {
+                    let pressed = PRESSED.swap(0, Ordering::Relaxed);
+                    if pressed == w as u8 {
+                        let command = match button(pressed) {
+                            Some(Button::Minimize) => SC_MINIMIZE,
+                            Some(Button::Maximize) if IsZoomed(hwnd) != 0 => SC_RESTORE,
+                            Some(Button::Maximize) => SC_MAXIMIZE,
+                            _ => SC_CLOSE,
+                        };
+                        set_hover(0);
+                        PostMessageW(hwnd, WM_SYSCOMMAND, command as usize, 0);
+                    }
+                    return 0;
+                }
+                _ => {}
+            }
+            DefSubclassProc(hwnd, msg, w, l)
+        }
+    }
+}

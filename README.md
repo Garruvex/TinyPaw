@@ -8,17 +8,17 @@ TinyPaw is a desktop helper for pointing and drawing over presentations and game
 Working on Windows:
 
 - **Overlay:** transparent overlays on the primary display, a named display or all displays with your Yohta, Moro, Moro Crayon or Zaeri pointer art (Furry Paw, Stretch Paw or Classic Stick) or a laser dot, ink in six colours and four widths, optional fade after 3 seconds, and a tap animation. Stretch Paw bends the pack's forearm PNG, preserving a short wrist section. Packs without forearm art use a curved limb in their accent colour.
-- **Quick bar and wheel:** the Graphite quick bar holds the tools, ink, Undo, Clear, Mute and Exit, with shortcut tooltips. The quick wheel opens with a held **Ctrl+Alt+W**.
-- **Settings window:** Controls, Display, Appearance and Sound sections with a live preview and a master switch. Choices are saved to `%APPDATA%\TinyPaw\preferences.json`.
 - **Sound:** three synthesized tap sounds (Blackboard Knock, Bubble Pop, Rubber Bonk) a pack-provided tap or an imported WAV, with volume and mute.
+- **Quick bar and wheel:** the Graphite quick bar holds Pointer, Text, Pin, ink, Undo and End annotation, with Spotlight, Lens, Freeze, Clear marks and tap mute under **More**. Tooltips show shortcuts. The quick wheel opens with a held **Ctrl+Alt+W**; its up-left wedge is Undo, so a mis-flick can't wipe your marks.
+- **Settings window:** Pointer (with a live preview that stays in view), Character, Annotation, Controls, Display and Tap sounds pages, and an Annotation switch in the header. Choices are saved to `%APPDATA%\TinyPaw\preferences.json`.
 - **Activation:** Toggle and Hold-to-draw styles, a tray menu, a first-run card, and a CLI that forwards to the running instance.
-- **Tools:** Text labels (IME-aware: the first Enter accepts a candidate, the next places the label), numbered Pins, Spotlight, and Freeze (**Ctrl+Alt+F**) to draw on a still of the screen, with Return Live. Lens shows a live 2× or 4× window crop; choose its source under Appearance or activate from the target game window.
+- **Tools:** Text labels (IME-aware: the first Enter accepts a candidate, the next places the label), numbered Pins, Spotlight, and Freeze (**Ctrl+Alt+F**) to draw on a still of the screen, with Return Live. Lens shows a live 2× or 4× window crop; choose its source under Annotation → Lens → Advanced or activate from the target game window.
 
-- **Pointer packs:** built-in packs ship inside the executable. **Add yours** (Settings > Appearance) imports a transparent paw PNG. Click the tip, adjust the amber wrist marker with the position sliders, and optionally add a matching forearm PNG. Click its upper wrist joint, adjust the forearm width, and move or press in the pair preview before saving. Both images and their alignment are saved together in `%APPDATA%\TinyPaw\packs`. Copyable art prompts are available in Appearance. To build a pack from large source art, run `python tools/prepare_pack.py`.
+- **Pointer packs:** built-in packs ship inside the executable. **Add yours** (Settings > Pointer) imports a transparent paw PNG. Click the tip, adjust the amber wrist marker with the position sliders, and optionally add a matching forearm PNG. Click its upper wrist joint, adjust the forearm width, and move or press in the pair preview before saving. Both images and their alignment are saved together in `%APPDATA%\TinyPaw\packs`. Copyable art prompts are on the Pointer page. To build a pack from large source art, run `python tools/prepare_pack.py`.
 
-Settings > Controls lets you rebind shortcuts and choose Windows, full or reduced motion. Hold **Alt** from Point to use the app underneath while committed marks remain visible; release Alt and all mouse buttons to resume. Hold to interact is disabled during a drag, Hold-to-draw and Freeze. Use the Annotate now tray action or `tinypaw latch` to resume explicitly.
+Settings > Controls lets you rebind shortcuts and choose Follow Windows, Full motion or Reduced motion. Hold **Alt** from Point to use the app underneath while committed marks remain visible; release Alt and all mouse buttons to resume. Hold to interact is disabled during a drag, Hold-to-draw and Freeze. Use the Annotate now tray action or `tinypaw latch` to resume explicitly.
 
-Appearance exposes label size, colour and backing, Spotlight radius, Lens source/zoom/size, pressed-pose PNG and pack tap WAV import, whole-folder import, and removal/re-aiming of installed pointers. Ctrl+Z in a text draft edits the draft; the annotation history stays intact.
+Annotation holds ink, label size, colour and backing, Spotlight radius and Lens source/zoom/size. Pointer holds pressed-pose PNG and pack tap WAV import, whole-folder import, and removal/re-aiming of installed pointers. Ctrl+Z in a text draft edits the draft; the annotation history stays intact.
 
 Windows lock, suspend and display topology/DPI changes end the session and release capture. Re-select a missing monitor under Display before activation. Source-window capture avoids recursive magnification and leaves the overlays visible to monitor sharing; do not mark TinyPaw capture-excluded.
 
@@ -34,7 +34,7 @@ cargo build --release
 target/release/tinypaw
 ```
 
-TinyPaw starts Off in the tray. Left-click the tray icon or press **Ctrl+Alt+P** to switch it On.
+TinyPaw starts Off in the tray. Left-click the tray icon, tick **Annotation enabled** in its menu, or press **Ctrl+Alt+P** to switch it On. The tray menu also has Annotate now, Show character, Settings and Quit TinyPaw; Freeze is on the quick bar's More panel and **Ctrl+Alt+F**.
 
 | Input | Action |
 | --- | --- |
@@ -52,7 +52,7 @@ TinyPaw starts Off in the tray. Left-click the tray icon or press **Ctrl+Alt+P**
 
 ### Desktop character (Windows, experimental)
 
-Turn on Yohta under **Settings → Character**, with **Show character** in the tray menu, or with `tinypaw mascot` (`tinypaw mascot-hide` hides him). He sits on the desktop and his eyes follow the cursor. Click him for a menu with TinyPaw On, Mute, Eyes follow cursor, Settings and Hide character. Drag him to move him. Blank pixels around him pass clicks through to the app underneath, and clicking him never takes keyboard focus. He stays while TinyPaw is Off and steps aside while the annotation surface owns input. Size, motion and position are saved.
+Turn on Yohta under **Settings → Character**, with **Show character** in the tray menu, or with `tinypaw mascot` (`tinypaw mascot-hide` hides him). He sits on the desktop and his eyes follow the cursor. Click him for a menu with Annotation enabled, Character settings… and Hide character; eye tracking is in Character settings and tap mute in Tap sounds. Drag him to move him. Blank pixels around him pass clicks through to the app underneath, and clicking him never takes keyboard focus. He stays while TinyPaw is Off and steps aside while the annotation surface owns input. Size, motion and position are saved.
 
 `cargo run -- --mascot-preview` still opens the standalone rig preview with a simulated music beat. Custom character imports, the standing pose and real music response are still pending; see [mascot prototype](docs/mascot-prototype.md) and [desktop character and custom import feature](docs/mascot-feature.md).
 

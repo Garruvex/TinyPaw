@@ -290,7 +290,7 @@ impl Desktop {
             }
             Msg::Released => (Task::none(), self.release()),
             Msg::Poll => self.poll(o),
-            Msg::Command(_) | Msg::Set(..) => (Task::none(), None),
+            Msg::Command(_) | Msg::CharacterSettings => (Task::none(), None),
         }
     }
 

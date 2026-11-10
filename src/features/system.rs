@@ -2,9 +2,9 @@
 
 use crate::registry::{
     CommandDef, Constraint, Outcome, Registrar, SettingDef, ShellAction, ShortcutContext, Surfaces,
-    Value, always, when_enabled,
+    Unavailable, Value, always, when_enabled,
 };
-use crate::session::Event;
+use crate::session::{Event, Session};
 
 pub const MASTER_TOGGLE: &str = "system.master_toggle";
 pub const OFF: &str = "system.off";
@@ -60,7 +60,7 @@ pub fn register(r: &mut Registrar) {
     });
     r.command(CommandDef {
         id: MASTER_TOGGLE,
-        label: "TinyPaw On",
+        label: "Annotation enabled",
         cli: Some("toggle"),
         surfaces: Surfaces::TRAY.with(Surfaces::CLI),
         group: "0-master",
@@ -90,7 +90,7 @@ pub fn register(r: &mut Registrar) {
         group: "1-session",
         order: 0,
         shortcut: None,
-        available: when_enabled,
+        available: when_waiting,
         handler: |_| Outcome::Session(Event::Latch),
         on_release: None,
     });
@@ -134,7 +134,7 @@ pub fn register(r: &mut Registrar) {
     });
     r.command(CommandDef {
         id: CLEAR,
-        label: "Clear",
+        label: "Clear marks",
         cli: Some("clear"),
         surfaces: Surfaces::TOOLBAR.with(Surfaces::CLI),
         group: "2-edit",
@@ -146,7 +146,7 @@ pub fn register(r: &mut Registrar) {
     });
     r.command(CommandDef {
         id: EXIT,
-        label: "Exit",
+        label: "End annotation",
         cli: None,
         surfaces: Surfaces::TOOLBAR,
         group: "3-exit",
@@ -216,4 +216,15 @@ pub fn register(r: &mut Registrar) {
         default: Value::Choice("keep"),
         constraint: Constraint::Choices(&["keep", "3s"]),
     });
+}
+
+/// "Annotate now" is the recovery action for when TinyPaw is On but waiting
+/// for input; once annotation is latched there is nothing for it to do.
+fn when_waiting(s: &Session) -> Result<(), Unavailable> {
+    when_enabled(s)?;
+    if s.is_latched() {
+        Err(Unavailable("Already annotating"))
+    } else {
+        Ok(())
+    }
 }

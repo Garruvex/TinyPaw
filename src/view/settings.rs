@@ -18,12 +18,39 @@ use crate::session::{ActivationStyle, Session};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Page {
+    #[default]
+    Pointer,
+    Character,
+    Annotation,
     Controls,
     Display,
-    #[default]
-    Appearance,
-    Character,
     Sound,
+}
+
+/// The merged Windows header: sizes shared with the native hit test, and the
+/// caption buttons TinyPaw draws in place of the system title bar.
+pub mod caption {
+    /// Header height in logical pixels.
+    pub const HEADER: f32 = 44.0;
+    /// Width of each caption button in logical pixels.
+    pub const BUTTON_W: f32 = 46.0;
+    /// Logical width left of the caption buttons that holds clickable
+    /// controls (the Annotation switch); the rest of the header drags.
+    pub const CONTROLS_W: f32 = 270.0;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Button {
+        Minimize,
+        Maximize,
+        Close,
+    }
+
+    /// Live state of the merged header, when it is installed.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct Frame {
+        pub hover: Option<Button>,
+        pub maximized: bool,
+    }
 }
 
 pub struct SettingsView<'a> {
@@ -43,6 +70,8 @@ pub struct SettingsView<'a> {
     /// "Add your pointer" in progress.
     pub draft: Option<&'a Draft>,
     pub editing: bool,
+    /// Set when the Windows merged header replaced the system title bar.
+    pub frame: Option<caption::Frame>,
 }
 
 fn h1<'a>(label: &'a str) -> Element<'a, Message> {
@@ -105,7 +134,7 @@ fn header<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         .align_y(Alignment::Center)
         .style(theme::fill(theme::AMBER_BG, 8.0));
     let switch = toggler(on)
-        .label(if on { "On" } else { "Off" })
+        .label("Annotation")
         .text_size(14)
         .size(22)
         .spacing(10)
@@ -121,6 +150,9 @@ fn header<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         999.0,
         theme::LINE,
     )));
+    if let Some(frame) = v.frame {
+        return framed_header(logo, right, frame);
+    }
     container(
         row![
             row![logo, text("TinyPaw").font(theme::HEADING).size(17)]
@@ -134,6 +166,61 @@ fn header<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     .height(60)
     .padding([0, 20])
     .align_y(Alignment::Center)
+    .style(theme::outlined(theme::HEADER, 0.0, theme::LINE))
+    .into()
+}
+
+/// One row in place of the Windows title bar. Everything outside the switch
+/// area and the caption buttons drags the window; the native hit test uses
+/// the same `caption` sizes, so the two must change together.
+fn framed_header<'a>(
+    logo: impl Into<Element<'a, Message>>,
+    controls: iced::widget::Row<'a, Message>,
+    frame: caption::Frame,
+) -> Element<'a, Message> {
+    use caption::{BUTTON_W, Button, CONTROLS_W, HEADER};
+    // Windows' own close-hover red, so the button reads as the system one.
+    let close_red = Color::from_rgb8(0xC4, 0x2B, 0x1C);
+    let cap = |b: Button, glyph: Glyph| -> Element<'a, Message> {
+        let hovered = frame.hover == Some(b);
+        let (bg, fg) = match (b, hovered) {
+            (Button::Close, true) => (close_red, Color::WHITE),
+            (_, true) => (theme::HOVER, theme::TEXT),
+            _ => (Color::TRANSPARENT, theme::TEXT_SOFT),
+        };
+        container(icon(glyph, 14.0, fg))
+            .width(BUTTON_W)
+            .height(HEADER)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .style(theme::fill(bg, 0.0))
+            .into()
+    };
+    container(
+        row![
+            space().width(14),
+            logo.into(),
+            space().width(10),
+            text("TinyPaw Settings").font(theme::HEADING).size(14),
+            space().width(Length::Fill),
+            container(controls)
+                .width(CONTROLS_W)
+                .padding([0, 10])
+                .align_x(Alignment::End),
+            cap(Button::Minimize, Glyph::WinMinimize),
+            cap(
+                Button::Maximize,
+                if frame.maximized {
+                    Glyph::WinRestore
+                } else {
+                    Glyph::WinMaximize
+                },
+            ),
+            cap(Button::Close, Glyph::Close),
+        ]
+        .align_y(Alignment::Center),
+    )
+    .height(HEADER)
     .style(theme::outlined(theme::HEADER, 0.0, theme::LINE))
     .into()
 }
@@ -161,29 +248,14 @@ fn nav<'a>(page: Page) -> Element<'a, Message> {
         .style(theme::nav_button(on))
         .on_press(Message::Ui(UiMsg::Nav(p)))
     };
-    let tip = container(
-        column![
-            text("Streaming on Discord?")
-                .font(theme::MEDIUM)
-                .size(12)
-                .color(theme::TEXT),
-            text("Share the game monitor, not the game window, so viewers see the paw and ink.")
-                .size(12)
-                .color(theme::MUTED),
-        ]
-        .spacing(2),
-    )
-    .padding(12)
-    .style(theme::fill(theme::RAISED, 10.0));
     container(
         column![
+            item(Page::Pointer, Glyph::Pointer, "Pointer"),
+            item(Page::Character, Glyph::Head, "Character"),
+            item(Page::Annotation, Glyph::Pen, "Annotation"),
             item(Page::Controls, Glyph::Controls, "Controls"),
             item(Page::Display, Glyph::Display, "Display"),
-            item(Page::Appearance, Glyph::Paw, "Appearance"),
-            item(Page::Character, Glyph::PawSolid, "Character"),
-            item(Page::Sound, Glyph::Sound, "Sound"),
-            space().height(Length::Fill),
-            tip,
+            item(Page::Sound, Glyph::Sound, "Tap sounds"),
         ]
         .spacing(4),
     )
@@ -204,24 +276,50 @@ fn main<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
                 .into(),
         );
     }
-    content.push(match v.page {
-        Page::Appearance => appearance(v),
-        Page::Controls => controls(v),
-        Page::Display => display_page(v),
-        Page::Sound => sound_page(v),
-        Page::Character => character_page(v),
-    });
-    scrollable(
-        container(Column::with_children(content).spacing(16))
-            .padding([24, 28])
-            .width(Length::Fill),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
+    let (body, side) = match v.page {
+        Page::Pointer => pointer_page(v),
+        Page::Annotation => (annotation_page(v), None),
+        Page::Controls => (controls(v), None),
+        Page::Display => (display_page(v), None),
+        Page::Sound => (sound_page(v), None),
+        Page::Character => (character_page(v), None),
+    };
+    content.push(body);
+    let pad = |left: f32, right: f32| iced::Padding {
+        top: 24.0,
+        right,
+        bottom: 24.0,
+        left,
+    };
+    let Some(side) = side else {
+        return scrollable(
+            container(Column::with_children(content).spacing(16))
+                .padding(pad(28.0, 28.0))
+                .width(Length::Fill),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into();
+    };
+    // The side panel (preview or pointer editor) scrolls separately, so the
+    // preview stays in view while the settings beside it scroll.
+    row![
+        scrollable(
+            container(Column::with_children(content).spacing(16))
+                .padding(pad(28.0, 14.0))
+                .width(Length::Fill),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill),
+        scrollable(container(side).padding(pad(14.0, 28.0)))
+            .width(Length::Shrink)
+            .height(Length::Fill),
+    ]
     .into()
 }
 
-fn appearance<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
+/// The pointer's look, plus the preview `main` keeps in view.
+fn pointer_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Element<'a, Message>>) {
     let s = v.session.settings();
     let laser = s.choice(point::STYLE) == "laser";
 
@@ -350,6 +448,83 @@ fn appearance<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         hint("Positive angles reach from the lower right."),
     ]);
     let width = s.float(system::INK_WIDTH);
+    let left = column![
+        h1("Pointer"),
+        section(vec![h2("Pointer"), pointers.into()]),
+        row![
+            button("Import folder").style(theme::secondary).on_press(Message::Ui(UiMsg::ImportPack)),
+            button("Re-aim pointer").style(theme::secondary).on_press_maybe(v.pack.filter(|p| p.folder.is_some()).map(|_| Message::Ui(UiMsg::EditPack))),
+            button("Remove pointer").style(theme::secondary).on_press_maybe(v.pack.filter(|p| p.folder.is_some()).map(|_| Message::Ui(UiMsg::RemovePack))),
+        ].spacing(8),
+        section(vec![
+            h2("Create your own artwork"),
+            hint("Attach your character reference in your image tool or send it with the prompt to an artist."),
+            row![
+                button(text("Copy pointer prompt").size(13))
+                    .padding([7, 12])
+                    .style(theme::secondary)
+                    .on_press(Message::Ui(UiMsg::CopyPointerPrompt)),
+                button(text("Copy forearm prompt").size(13))
+                    .padding([7, 12])
+                    .style(theme::secondary)
+                    .on_press(Message::Ui(UiMsg::CopyForearmPrompt)),
+            ].spacing(8).wrap().into(),
+            hint("Use Add yours to import the paw, then optionally attach a matching forearm and align the wrist."),
+        ]),
+        section(vec![h2("Presentation"), presentation.into(), hint(pres_hint)]),
+        section(vec![size_row.into(), size_slider.into()]),
+        if !laser && pres == "furry" { angle_control } else { space().into() },
+        hint("Ink, labels, Spotlight and Lens are under Annotation."),
+    ]
+    .spacing(22)
+    .width(Length::Fill);
+
+    let ink = theme::rgba(current_ink);
+    let tile = |bg: Color| {
+        canvas(PreviewTile {
+            background: bg,
+            ink,
+            width: width as f32,
+            laser,
+            stick: pres == "stick",
+            stretch: pres == "stretch",
+            scale: size as f32 / point::BASE_SIZE,
+            angle: -(angle as f32).to_radians(),
+            pack: v.pack.cloned(),
+        })
+        .width(Length::Fill)
+        .height(150)
+    };
+    if let Some(draft) = v.draft {
+        return (left.into(), Some(new_pointer(draft, v.editing)));
+    }
+    let preview = column![
+        h2("Preview"),
+        tile(Color::from_rgb8(0xF4, 0xF4, 0xF5)),
+        tile(Color::from_rgb8(0x1B, 0x26, 0x21)),
+        button(
+            text("Try a tap")
+                .font(theme::MEDIUM)
+                .size(13)
+                .width(Length::Fill)
+                .center()
+        )
+        .width(Length::Fill)
+        .padding([11, 12])
+        .style(theme::secondary)
+        .on_press(Message::Ui(UiMsg::PreviewSound)),
+    ]
+    .spacing(10)
+    .width(260);
+
+    (left.into(), Some(preview.into()))
+}
+
+/// Ink, then each tool's options: what the quick bar's tools draw with.
+fn annotation_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
+    let s = v.session.settings();
+    let current_ink = s.color(system::INK_COLOR);
+    let width = s.float(system::INK_WIDTH);
     let swatches = row(theme::INKS.iter().map(|&(_, c)| {
         button(space().width(28).height(28))
             .padding(0)
@@ -439,44 +614,8 @@ fn appearance<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
             .into()
     }))
     .spacing(8);
-    let left = column![
-        h1("Appearance"),
-        section(vec![h2("Pointer"), pointers.into()]),
-        row![
-            button("Import folder").style(theme::secondary).on_press(Message::Ui(UiMsg::ImportPack)),
-            button("Re-aim pointer").style(theme::secondary).on_press_maybe(v.pack.filter(|p| p.folder.is_some()).map(|_| Message::Ui(UiMsg::EditPack))),
-            button("Remove pointer").style(theme::secondary).on_press_maybe(v.pack.filter(|p| p.folder.is_some()).map(|_| Message::Ui(UiMsg::RemovePack))),
-        ].spacing(8),
-        h2("Label size"),
-        slider(12.0..=48.0, s.float(crate::features::text::SIZE), |x| Message::Set(crate::features::text::SIZE, Value::Float(x))).step(1.0).style(theme::range),
-        h2("Label colour"), label_swatches,
-        check("Dark label backing", s.bool(crate::features::text::BACKING), crate::features::text::BACKING),
-        source_picker,
-        h2("Lens magnification"),
-        pick_list(["2", "4"], Some(s.choice(crate::features::upcoming::ZOOM)), |z| Message::Set(crate::features::upcoming::ZOOM, Value::Choice(z))).padding([8,12]).style(theme::select),
-        h2("Lens size"),
-        slider(120.0..=480.0,s.float(crate::features::upcoming::SIZE),|x| Message::Set(crate::features::upcoming::SIZE,Value::Float(x))).step(10.0).style(theme::range),
-        h2("Spotlight radius"),
-        slider(60.0..=400.0, s.float(crate::features::spotlight::RADIUS), |x| Message::Set(crate::features::spotlight::RADIUS, Value::Float(x))).step(5.0).style(theme::range),
-
-        section(vec![
-            h2("Create your own artwork"),
-            hint("Attach your character reference in your image tool or send it with the prompt to an artist."),
-            row![
-                button(text("Copy pointer prompt").size(13))
-                    .padding([7, 12])
-                    .style(theme::secondary)
-                    .on_press(Message::Ui(UiMsg::CopyPointerPrompt)),
-                button(text("Copy forearm prompt").size(13))
-                    .padding([7, 12])
-                    .style(theme::secondary)
-                    .on_press(Message::Ui(UiMsg::CopyForearmPrompt)),
-            ].spacing(8).wrap().into(),
-            hint("Use Add yours to import the paw, then optionally attach a matching forearm and align the wrist."),
-        ]),
-        section(vec![h2("Presentation"), presentation.into(), hint(pres_hint)]),
-        section(vec![size_row.into(), size_slider.into()]),
-        if !laser && pres == "furry" { angle_control } else { space().into() },
+    column![
+        h1("Annotation"),
         section(vec![
             h2("Ink"),
             ink_row.into(),
@@ -484,50 +623,63 @@ fn appearance<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
                 .spacing(16)
                 .align_y(Alignment::Center)
                 .into(),
+            hint("The quick bar's ink button edits these same values."),
+        ]),
+        section(vec![
+            h2("Text labels"),
+            hint("Size"),
+            slider(12.0..=48.0, s.float(crate::features::text::SIZE), |x| {
+                Message::Set(crate::features::text::SIZE, Value::Float(x))
+            })
+            .step(1.0)
+            .style(theme::range)
+            .into(),
+            hint("Colour"),
+            label_swatches.into(),
+            check(
+                "Dark label backing",
+                s.bool(crate::features::text::BACKING),
+                crate::features::text::BACKING,
+            ),
+        ]),
+        section(vec![
+            h2("Spotlight radius"),
+            slider(60.0..=400.0, s.float(crate::features::spotlight::RADIUS), |x| {
+                Message::Set(crate::features::spotlight::RADIUS, Value::Float(x))
+            })
+            .step(5.0)
+            .style(theme::range)
+            .into(),
+        ]),
+        section(vec![
+            h2("Lens"),
+            row![
+                hint("Magnification"),
+                pick_list(
+                    ["2", "4"],
+                    Some(s.choice(crate::features::upcoming::ZOOM)),
+                    |z| Message::Set(crate::features::upcoming::ZOOM, Value::Choice(z))
+                )
+                .padding([8, 12])
+                .style(theme::select),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center)
+            .into(),
+            hint("Size"),
+            slider(120.0..=480.0, s.float(crate::features::upcoming::SIZE), |x| {
+                Message::Set(crate::features::upcoming::SIZE, Value::Float(x))
+            })
+            .step(10.0)
+            .style(theme::range)
+            .into(),
+            h2("Advanced"),
+            source_picker,
         ]),
     ]
     .spacing(22)
-    .width(Length::Fill);
-
-    let ink = theme::rgba(current_ink);
-    let tile = |bg: Color| {
-        canvas(PreviewTile {
-            background: bg,
-            ink,
-            width: width as f32,
-            laser,
-            stick: pres == "stick",
-            stretch: pres == "stretch",
-            scale: size as f32 / point::BASE_SIZE,
-            angle: -(angle as f32).to_radians(),
-            pack: v.pack.cloned(),
-        })
-        .width(Length::Fill)
-        .height(150)
-    };
-    if let Some(draft) = v.draft {
-        return row![left, new_pointer(draft, v.editing)].spacing(28).into();
-    }
-    let preview = column![
-        h2("Preview"),
-        tile(Color::from_rgb8(0xF4, 0xF4, 0xF5)),
-        tile(Color::from_rgb8(0x1B, 0x26, 0x21)),
-        button(
-            text("Try a tap")
-                .font(theme::MEDIUM)
-                .size(13)
-                .width(Length::Fill)
-                .center()
-        )
-        .width(Length::Fill)
-        .padding([11, 12])
-        .style(theme::secondary)
-        .on_press(Message::Ui(UiMsg::PreviewSound)),
-    ]
-    .spacing(10)
-    .width(260);
-
-    row![left, preview].spacing(28).into()
+    .max_width(640)
+    .into()
 }
 
 /// "Add your pointer": click the exact tip, name it, save.
@@ -933,6 +1085,20 @@ impl FadeChoice {
     }
 }
 
+/// A motion preference value with its display label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Motion(&'static str);
+
+impl std::fmt::Display for Motion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self.0 {
+            "full" => "Full motion",
+            "reduced" => "Reduced motion",
+            _ => "Follow Windows",
+        })
+    }
+}
+
 impl std::fmt::Display for FadeChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
@@ -1025,9 +1191,9 @@ fn controls<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         h1("Controls"),
         h2("Motion"),
         pick_list(
-            ["system", "full", "reduced"],
-            Some(v.session.settings().choice(system::MOTION)),
-            |m| Message::Set(system::MOTION, Value::Choice(m))
+            [Motion("system"), Motion("full"), Motion("reduced")],
+            Some(Motion(v.session.settings().choice(system::MOTION))),
+            |m| Message::Set(system::MOTION, Value::Choice(m.0))
         )
         .padding([8, 12])
         .style(theme::select),
@@ -1117,7 +1283,15 @@ fn character_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
             s.bool(mascot::IDLE),
             mascot::IDLE
         ),
-        hint("Reduced motion (Appearance) also stops idle motion and blinking."),
+        row![
+            hint("Reduced motion also stops idle motion and blinking."),
+            button(text("Motion settings").size(12).color(theme::CYAN_TEXT))
+                .padding([2, 4])
+                .style(theme::tool_button(theme::Tone::Plain))
+                .on_press(Message::Ui(UiMsg::Nav(Page::Controls))),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center),
         button(text("Reset position").size(13))
             .padding([7, 12])
             .style(theme::secondary)
@@ -1132,6 +1306,34 @@ fn character_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
 
 fn display_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     let s = v.session.settings();
+    // The cards and the list share one selection; only a named display that
+    // has gone away needs saying.
+    let target = s.choice(display::TARGET);
+    let missing: Element<'a, Message> = if target != "primary"
+        && target != "all"
+        && !v.displays.iter().any(|d| d.name == target)
+    {
+        text(format!("{target} isn't connected right now."))
+            .size(12)
+            .color(theme::AMBER_TEXT)
+            .into()
+    } else {
+        space().into()
+    };
+    let share_tip = container(
+        column![
+            text("Streaming on Discord?")
+                .font(theme::MEDIUM)
+                .size(12)
+                .color(theme::TEXT),
+            text("Share the game monitor, not the game window, so viewers see the paw and ink.")
+                .size(12)
+                .color(theme::MUTED),
+        ]
+        .spacing(2),
+    )
+    .padding(12)
+    .style(theme::fill(theme::RAISED, 10.0));
     column![
         h1("Display"),
         section(vec![
@@ -1158,14 +1360,17 @@ fn display_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
             .padding(12)
             .style(theme::select)
             .into(),
-            text(format!("Selected: {}", s.choice(display::TARGET))).into(),
+            missing,
         ]),
-        check(
-            "Hide the quick bar while streaming",
-            s.bool(display::HIDE_BAR),
-            display::HIDE_BAR
-        ),
-        hint("Shortcuts and the tray keep working while the bar is hidden."),
+        section(vec![
+            check(
+                "Hide the quick bar while streaming",
+                s.bool(display::HIDE_BAR),
+                display::HIDE_BAR,
+            ),
+            hint("Shortcuts and the tray keep working while the bar is hidden."),
+            share_tip.into(),
+        ]),
     ]
     .spacing(22)
     .max_width(640)
@@ -1197,7 +1402,7 @@ fn sound_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     .style(theme::select);
     let volume = s.float(sound::VOLUME);
     column![
-        h1("Sound"),
+        h1("Tap sounds"),
         section(vec![
             h2("Tap sound"),
             row![

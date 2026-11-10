@@ -66,7 +66,7 @@ pub fn build(registry: &Registry) -> Result<Tray, String> {
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false)
         .with_icon(off_icon.clone())
-        .with_tooltip("TinyPaw: Off")
+        .with_tooltip("TinyPaw: annotation off")
         .build()
         .map_err(|e| e.to_string())?;
     Ok(Tray {
@@ -100,7 +100,11 @@ impl Tray {
             return;
         }
         self.shown = Some(on);
-        let state = if on { "On" } else { "Off" };
+        let state = if on {
+            "annotation on"
+        } else {
+            "annotation off"
+        };
         let tip = match shortcut {
             Some(s) => format!("TinyPaw: {state} ({s})"),
             None => format!("TinyPaw: {state}"),

@@ -25,9 +25,16 @@ pub enum Glyph {
     Plus,
     Controls,
     Display,
+    More,
+    Pointer,
+    Head,
+    Pen,
+    WinMinimize,
+    WinMaximize,
+    WinRestore,
 }
 
-const ALL: [Glyph; 17] = [
+const ALL: [Glyph; 24] = [
     Glyph::Paw,
     Glyph::PawSolid,
     Glyph::Laser,
@@ -45,6 +52,13 @@ const ALL: [Glyph; 17] = [
     Glyph::Plus,
     Glyph::Controls,
     Glyph::Display,
+    Glyph::More,
+    Glyph::Pointer,
+    Glyph::Head,
+    Glyph::Pen,
+    Glyph::WinMinimize,
+    Glyph::WinMaximize,
+    Glyph::WinRestore,
 ];
 
 fn body(g: Glyph) -> &'static str {
@@ -66,6 +80,13 @@ fn body(g: Glyph) -> &'static str {
         Glyph::Plus => r##"<path d="M12 5v14M5 12h14"/>"##,
         Glyph::Controls => r##"<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/>"##,
         Glyph::Display => r##"<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>"##,
+        Glyph::More => r##"<g fill="#000" stroke="none"><circle cx="5.5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="18.5" cy="12" r="1.7"/></g>"##,
+        Glyph::Pointer => r##"<path d="M5 3.5l13 7-5.6 1.6L9.8 18z"/><path d="M12.4 12.1l4.6 5.4"/>"##,
+        Glyph::Head => r##"<path d="M5 10.5L4 4l5 3.2a8 8 0 0 1 6 0L20 4l-1 6.5a7.5 7.5 0 1 1-14 0z"/><path d="M9.5 13h.01M14.5 13h.01"/>"##,
+        Glyph::WinMinimize => r##"<path d="M5 12h14"/>"##,
+        Glyph::WinMaximize => r##"<rect x="5" y="5" width="14" height="14" rx="1.5"/>"##,
+        Glyph::WinRestore => r##"<rect x="4.5" y="8.5" width="11" height="11" rx="1.5"/><path d="M8.5 8.5V6a1.5 1.5 0 0 1 1.5-1.5h8A1.5 1.5 0 0 1 19.5 6v8a1.5 1.5 0 0 1-1.5 1.5h-2.5"/>"##,
+        Glyph::Pen => r##"<path d="M15.5 4.5l4 4L9 19H5v-4z"/><path d="M13 7l4 4"/>"##,
     }
 }
 
