@@ -61,7 +61,7 @@ pub fn display(d: &super::displays::Display) -> Result<Still, String> {
             return Err("the screen copy failed".into());
         }
         // BGRA → RGBA, fully opaque.
-        for px in pixels.chunks_exact_mut(4) {
+        for px in pixels.as_chunks_mut::<4>().0 {
             px.swap(0, 2);
             px[3] = 0xFF;
         }

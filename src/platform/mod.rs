@@ -12,6 +12,9 @@ pub mod ipc;
 pub mod tray;
 #[cfg(windows)]
 pub mod windows;
+#[cfg(not(windows))]
+#[path = "fallback.rs"]
+pub mod windows;
 
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};

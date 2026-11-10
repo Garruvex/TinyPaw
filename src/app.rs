@@ -121,7 +121,9 @@ fn overlay_settings() -> window::Settings {
         level: window::Level::AlwaysOnTop,
         exit_on_close_request: false,
         platform_specific: PlatformSpecific {
+            #[cfg(windows)]
             skip_taskbar: true,
+            #[cfg(windows)]
             drag_and_drop: false,
             ..PlatformSpecific::default()
         },
@@ -137,6 +139,7 @@ fn panel_settings(size: Size, min: Option<Size>, resizable: bool) -> window::Set
         resizable,
         exit_on_close_request: false,
         platform_specific: PlatformSpecific {
+            #[cfg(windows)]
             drag_and_drop: false,
             ..PlatformSpecific::default()
         },
