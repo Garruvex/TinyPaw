@@ -8,7 +8,7 @@ use iced::{Color, Point, Rectangle, Size};
 
 use super::icons::{self, Glyph};
 use super::theme;
-use crate::features::{point, system, upcoming};
+use crate::features::{freeze, pin, point, spotlight, system, text, upcoming};
 
 pub struct Item {
     pub glyph: Glyph,
@@ -20,11 +20,11 @@ pub struct Item {
 pub const ITEMS: [Item; 8] = [
     Item { glyph: Glyph::Paw, label: "Paw", hint: "Tap and draw", command: point::USE_PAW },
     Item { glyph: Glyph::Laser, label: "Laser", hint: "Precise dot", command: point::USE_LASER },
-    Item { glyph: Glyph::Text, label: "Text", hint: "Coming soon", command: upcoming::TEXT },
-    Item { glyph: Glyph::Pin, label: "Pin", hint: "Coming soon", command: upcoming::PIN },
-    Item { glyph: Glyph::Spotlight, label: "Spotlight", hint: "Coming soon", command: upcoming::SPOTLIGHT },
+    Item { glyph: Glyph::Text, label: "Text", hint: "Click, type, Enter", command: text::SELECT },
+    Item { glyph: Glyph::Pin, label: "Pin", hint: "Numbered markers", command: pin::SELECT },
+    Item { glyph: Glyph::Spotlight, label: "Spotlight", hint: "Dim everything else", command: spotlight::SELECT },
     Item { glyph: Glyph::Lens, label: "Lens", hint: "Coming soon", command: upcoming::LENS },
-    Item { glyph: Glyph::Freeze, label: "Freeze", hint: "Coming soon", command: upcoming::FREEZE },
+    Item { glyph: Glyph::Freeze, label: "Freeze", hint: "Draw on a still", command: freeze::TOGGLE },
     Item { glyph: Glyph::Clear, label: "Clear", hint: "Remove all marks", command: system::CLEAR },
 ];
 

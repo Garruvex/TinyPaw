@@ -57,6 +57,40 @@ pub trait ToolState {
 
     /// True while an animation needs frames.
     fn animating(&self, now: Millis) -> bool;
+
+    /// The label being typed, if this tool edits text.
+    fn text_draft(&self) -> Option<TextDraft<'_>> {
+        None
+    }
+
+    /// Applies editor input. Returns true when the tool is done and Point
+    /// should resume.
+    fn text_input(&mut self, _input: TextInput, _cx: &mut ToolCx<'_>) -> bool {
+        false
+    }
+
+    /// Radius of the clear circle for Spotlight, in logical pixels.
+    fn spotlight(&self, _settings: &SettingValues) -> Option<f32> {
+        None
+    }
+}
+
+/// Editor events for a text draft. IME composition stays inside the editor;
+/// only committed text arrives as `Changed`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TextInput {
+    Changed(String),
+    Submit,
+    Cancel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextDraft<'a> {
+    pub output: OutputId,
+    /// Top-left corner of the label.
+    pub at: Pt,
+    pub text: &'a str,
+    pub size: f32,
 }
 
 /// Creates the state for a tool when it is selected.

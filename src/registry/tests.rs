@@ -215,12 +215,13 @@ fn mute_command_flips_the_setting_through_set() {
 }
 
 #[test]
-fn upcoming_tools_are_listed_but_refused() {
+fn lens_is_listed_but_refused_and_freeze_is_live() {
     let reg = Registry::build(features::BUILTINS).unwrap();
     let mut s = session(&reg);
     reg.dispatch(system::MASTER_TOGGLE, &mut s, 0).unwrap();
+    assert!(reg.dispatch(features::upcoming::LENS, &mut s, 0).is_err());
     let freeze = reg.command_by_cli("freeze").unwrap();
-    assert!(reg.dispatch(freeze.id, &mut s, 0).is_err());
+    assert!(reg.dispatch(freeze.id, &mut s, 0).is_ok());
     assert_eq!(reg.shortcut_label(freeze.id).as_deref(), Some("Ctrl+Alt+F"));
     assert_eq!(
         reg.shortcut_label(features::wheel::OPEN).as_deref(),

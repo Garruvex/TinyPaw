@@ -1,6 +1,6 @@
 //! Scene data: committed marks in output-local logical coordinates.
 
-/// Identifies one target display. Phase 1 uses a single output.
+/// Identifies one target display. This alpha uses a single output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OutputId(pub u32);
 
@@ -40,34 +40,58 @@ pub struct Stroke {
     pub born: u64,
 }
 
-/// Anything that undo and clear operate on. Labels and pins join in later phases.
+/// A one-line text label; `at` is its top-left corner.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Label {
+    pub output: OutputId,
+    pub at: Pt,
+    pub text: String,
+    pub size: f32,
+}
+
+/// A numbered marker centred on `at`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pin {
+    pub output: OutputId,
+    pub at: Pt,
+    pub number: u32,
+    pub color: Rgba,
+}
+
+/// Anything that undo and clear operate on.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mark {
     Stroke(Stroke),
+    Label(Label),
+    Pin(Pin),
 }
 
 impl Mark {
     pub fn output(&self) -> OutputId {
         match self {
             Mark::Stroke(s) => s.output,
+            Mark::Label(l) => l.output,
+            Mark::Pin(p) => p.output,
         }
     }
 
-    pub fn born(&self) -> u64 {
+    /// Commit time for strokes; labels and pins never fade.
+    pub fn born(&self) -> Option<u64> {
         match self {
-            Mark::Stroke(s) => s.born,
+            Mark::Stroke(s) => Some(s.born),
+            _ => None,
         }
     }
 
     pub fn set_born(&mut self, at: u64) {
-        match self {
-            Mark::Stroke(s) => s.born = at,
+        if let Mark::Stroke(s) = self {
+            s.born = at;
         }
     }
 }
 
-/// One scene (live, later also frozen) with a single chronological undo order
-/// across outputs.
+/// One scene (live or frozen) with a single chronological undo order across
+/// outputs.
 #[derive(Debug, Default)]
 pub struct Scene {
     marks: Vec<Mark>,
@@ -101,10 +125,25 @@ impl Scene {
         mark
     }
 
-    /// Removes marks committed before `cutoff`, also dropping them from undo.
+    /// The number the next pin gets. Undoing the last pin frees its number;
+    /// clearing starts again at 1.
+    pub fn next_pin(&self) -> u32 {
+        self.marks
+            .iter()
+            .filter_map(|m| match m {
+                Mark::Pin(p) => Some(p.number),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0)
+            + 1
+    }
+
+    /// Removes strokes committed before `cutoff`, also dropping them from undo.
+    /// Labels and pins persist independently of ink fading.
     pub fn expire(&mut self, cutoff: u64) {
         let before = self.marks.len();
-        self.marks.retain(|m| m.born() >= cutoff);
+        self.marks.retain(|m| m.born().is_none_or(|b| b >= cutoff));
         if self.marks.len() != before {
             self.revision += 1;
         }

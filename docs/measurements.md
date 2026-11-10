@@ -35,6 +35,25 @@ Same machine and method as above, tiny-skia renderer. The build adds SVG icons, 
 
 The audio device opens on the first tap after switching On and closes on Off, so the idle process holds no audio stream. Ctrl+Alt+Space was already registered by another app on the test machine, so the wheel defaults to Ctrl+Alt+W. Settings > Controls now marks any shortcut another app holds.
 
+## Phase 3 tools (Text, Pin, Spotlight, Freeze), 10 November 2026
+
+| Scenario | Result | Target |
+| --- | --- | --- |
+| Freeze: `tinypaw freeze` until the frozen scene reports ready | 104–108 ms (incl. one CLI launch and status polling) | Still on screen ~150 ms |
+
+**Freeze capture.** A one-shot GDI copy of the composed primary display, taken 50 ms after the overlay stops drawing, so no live marks or paw are baked in (checked on screen). GDI shows no capture border. Desktop Duplication, HDR colour checks and the Discord-viewer border check are still open, as are Niri and macOS.
+
+**Rendering note.** Inside one Iced canvas layer, images paint above shapes. The frozen still is therefore a separate image layer beneath the canvas, which keeps marks and the paw visible on top of it.
+
+**Behaviour checked on screen (Windows 11, Zhuyin IME active):**
+
+- Text: the first Enter commits the IME candidate (你), the second places the label and returns to Point. Shift-letters place on the first Enter. Typing X while editing does not clear.
+- Pins number 1, 2, 3. Undo frees the last number, and Clear resets numbering (unit-tested).
+- Spotlight dims everything except a 160 px circle around the paw. The mask disappears in passthrough (unit-tested).
+- Freeze from Toggle mode, drawing on the still, then Return Live: the earlier live marks come back.
+
+Lens stays disabled. It needs a live source that leaves the overlay out of the frame, such as Windows Graphics Capture of the game window.
+
 ## Phase 1 behavior checks (scripted on Windows 11)
 
 Passed with synthetic input on the primary display:

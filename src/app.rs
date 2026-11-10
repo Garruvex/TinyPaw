@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use iced::advanced::image;
 use iced::keyboard::{self, key::Named};
 use iced::window::{self, settings::PlatformSpecific};
 use iced::{Element, Point, Size, Subscription, Task, Theme, event, theme};
@@ -18,7 +19,7 @@ use crate::registry::{
 };
 use crate::session::{
     Effect, Event, Millis, Mode, OutputId, OverlayState, PointerEvent, PointerKind, Pt, Session,
-    Ticket,
+    TextInput, Ticket,
 };
 use crate::view::{self, InkCache, OverlayUi, UiMsg, settings::Page, wheel};
 
@@ -37,6 +38,9 @@ pub enum Message {
     Ui(UiMsg),
     WavPicked(Option<PathBuf>),
     Acquired(Ticket),
+    TextChanged(String),
+    TextSubmit,
+    Still(Ticket, Result<image::Handle, String>),
     Frame,
     Tick,
 }
@@ -63,6 +67,12 @@ pub struct App {
     tray: Option<platform::tray::Tray>,
     audio: Audio,
     ink: InkCache,
+    /// The frozen frame's pixels, kept outside annotation history.
+    still: Option<(u64, image::Handle)>,
+    next_frame: u64,
+    /// Short overlay message and when it appeared.
+    overlay_notice: Option<(String, Millis)>,
+    editor_focused: bool,
 }
 
 pub fn run(registry: &'static Registry) -> iced::Result {
@@ -150,6 +160,10 @@ impl App {
             tray,
             audio: Audio::new(),
             ink: InkCache::default(),
+            still: None,
+            next_frame: 0,
+            overlay_notice: None,
+            editor_focused: false,
         };
         app.sync_tray();
         let task = if loaded.first_run {
@@ -233,13 +247,43 @@ impl App {
             Message::Key(key, modifiers, window) => {
                 if self.overlay.as_ref().is_some_and(|o| o.id == window) {
                     let escape = matches!(key.as_ref(), keyboard::Key::Named(Named::Escape));
-                    if escape && (self.ui.wheel.take().is_some() || self.ui.close_menus()) {
+                    if self.session.text_draft().is_some() {
+                        // The editor owns the keyboard; Escape cancels the
+                        // draft before it can exit the session.
+                        if escape {
+                            out.effects.extend(
+                                self.session.handle(Event::Text(TextInput::Cancel), now),
+                            );
+                        }
+                    } else if escape && (self.ui.wheel.take().is_some() || self.ui.close_menus()) {
                         // Escape closes the wheel or a menu before it exits.
                     } else if let Some(cmd) = self.overlay_shortcut(&key, modifiers) {
                         out.collect(self.dispatch(cmd, now).ok());
                     }
                 }
             }
+            Message::TextChanged(text) => {
+                out.effects
+                    .extend(self.session.handle(Event::Text(TextInput::Changed(text)), now));
+            }
+            Message::TextSubmit => {
+                out.effects
+                    .extend(self.session.handle(Event::Text(TextInput::Submit), now));
+            }
+            Message::Still(ticket, result) => match result {
+                Ok(handle) => {
+                    self.next_frame += 1;
+                    self.still = Some((self.next_frame, handle));
+                    let frame = self.next_frame;
+                    out.effects
+                        .extend(self.session.handle(Event::StillReady { ticket, frame }, now));
+                }
+                Err(e) => {
+                    eprintln!("tinypaw: freeze capture failed: {e}");
+                    out.effects
+                        .extend(self.session.handle(Event::StillFailed(ticket), now));
+                }
+            },
             Message::Pointer(kind, p) => self.pointer(kind, p, now, &mut out),
             Message::Acquired(ticket) => {
                 out.effects
@@ -264,10 +308,26 @@ impl App {
             }
             Message::Tick => {
                 out.effects.extend(self.session.handle(Event::Tick, now));
+                if self
+                    .overlay_notice
+                    .as_ref()
+                    .is_some_and(|(_, at)| now.saturating_sub(*at) > NOTICE_MS)
+                {
+                    self.overlay_notice = None;
+                }
             }
             Message::Frame => {}
         }
 
+        // Shell actions first: a wheel pick dispatches commands of its own.
+        for action in std::mem::take(&mut out.shell) {
+            match action {
+                ShellAction::Quit => self.quit(now),
+                ShellAction::OpenSettings => tasks.push(self.open_settings()),
+                ShellAction::WheelOpen => self.open_wheel(now),
+                ShellAction::WheelClose => self.close_wheel(now, &mut out),
+            }
+        }
         for (id, value) in std::mem::take(&mut out.sets) {
             self.apply_setting(id, value, now);
         }
@@ -275,15 +335,19 @@ impl App {
             match effect {
                 Effect::PlayTap => self.play_tap(),
                 Effect::ReturnFocus => platform::restore_foreground(self.previous_focus.take()),
+                Effect::CaptureStill(ticket) => tasks.push(capture_still(ticket)),
+                Effect::ReleaseStill => self.still = None,
+                Effect::Notice(text) => self.overlay_notice = Some((text.to_owned(), now)),
             }
         }
-        for action in std::mem::take(&mut out.shell) {
-            match action {
-                ShellAction::Quit => self.quit(now),
-                ShellAction::OpenSettings => tasks.push(self.open_settings()),
-                ShellAction::WheelOpen => self.open_wheel(now),
-                ShellAction::WheelClose => self.close_wheel(now),
+        // Give the label editor keyboard focus when a draft appears.
+        match (self.session.text_draft().is_some(), self.editor_focused) {
+            (true, false) => {
+                self.editor_focused = true;
+                tasks.push(iced::widget::operation::focus(view::TEXT_EDITOR));
             }
+            (false, true) => self.editor_focused = false,
+            _ => {}
         }
 
         if was_enabled && !self.session.is_enabled() {
@@ -348,7 +412,7 @@ impl App {
                 PointerKind::Moved => w.track(p),
                 PointerKind::Down => {
                     w.track(p);
-                    self.close_wheel(now);
+                    self.close_wheel(now, out);
                 }
                 _ => {}
             }
@@ -379,19 +443,15 @@ impl App {
         });
     }
 
-    fn close_wheel(&mut self, now: Millis) {
+    fn close_wheel(&mut self, now: Millis, out: &mut Outcomes) {
         let Some(state) = self.ui.wheel.take() else {
             return;
         };
         if let Some(i) = state.hover {
             let cmd = wheel::ITEMS[i].command;
-            let mut out = Outcomes::default();
             out.collect(self.dispatch(cmd, now).ok());
             if cmd == point::USE_PAW || cmd == point::USE_LASER {
                 out.collect(self.dispatch(point::SELECT, now).ok());
-            }
-            for (id, value) in out.sets {
-                self.apply_setting(id, value, now);
             }
         }
     }
@@ -483,10 +543,14 @@ impl App {
 
     fn status(&self) -> String {
         let marks = self.session.scene().marks().len();
+        let scene = if self.session.frozen_frame().is_some() { "frozen" } else { "live" };
+        let tool = self.session.active_tool();
         match self.session.mode() {
             Mode::Off => "TinyPaw is Off".into(),
-            Mode::Passthrough => format!("TinyPaw is On (passthrough, {marks} marks)"),
-            Mode::Annotating(_) => format!("TinyPaw is On (annotating, {marks} marks)"),
+            Mode::Passthrough => format!("TinyPaw is On (passthrough, {scene}, {marks} marks)"),
+            Mode::Annotating(_) => {
+                format!("TinyPaw is On (annotating, {tool}, {scene}, {marks} marks)")
+            }
         }
     }
 
@@ -569,6 +633,12 @@ impl App {
                 ui: &self.ui,
                 output: PRIMARY,
                 now: self.now(),
+                still: self
+                    .still
+                    .as_ref()
+                    .filter(|(id, _)| Some(*id) == self.session.frozen_frame())
+                    .map(|(_, handle)| handle),
+                notice: self.overlay_notice.as_ref().map(|(text, _)| text.as_str()),
             });
         }
         if Some(window) == self.settings_window {
@@ -591,7 +661,9 @@ impl App {
         let now = self.now();
         let mut subs = vec![
             Subscription::run(platform::external_stream).map(Message::External),
-            event::listen_with(|event, _status, window| match event {
+            event::listen_with(|event, status, window| match event {
+                // Keys a focused editor consumed (typing a label) are not shortcuts.
+                _ if status == event::Status::Captured => None,
                 iced::Event::Keyboard(keyboard::Event::KeyPressed {
                     key,
                     modifiers,
@@ -605,6 +677,8 @@ impl App {
         // Frames only while something animates; otherwise the process sleeps.
         if self.session.animating(now) {
             subs.push(window::frames().map(|_| Message::Frame));
+        } else if self.overlay_notice.is_some() {
+            subs.push(iced::time::every(Duration::from_millis(500)).map(|_| Message::Tick));
         } else if let Some(at) = self.session.next_fade(now) {
             // Wake when the next stroke starts fading.
             let wait = Duration::from_millis(at.saturating_sub(now).clamp(16, 1000));
@@ -612,6 +686,25 @@ impl App {
         }
         Subscription::batch(subs)
     }
+}
+
+/// How long an overlay notice stays in the status chip.
+const NOTICE_MS: Millis = 3000;
+
+/// Takes one still of the primary display off the UI thread. A short wait
+/// first lets the overlay present a frame without marks, so they are not
+/// baked into the still.
+fn capture_still(ticket: Ticket) -> Task<Message> {
+    let (tx, rx) = iced::futures::channel::oneshot::channel();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        let result = platform::capture::primary_display()
+            .map(|s| image::Handle::from_rgba(s.width, s.height, s.rgba));
+        let _ = tx.send(result);
+    });
+    Task::perform(rx, move |r| {
+        Message::Still(ticket, r.unwrap_or_else(|_| Err("capture thread ended".into())))
+    })
 }
 
 /// What handlers asked for during one update, applied in a fixed order.

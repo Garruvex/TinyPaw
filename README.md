@@ -12,8 +12,9 @@ Working on Windows:
 - **Settings window:** Controls, Display, Appearance and Sound sections with a live preview and a master switch. Choices are saved to `%APPDATA%\TinyPaw\preferences.json`.
 - **Sound:** three synthesized tap sounds (Blackboard Knock, Bubble Pop, Rubber Bonk) or an imported WAV, with volume and mute.
 - **Activation:** Toggle and Hold-to-draw styles, a tray menu, a first-run card, and a CLI that forwards to the running instance.
+- **Tools:** Text labels (IME-aware: the first Enter accepts a candidate, the next places the label), numbered Pins, Spotlight, and Freeze (**Ctrl+Alt+F**) to draw on a still of the screen, with Return Live.
 
-Text, Pin, Spotlight, Lens and Freeze appear in the interface but are not built yet. Pointer packs and Add your pointer, Stretch Paw, shortcut rebinding, multiple monitors, Niri and macOS also come later. The interface design is the Graphite canvas (TinyPaw Interface artifact).
+Lens appears in the interface but is not built yet. Pointer packs and Add your pointer, Stretch Paw, shortcut rebinding, multiple monitors, Niri and macOS also come later. The interface design is the Graphite canvas (TinyPaw Interface artifact).
 
 ## Build and run
 
@@ -36,10 +37,11 @@ TinyPaw starts Off in the tray. Left-click the tray icon or press **Ctrl+Alt+P**
 | Escape | Exit (switches Off and clears marks) |
 | Ctrl+Alt+D (held) | Point and draw in Hold-to-draw mode |
 | Ctrl+Alt+W (held) | Quick wheel: point at a tool, release to pick |
+| Ctrl+Alt+F | Freeze the screen and draw on the still; again to return live |
 
 ## CLI
 
-`tinypaw <command>` talks to the running instance: `status`, `toggle`, `off`, `latch`, `undo`, `clear`, `point`, `paw`, `laser`, `mute`, `settings`, `hold-begin`, `hold-end`, `quit`, and `set <setting> <value>`. For example, to switch to Hold-to-draw:
+`tinypaw <command>` talks to the running instance: `status`, `toggle`, `off`, `latch`, `undo`, `clear`, `point`, `text`, `pin`, `spotlight`, `freeze`, `paw`, `laser`, `mute`, `settings`, `hold-begin`, `hold-end`, `quit`, and `set <setting> <value>`. For example, to switch to Hold-to-draw:
 
 ```bash
 tinypaw set system.activation_style hold

@@ -219,6 +219,8 @@ impl ToolState for PointTool {
                         stroke.points.push(ev.pos);
                     }
                 }
+                // Point only ever drafts strokes.
+                Gesture::Drawing(_) => {}
             },
             PointerKind::Up => match std::mem::take(&mut self.gesture) {
                 Gesture::Idle => {}
@@ -227,8 +229,8 @@ impl ToolState for PointTool {
                     cx.effects.push(Effect::PlayTap);
                 }
                 Gesture::Drawing(mut mark) => {
-                    let Mark::Stroke(stroke) = &mut mark;
-                    if stroke.output == ev.output
+                    if let Mark::Stroke(stroke) = &mut mark
+                        && stroke.output == ev.output
                         && stroke.points.last().is_some_and(|l| *l != ev.pos)
                     {
                         stroke.points.push(ev.pos);

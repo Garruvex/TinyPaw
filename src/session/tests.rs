@@ -91,7 +91,7 @@ fn drag_draws_from_original_press_without_tap() {
     let fx = draw_line(&mut s, (10.0, 10.0), (60.0, 10.0));
     assert!(!fx.contains(&Effect::PlayTap));
     assert_eq!(s.scene().marks().len(), 1);
-    let Mark::Stroke(stroke) = &s.scene().marks()[0];
+    let Mark::Stroke(stroke) = &s.scene().marks()[0] else { panic!("expected a stroke") };
     assert_eq!(stroke.points[0], Pt::new(10.0, 10.0));
     assert_eq!(*stroke.points.last().unwrap(), Pt::new(60.0, 10.0));
     assert_eq!(stroke.width, 4.0);
@@ -287,7 +287,7 @@ fn faded_ink_expires_and_leaves_undo_history() {
     s.handle(ptr(PointerKind::Moved, 40.0, 0.0), 4000); // held past 3 s
     s.handle(ptr(PointerKind::Up, 40.0, 0.0), 5000);
     let mark = s.scene().marks()[0].clone();
-    assert_eq!(mark.born(), 5000, "fade starts on release");
+    assert_eq!(mark.born(), Some(5000), "fade starts on release");
     assert_eq!(s.mark_alpha(&mark, 7000), 1.0);
     assert!(s.next_fade(7000).is_some());
     assert!(s.mark_alpha(&mark, 8200) < 1.0);
@@ -367,4 +367,209 @@ fn furry_paw_movement_needs_no_frames() {
     s.handle(ptr(PointerKind::Moved, 0.0, 0.0), 0);
     s.handle(ptr(PointerKind::Moved, 800.0, 0.0), 10);
     assert!(!s.animating(11));
+}
+
+fn select(s: &mut Session, id: &'static str, factory: ToolFactory) {
+    s.handle(Event::SelectTool { id, factory }, 0);
+}
+
+fn tap(s: &mut Session, x: f32, y: f32) -> Vec<Effect> {
+    let mut fx = s.handle(ptr(PointerKind::Down, x, y), 0);
+    fx.extend(s.handle(ptr(PointerKind::Up, x, y), 0));
+    fx
+}
+
+fn on(style: &'static str) -> Session {
+    let mut s = session_with(style);
+    s.handle(Event::MasterToggle, 0);
+    if style == "toggle" {
+        ack(&mut s);
+    }
+    s
+}
+
+#[test]
+fn text_places_a_label_and_returns_to_point() {
+    use crate::features::text;
+    let mut s = on("toggle");
+    select(&mut s, text::TOOL, text::new_state);
+    tap(&mut s, 100.0, 100.0);
+    assert!(s.text_draft().is_some());
+    s.handle(Event::Text(TextInput::Changed("Loot here".into())), 0);
+    s.handle(Event::Text(TextInput::Submit), 0);
+    assert_eq!(s.active_tool(), point::TOOL);
+    let Mark::Label(label) = &s.scene().marks()[0] else { panic!("expected a label") };
+    assert_eq!(label.text, "Loot here");
+}
+
+#[test]
+fn escape_cancels_a_text_draft_without_placing_it() {
+    use crate::features::text;
+    let mut s = on("toggle");
+    select(&mut s, text::TOOL, text::new_state);
+    tap(&mut s, 10.0, 10.0);
+    s.handle(Event::Text(TextInput::Changed("繁體中文".into())), 0);
+    s.handle(Event::Text(TextInput::Cancel), 0);
+    assert!(s.text_draft().is_none());
+    assert!(s.scene().is_empty());
+    assert!(s.is_enabled(), "cancelling the draft does not exit");
+}
+
+#[test]
+fn clicking_elsewhere_places_the_current_label() {
+    use crate::features::text;
+    let mut s = on("toggle");
+    select(&mut s, text::TOOL, text::new_state);
+    tap(&mut s, 10.0, 10.0);
+    s.handle(Event::Text(TextInput::Changed("one".into())), 0);
+    tap(&mut s, 200.0, 10.0);
+    assert_eq!(s.scene().marks().len(), 1);
+    assert!(s.text_draft().is_some_and(|d| d.text.is_empty()));
+}
+
+#[test]
+fn pins_number_in_order_and_undo_frees_the_last_number() {
+    use crate::features::pin;
+    let mut s = on("toggle");
+    select(&mut s, pin::TOOL, pin::new_state);
+    tap(&mut s, 10.0, 10.0);
+    tap(&mut s, 50.0, 10.0);
+    let numbers = |s: &Session| -> Vec<u32> {
+        s.scene()
+            .marks()
+            .iter()
+            .filter_map(|m| match m {
+                Mark::Pin(p) => Some(p.number),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(numbers(&s), vec![1, 2]);
+    s.handle(Event::Undo, 0);
+    tap(&mut s, 90.0, 10.0);
+    assert_eq!(numbers(&s), vec![1, 2], "number 2 is reused");
+    s.handle(Event::Clear, 0);
+    tap(&mut s, 90.0, 10.0);
+    assert_eq!(numbers(&s), vec![1], "clear resets numbering");
+}
+
+#[test]
+fn undo_runs_across_stroke_label_and_pin_in_order() {
+    use crate::features::{pin, text};
+    let mut s = on("toggle");
+    draw_line(&mut s, (0.0, 0.0), (50.0, 0.0));
+    select(&mut s, text::TOOL, text::new_state);
+    tap(&mut s, 10.0, 40.0);
+    s.handle(Event::Text(TextInput::Changed("hi".into())), 0);
+    s.handle(Event::Text(TextInput::Submit), 0);
+    select(&mut s, pin::TOOL, pin::new_state);
+    tap(&mut s, 80.0, 80.0);
+    let kinds = |s: &Session| -> Vec<&'static str> {
+        s.scene()
+            .marks()
+            .iter()
+            .map(|m| match m {
+                Mark::Stroke(_) => "stroke",
+                Mark::Label(_) => "label",
+                Mark::Pin(_) => "pin",
+            })
+            .collect()
+    };
+    assert_eq!(kinds(&s), vec!["stroke", "label", "pin"]);
+    s.handle(Event::Undo, 0);
+    assert_eq!(kinds(&s), vec!["stroke", "label"]);
+    s.handle(Event::Undo, 0);
+    assert_eq!(kinds(&s), vec!["stroke"]);
+}
+
+#[test]
+fn spotlight_shows_only_while_pointing() {
+    use crate::features::spotlight;
+    let mut s = session_with("hold");
+    s.handle(Event::MasterToggle, 0);
+    s.handle(Event::HoldDown, 0);
+    ack(&mut s);
+    select(&mut s, spotlight::TOOL, spotlight::new_state);
+    s.handle(ptr(PointerKind::Moved, 300.0, 200.0), 0);
+    assert_eq!(s.spotlight().map(|(_, _, r)| r), Some(160.0));
+    s.handle(Event::HoldUp, 0);
+    assert!(s.spotlight().is_none(), "mask hides when input returns to the game");
+}
+
+fn capture_ticket(fx: &[Effect]) -> Ticket {
+    fx.iter()
+        .find_map(|e| match e {
+            Effect::CaptureStill(t) => Some(*t),
+            _ => None,
+        })
+        .expect("a capture request")
+}
+
+#[test]
+fn freeze_draws_on_a_separate_scene_and_return_live_restores_marks() {
+    let mut s = on("toggle");
+    draw_line(&mut s, (0.0, 0.0), (50.0, 0.0));
+    let t = capture_ticket(&s.handle(Event::FreezeToggle, 0));
+    assert!(s.capturing());
+    assert!(s.tip(0).is_none(), "nothing drawn until the still is up");
+    s.handle(Event::StillReady { ticket: t, frame: 7 }, 0);
+    assert_eq!(s.frozen_frame(), Some(7));
+    assert!(s.scene().is_empty(), "frozen scene starts empty");
+    draw_line(&mut s, (0.0, 20.0), (50.0, 20.0));
+    assert_eq!(s.scene().marks().len(), 1);
+    let fx = s.handle(Event::FreezeToggle, 0);
+    assert!(fx.contains(&Effect::ReleaseStill));
+    assert_eq!(s.frozen_frame(), None);
+    assert_eq!(s.scene().marks().len(), 1, "live marks are back");
+    assert!(s.is_pointing());
+}
+
+#[test]
+fn freeze_from_passthrough_takes_input_only_after_the_still() {
+    let mut s = session_with("hold");
+    s.handle(Event::MasterToggle, 0);
+    let t = capture_ticket(&s.handle(Event::FreezeToggle, 0));
+    assert!(s.pending_ticket().is_none(), "no focus change before capture");
+    s.handle(Event::StillReady { ticket: t, frame: 1 }, 0);
+    assert_eq!(s.overlay_state(), OverlayState::Interactive);
+    ack(&mut s);
+    assert!(s.is_pointing());
+    let fx = s.handle(Event::FreezeToggle, 0);
+    assert!(fx.contains(&Effect::ReturnFocus));
+    assert_eq!(s.mode(), Mode::Passthrough);
+}
+
+#[test]
+fn late_still_after_off_is_released() {
+    let mut s = on("toggle");
+    let t = capture_ticket(&s.handle(Event::FreezeToggle, 0));
+    s.handle(Event::MasterOff, 0);
+    let fx = s.handle(Event::StillReady { ticket: t, frame: 3 }, 0);
+    assert!(fx.contains(&Effect::ReleaseStill));
+    assert_eq!(s.frozen_frame(), None);
+    assert_eq!(s.mode(), Mode::Off);
+}
+
+#[test]
+fn failed_capture_keeps_the_live_scene() {
+    let mut s = on("toggle");
+    draw_line(&mut s, (0.0, 0.0), (50.0, 0.0));
+    let t = capture_ticket(&s.handle(Event::FreezeToggle, 0));
+    let fx = s.handle(Event::StillFailed(t), 0);
+    assert!(matches!(fx.as_slice(), [Effect::Notice(_)]));
+    assert!(!s.capturing());
+    assert_eq!(s.scene().marks().len(), 1);
+}
+
+#[test]
+fn frozen_scene_survives_a_hold_release() {
+    let mut s = session_with("hold");
+    s.handle(Event::MasterToggle, 0);
+    s.handle(Event::HoldDown, 0);
+    ack(&mut s);
+    let t = capture_ticket(&s.handle(Event::FreezeToggle, 0));
+    s.handle(Event::StillReady { ticket: t, frame: 2 }, 0);
+    s.handle(Event::HoldUp, 0);
+    assert!(s.is_pointing(), "frozen annotation is latched");
+    assert_eq!(s.frozen_frame(), Some(2));
 }

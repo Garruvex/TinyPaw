@@ -13,16 +13,22 @@ use std::cell::Cell;
 
 use iced::mouse;
 use iced::widget::canvas::{self, Cache, Frame, Geometry, LineCap, LineJoin, Path, Stroke};
+use iced::advanced::image;
+use iced::alignment;
+use iced::widget::canvas::fill::Rule;
 use iced::widget::{
-    button, canvas as canvas_widget, column, container, mouse_area, row, space, stack, text,
-    tooltip,
+    button, canvas as canvas_widget, column, container, mouse_area, pin as place, row, space,
+    stack, text, text_input, tooltip,
 };
-use iced::{Alignment, Color, Element, Length, Point, Rectangle, Renderer, Theme};
+use iced::{Alignment, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::app::Message;
-use crate::features::{display, point, sound, system, upcoming};
+use crate::features::{display, freeze, pin, point, sound, spotlight, system, text as text_tool, upcoming};
 use crate::registry::{Registry, Value};
 use crate::session::{Mark, Millis, OutputId, PointerKind, Session};
+
+/// Widget ID of the label editor, so it can take keyboard focus.
+pub const TEXT_EDITOR: &str = "tinypaw-text-editor";
 use icons::{Glyph, icon};
 use theme::Tone;
 
@@ -68,6 +74,10 @@ pub struct Overlay<'a> {
     pub ui: &'a OverlayUi,
     pub output: OutputId,
     pub now: Millis,
+    /// The frozen frame, when the session shows one.
+    pub still: Option<&'a image::Handle>,
+    /// A short message for the status chip, such as a failed capture.
+    pub notice: Option<&'a str>,
 }
 
 fn available(registry: &Registry, session: &Session, id: &str) -> bool {
@@ -90,12 +100,31 @@ pub fn overlay(o: Overlay<'_>) -> Element<'_, Message> {
     .width(Length::Fill)
     .height(Length::Fill);
 
-    let hidden = o.session.settings().bool(display::HIDE_BAR);
-    if !o.session.is_pointing() || o.ui.wheel.is_some() || hidden {
-        return scene.into();
+    // The still gets its own layer: within one canvas layer Iced paints images
+    // above shapes, which would hide the marks drawn on the still.
+    let mut layers: Vec<Element<'_, Message>> = Vec::with_capacity(5);
+    if let Some(handle) = o.still.filter(|_| o.session.frozen_frame().is_some())
+        && !o.session.capturing()
+    {
+        layers.push(
+            iced::widget::image(handle.clone())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .content_fit(iced::ContentFit::Fill)
+                .into(),
+        );
+    }
+    layers.push(scene.into());
+    if let Some(draft) = o.session.text_draft().filter(|d| d.output == o.output) {
+        layers.push(text_editor(draft.at, draft.text, draft.size));
     }
 
-    let chip = container(status_chip())
+    let hidden = o.session.settings().bool(display::HIDE_BAR);
+    if !o.session.is_pointing() || o.ui.wheel.is_some() || o.session.capturing() || hidden {
+        return stack(layers).into();
+    }
+
+    let chip = container(status_chip(o.session.frozen_frame().is_some(), o.notice))
         .width(Length::Fill)
         .align_x(Alignment::Center)
         .padding(20);
@@ -115,25 +144,78 @@ pub fn overlay(o: Overlay<'_>) -> Element<'_, Message> {
         .align_y(Alignment::End)
         .padding(28);
 
-    stack![scene, chip, bar].into()
+    layers.push(chip.into());
+    layers.push(bar.into());
+    stack(layers).into()
 }
 
-fn status_chip<'a>() -> Element<'a, Message> {
+/// The label editor, placed where the label will sit and styled like one.
+fn text_editor<'a>(at: crate::session::Pt, value: &str, size: f32) -> Element<'a, Message> {
+    let input = text_input("Type a label, Enter to place", value)
+        .id(TEXT_EDITOR)
+        .size(size)
+        .font(theme::MEDIUM)
+        .padding([4, 8])
+        .width(Length::Fixed(label_width(value, size).max(size * 12.0) + 24.0))
+        .on_input(Message::TextChanged)
+        .on_submit(Message::TextSubmit)
+        .style(|_, status| text_input::Style {
+            background: theme::LABEL_BG.into(),
+            border: iced::Border {
+                radius: 8.0.into(),
+                width: 1.5,
+                color: if matches!(status, text_input::Status::Focused { .. }) {
+                    theme::CYAN_RING
+                } else {
+                    theme::LINE_STRONG
+                },
+            },
+            icon: theme::MUTED,
+            placeholder: theme::FAINT,
+            value: iced::Color::WHITE,
+            selection: theme::CYAN_BG,
+        });
+    // The editor owns its area so typing clicks never start a new label.
+    let editor = mouse_area(input).interaction(mouse::Interaction::Text);
+    place(editor).x(at.x - 8.0).y(at.y - 4.0).into()
+}
+
+fn status_chip<'a>(frozen: bool, notice: Option<&'a str>) -> Element<'a, Message> {
     let dot = container(space())
         .width(8)
         .height(8)
         .style(theme::fill(theme::AMBER, 4.0));
-    let content = row![
-        dot,
-        text("Annotating").font(theme::MEDIUM).size(13).color(theme::TEXT),
-        text("·").size(13).color(theme::FAINT),
-        text("Esc to exit").size(13).color(theme::SUBTLE),
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center);
-    container(content)
-        .padding([7, 14])
-        .style(theme::panel(999.0))
+    let content: Element<'a, Message> = if let Some(notice) = notice {
+        row![dot, text(notice).size(13).color(theme::AMBER_TEXT)]
+            .spacing(10)
+            .align_y(Alignment::Center)
+            .into()
+    } else if frozen {
+        row![
+            icon(Glyph::Freeze, 16.0, theme::CYAN_TEXT),
+            text("Frozen").font(theme::MEDIUM).size(13).color(theme::TEXT),
+            text("·").size(13).color(theme::FAINT),
+            button(text("Return live").font(theme::MEDIUM).size(13))
+                .padding([2, 8])
+                .style(theme::tool_button(Tone::Selected))
+                .on_press(Message::Command(freeze::TOGGLE)),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center)
+        .into()
+    } else {
+        row![
+            dot,
+            text("Annotating").font(theme::MEDIUM).size(13).color(theme::TEXT),
+            text("·").size(13).color(theme::FAINT),
+            text("Esc to exit").size(13).color(theme::SUBTLE),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center)
+        .into()
+    };
+    mouse_area(container(content).padding([7, 14]).style(theme::panel(999.0)))
+        .interaction(mouse::Interaction::Idle)
         .into()
 }
 
@@ -211,19 +293,30 @@ fn command_button<'a>(
     tip(icon_button(glyph, tone, msg), label, registry.shortcut_label(id))
 }
 
+fn tool_tone(session: &Session, tool: &str) -> Tone {
+    if session.active_tool() == tool {
+        Tone::Selected
+    } else {
+        Tone::Plain
+    }
+}
+
 fn quick_bar<'a>(registry: &'a Registry, session: &'a Session) -> Element<'a, Message> {
     let laser = session.settings().choice(point::STYLE) == "laser";
+    let pointing = matches!(session.active_tool(), point::TOOL);
+    let pointer_tone = if pointing { Tone::Selected } else { Tone::Plain };
+    let pointer_color = if pointing { theme::CYAN_TEXT } else { theme::TEXT_SOFT };
     let pointer = button(
         row![
-            icon(if laser { Glyph::Laser } else { Glyph::Paw }, 20.0, theme::CYAN_TEXT),
-            icon(Glyph::ChevronUp, 14.0, theme::CYAN_TEXT),
+            icon(if laser { Glyph::Laser } else { Glyph::Paw }, 20.0, pointer_color),
+            icon(Glyph::ChevronUp, 14.0, pointer_color),
         ]
         .spacing(4)
         .align_y(Alignment::Center),
     )
     .height(44)
     .padding([12, 10])
-    .style(theme::tool_button(Tone::Selected))
+    .style(theme::tool_button(pointer_tone))
     .on_press(Message::Ui(UiMsg::TogglePointerMenu));
     let pointer = tip(pointer, "Point: paw or laser".into(), None);
 
@@ -273,10 +366,17 @@ fn quick_bar<'a>(registry: &'a Registry, session: &'a Session) -> Element<'a, Me
 
     let bar = row![
         pointer,
-        command_button(registry, session, upcoming::TEXT, Glyph::Text, Tone::Plain),
-        command_button(registry, session, upcoming::PIN, Glyph::Pin, Tone::Plain),
-        command_button(registry, session, upcoming::SPOTLIGHT, Glyph::Spotlight, Tone::Plain),
+        command_button(registry, session, text_tool::SELECT, Glyph::Text, tool_tone(session, text_tool::TOOL)),
+        command_button(registry, session, pin::SELECT, Glyph::Pin, tool_tone(session, pin::TOOL)),
+        command_button(registry, session, spotlight::SELECT, Glyph::Spotlight, tool_tone(session, spotlight::TOOL)),
         command_button(registry, session, upcoming::LENS, Glyph::Lens, Tone::Plain),
+        command_button(
+            registry,
+            session,
+            freeze::TOGGLE,
+            Glyph::Freeze,
+            if session.frozen_frame().is_some() { Tone::Selected } else { Tone::Plain },
+        ),
         divider(),
         ink,
         divider(),
@@ -384,8 +484,51 @@ fn stroke_style(color: Color, width: f32) -> Stroke<'static> {
         .with_line_join(LineJoin::Round)
 }
 
+/// Rough single-line width; wide (CJK) characters take a full em.
+fn label_width(text: &str, size: f32) -> f32 {
+    text.chars()
+        .map(|c| if (c as u32) >= 0x1100 { size } else { size * 0.56 })
+        .sum()
+}
+
+fn draw_label(frame: &mut Frame, l: &crate::session::Label) {
+    let pad = (8.0, 4.0);
+    let size = Size::new(label_width(&l.text, l.size) + pad.0 * 2.0, l.size * 1.4 + pad.1 * 2.0);
+    let corner = Point::new(l.at.x - pad.0, l.at.y - pad.1);
+    frame.fill(&Path::rounded_rectangle(corner, size, 8.0.into()), theme::LABEL_BG);
+    frame.fill_text(canvas::Text {
+        content: l.text.clone(),
+        position: Point::new(l.at.x, l.at.y + l.size * 0.7),
+        color: Color::WHITE,
+        size: l.size.into(),
+        font: theme::MEDIUM,
+        align_y: alignment::Vertical::Center,
+        ..canvas::Text::default()
+    });
+}
+
+fn draw_pin(frame: &mut Frame, p: &crate::session::Pin) {
+    let c = Point::new(p.at.x, p.at.y);
+    frame.fill(&Path::circle(Point::new(c.x, c.y + 2.0), 15.0), Color::from_rgba8(0, 0, 0, 0.35));
+    frame.fill(&Path::circle(c, 14.0), theme::rgba(p.color.0));
+    frame.fill_text(canvas::Text {
+        content: p.number.to_string(),
+        position: c,
+        color: Color::from_rgb8(0x0B, 0x12, 0x15),
+        size: 15.0.into(),
+        font: theme::HEADING,
+        align_x: iced::widget::text::Alignment::Center,
+        align_y: alignment::Vertical::Center,
+        ..canvas::Text::default()
+    });
+}
+
 fn draw_mark(frame: &mut Frame, mark: &Mark, alpha: f32) {
-    let Mark::Stroke(s) = mark;
+    let s = match mark {
+        Mark::Stroke(s) => s,
+        Mark::Label(l) => return draw_label(frame, l),
+        Mark::Pin(p) => return draw_pin(frame, p),
+    };
     let mut color = theme::rgba(s.color.0);
     color.a *= alpha;
     match s.points.as_slice() {
@@ -454,7 +597,31 @@ impl canvas::Program<Message> for OverlayCanvas<'_> {
     ) -> Vec<Geometry> {
         let scene = self.session.scene();
         let mine = |m: &&Mark| m.output() == self.output;
-        let mut layers = Vec::with_capacity(2);
+        let mut layers = Vec::with_capacity(4);
+        if self.session.capturing() {
+            // Show nothing so no marks are baked into the still.
+            return layers;
+        }
+
+        // Back to front (the still is a layer below): spotlight mask, marks,
+        // draft, tip.
+        if let Some((output, at, radius)) = self.session.spotlight()
+            && output == self.output
+        {
+            let mut mask = Frame::new(renderer, bounds.size());
+            let path = Path::new(|b| {
+                b.rectangle(Point::ORIGIN, bounds.size());
+                b.circle(Point::new(at.x, at.y), radius);
+            });
+            mask.fill(
+                &path,
+                canvas::Fill {
+                    style: canvas::Style::Solid(Color::from_rgba8(0, 0, 0, 0.55)),
+                    rule: Rule::EvenOdd,
+                },
+            );
+            layers.push(mask.into_geometry());
+        }
         let mut live = Frame::new(renderer, bounds.size());
 
         if self.session.fading() {
@@ -499,6 +666,11 @@ impl canvas::Program<Message> for OverlayCanvas<'_> {
     ) -> mouse::Interaction {
         if self.wheel.is_some() {
             mouse::Interaction::Idle
+        } else if self.session.active_tool() == text_tool::TOOL
+            && self.session.is_pointing()
+            && cursor.is_over(bounds)
+        {
+            mouse::Interaction::Text
         } else if self.session.is_pointing() && cursor.is_over(bounds) {
             // The paw is drawn in the scene so the stream shows it even when
             // cursor capture is disabled.

@@ -11,6 +11,8 @@ pub const RAISED: Color = Color::from_rgb8(0x20, 0x22, 0x27);
 pub const CONTROL: Color = Color::from_rgb8(0x23, 0x25, 0x2B);
 pub const HOVER: Color = Color::from_rgb8(0x2C, 0x2F, 0x36);
 pub const WELL: Color = Color::from_rgb8(0x11, 0x12, 0x16);
+/// Label backing: white text on near-black, readable over any game.
+pub const LABEL_BG: Color = Color::from_rgba8(0x11, 0x12, 0x16, 0.88);
 pub const LINE: Color = Color::from_rgba8(0xFF, 0xFF, 0xFF, 0.08);
 pub const LINE_STRONG: Color = Color::from_rgba8(0xFF, 0xFF, 0xFF, 0.12);
 
