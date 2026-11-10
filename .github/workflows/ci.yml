@@ -49,8 +49,9 @@ jobs:
     # Linux is not shipped yet. This job keeps the platform-independent
     # modules (session, registry, features, packs) compiling and their tests
     # passing on Linux ahead of the Niri/Wayland port. Win32-only code is
-    # already behind `cfg(windows)`; the native crates below only need their
-    # system headers to build.
+    # behind `cfg(windows)`, with no-op stand-ins in src/platform/fallback.rs
+    # (no Lens, window sources, keyboard hook or focus handoff on Linux).
+    # Warnings are not denied here: Windows-only paths leave dead code.
     name: Linux (check, test)
     runs-on: ubuntu-latest
     steps:
