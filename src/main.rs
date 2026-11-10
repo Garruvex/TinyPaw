@@ -5,6 +5,7 @@
 mod app;
 mod audio;
 mod features;
+mod packs;
 mod platform;
 mod preferences;
 mod registry;

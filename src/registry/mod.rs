@@ -374,6 +374,14 @@ impl Registry {
             (Value::Choice(_), Constraint::Choices(list)) => {
                 Value::Choice(list.iter().find(|c| **c == text).ok_or(bad)?)
             }
+            // Open-ended choices such as installed pack IDs. Parsing happens
+            // when loading preferences or from the CLI, so the leak is bounded.
+            (Value::Choice(_), Constraint::None) => {
+                if text.is_empty() || text.len() > 64 {
+                    return Err(bad);
+                }
+                Value::Choice(Box::leak(text.to_owned().into_boxed_str()))
+            }
             (Value::Choice(_), _) => return Err(bad),
         })
     }

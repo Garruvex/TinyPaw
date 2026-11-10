@@ -58,6 +58,12 @@ pub enum UiMsg {
     PreviewSound,
     TurnOn,
     OpenSettings,
+    PickPack(&'static str),
+    AddPointer,
+    DraftHotspot(f32, f32),
+    DraftName(String),
+    SaveDraft,
+    CancelDraft,
 }
 
 /// Cached committed ink, invalidated by scene revision.
@@ -78,6 +84,8 @@ pub struct Overlay<'a> {
     pub still: Option<&'a image::Handle>,
     /// A short message for the status chip, such as a failed capture.
     pub notice: Option<&'a str>,
+    /// The selected pointer pack's art, if it loaded.
+    pub pack: Option<&'a crate::packs::Pack>,
 }
 
 fn available(registry: &Registry, session: &Session, id: &str) -> bool {
@@ -96,6 +104,7 @@ pub fn overlay(o: Overlay<'_>) -> Element<'_, Message> {
         wheel_available,
         output: o.output,
         now: o.now,
+        pack: o.pack,
     })
     .width(Length::Fill)
     .height(Length::Fill);
@@ -134,7 +143,7 @@ pub fn overlay(o: Overlay<'_>) -> Element<'_, Message> {
         controls = controls.push(pointer_menu(o.session));
     }
     if o.ui.ink_menu {
-        controls = controls.push(ink_menu(o.session));
+        controls = controls.push(ink_menu(o.session, o.pack));
     }
     controls = controls.push(quick_bar(o.registry, o.session));
     let bar = container(controls)
@@ -426,17 +435,21 @@ fn pointer_menu<'a>(session: &Session) -> Element<'a, Message> {
     .into()
 }
 
-fn ink_menu<'a>(session: &Session) -> Element<'a, Message> {
+fn ink_menu<'a>(session: &Session, pack: Option<&crate::packs::Pack>) -> Element<'a, Message> {
     let current = session.settings().color(system::INK_COLOR);
     let width = session.settings().float(system::INK_WIDTH);
-    let swatches = row(theme::INKS.iter().map(|&(_, c)| {
+    let mut swatches = row(theme::INKS.iter().map(|&(_, c)| {
         button(space().width(28).height(28))
             .padding(0)
             .style(theme::swatch(theme::rgba(c), c == current))
             .on_press(Message::Set(system::INK_COLOR, Value::Color(c)))
             .into()
     }))
-    .spacing(8);
+    .spacing(8)
+    .align_y(Alignment::Center);
+    if let Some(accent) = pack.and_then(|p| p.accent) {
+        swatches = swatches.push(match_pointer(accent, current));
+    }
     let widths = row(theme::WIDTHS.iter().map(|&w| {
         button(text(format!("{w:.0} px")).size(13))
             .padding([7, 12])
@@ -468,6 +481,7 @@ struct OverlayCanvas<'a> {
     wheel_available: [bool; 8],
     output: OutputId,
     now: Millis,
+    pack: Option<&'a crate::packs::Pack>,
 }
 
 #[derive(Default)]
@@ -521,6 +535,27 @@ fn draw_pin(frame: &mut Frame, p: &crate::session::Pin) {
         align_y: alignment::Vertical::Center,
         ..canvas::Text::default()
     });
+}
+
+/// "Match pointer": ink in the pack's accent. The stroke keeps the resolved
+/// colour if the pointer changes later.
+pub fn match_pointer<'a>(accent: [u8; 4], current: [u8; 4]) -> Element<'a, Message> {
+    tip(
+        button(
+            row![
+                container(space().width(16).height(16))
+                    .style(theme::outlined(theme::rgba(accent), 8.0, theme::LINE_STRONG)),
+                text("Match").size(12),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        )
+        .padding([5, 8])
+        .style(theme::segment(accent == current))
+        .on_press(Message::Set(system::INK_COLOR, Value::Color(accent))),
+        "Ink matches the pointer".into(),
+        None,
+    )
 }
 
 fn draw_mark(frame: &mut Frame, mark: &Mark, alpha: f32) {
@@ -650,7 +685,7 @@ impl canvas::Program<Message> for OverlayCanvas<'_> {
                 if let Some((output, tip)) = self.session.tip(self.now)
                     && output == self.output
                 {
-                    paw::draw_tip(&mut live, tip, bounds.size());
+                    paw::draw_tip(&mut live, tip, bounds.size(), self.pack);
                 }
             }
         }
@@ -687,6 +722,7 @@ pub struct PreviewTile {
     pub ink: Color,
     pub width: f32,
     pub laser: bool,
+    pub pack: Option<crate::packs::Pack>,
 }
 
 impl<Message> canvas::Program<Message> for PreviewTile {
@@ -725,6 +761,20 @@ impl<Message> canvas::Program<Message> for PreviewTile {
                     press: 0.0,
                 },
                 size,
+                None,
+            );
+        } else if let Some(pack) = &self.pack {
+            paw::draw_tip(
+                &mut frame,
+                crate::session::Tip::Paw {
+                    at: crate::session::Pt::new(tip.x, tip.y),
+                    press: 0.0,
+                    scale: h * 0.36 / crate::features::point::BASE_SIZE,
+                    stick: false,
+                    grip_x: tip.x,
+                },
+                size,
+                Some(pack),
             );
         } else {
             paw::draw_preview_paw(&mut frame, tip, h * 0.42);

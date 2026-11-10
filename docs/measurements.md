@@ -54,6 +54,12 @@ The audio device opens on the first tap after switching On and closes on Off, so
 
 Lens stays disabled. It needs a live source that leaves the overlay out of the frame, such as Windows Graphics Capture of the game window.
 
+## Pointer packs, 10 November 2026
+
+The Yohta, Moro, Moro Crayon and Zaeri packs come from the selected source art. `tools/prepare_pack.py` cropped each to its visible pixels and scaled it to 256 px tall. The hotspot is the topmost opaque pixel, the claw tip, and the wrist is the bottom centre. The four sprites total about 150 KB, embedded in the executable (8.7 MiB release build).
+
+Checked on screen: every pack draws with the claw exactly at the pointer, and Classic Stick rotates the sprite along the rod to the eased grip. Settings shows real thumbnails, and an unknown pack ID is refused. The Add-your-pointer file dialog flow was **not** completed on screen because the machine was in use; import, hotspot, install and reload-after-the-source-moves are covered by a unit test instead.
+
 ## Phase 1 behavior checks (scripted on Windows 11)
 
 Passed with synthetic input on the primary display:

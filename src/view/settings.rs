@@ -11,6 +11,7 @@ use iced::{Alignment, Color, Element, Length, Theme};
 use super::icons::{Glyph, icon};
 use super::{PreviewTile, UiMsg, theme};
 use crate::app::Message;
+use crate::packs::{Draft, Pack};
 use crate::features::{display, point, sound, system};
 use crate::registry::{Registry, ShortcutContext, Value};
 use crate::session::{ActivationStyle, Session};
@@ -32,6 +33,11 @@ pub struct SettingsView<'a> {
     /// Commands whose global shortcut is held by another app.
     pub taken: &'a [&'static str],
     pub notice: Option<&'a str>,
+    pub packs: &'a [Pack],
+    /// The pack the Point tool draws with.
+    pub pack: Option<&'a Pack>,
+    /// "Add your pointer" in progress.
+    pub draft: Option<&'a Draft>,
 }
 
 fn h1<'a>(label: &'a str) -> Element<'a, Message> {
@@ -195,44 +201,62 @@ fn appearance<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     let s = v.session.settings();
     let laser = s.choice(point::STYLE) == "laser";
 
-    let pointer_card = |glyph: Glyph, tint: Color, label: &'static str, on: bool, msg: Option<Message>| {
+    let card = |art: Element<'a, Message>, label: String, on: bool, msg: Message| {
         button(
             column![
-                container(icon(glyph, 22.0, tint))
-                    .width(40)
-                    .height(40)
+                container(art)
+                    .height(52)
                     .align_x(Alignment::Center)
-                    .align_y(Alignment::Center)
-                    .style(theme::fill(Color { a: 0.14, ..tint }, 20.0)),
-                text(label).font(theme::MEDIUM).size(13),
+                    .align_y(Alignment::Center),
+                text(label).font(theme::MEDIUM).size(12),
             ]
-            .spacing(8)
+            .spacing(6)
+            .width(Length::Fill)
             .align_x(Alignment::Center),
         )
-        .width(104)
+        .width(92)
         .height(96)
-        .padding([16, 8])
+        .padding([10, 6])
         .style(theme::card(on))
-        .on_press_maybe(msg)
+        .on_press(msg)
     };
-    let pointers = row![
-        pointer_card(
-            Glyph::PawSolid,
-            theme::AMBER,
-            "Yohta",
-            !laser,
-            Some(Message::Set(point::STYLE, Value::Choice("paw")))
-        ),
-        pointer_card(
-            Glyph::Laser,
-            Color::from_rgb8(0xF8, 0x71, 0x71),
-            "Laser",
-            laser,
-            Some(Message::Set(point::STYLE, Value::Choice("laser")))
-        ),
-        later(pointer_card(Glyph::Plus, theme::MUTED, "Add yours", false, None)),
-    ]
+    let current = v.pack.map(|p| p.id);
+    let mut pointers = row(v.packs.iter().map(|p| {
+        card(
+            iced::widget::image(p.image.clone()).height(48).into(),
+            p.name.clone(),
+            !laser && current == Some(p.id),
+            Message::Ui(UiMsg::PickPack(p.id)),
+        )
+        .into()
+    }))
     .spacing(8);
+    let laser_tint = Color::from_rgb8(0xF8, 0x71, 0x71);
+    pointers = pointers.push(card(
+        container(icon(Glyph::Laser, 22.0, laser_tint))
+            .width(40)
+            .height(40)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .style(theme::fill(Color { a: 0.14, ..laser_tint }, 20.0))
+            .into(),
+        "Laser".into(),
+        laser,
+        Message::Set(point::STYLE, Value::Choice("laser")),
+    ));
+    pointers = pointers.push(card(
+        container(icon(Glyph::Plus, 22.0, theme::MUTED))
+            .width(40)
+            .height(40)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .style(theme::outlined(Color::TRANSPARENT, 20.0, theme::LINE_STRONG))
+            .into(),
+        "Add yours".into(),
+        false,
+        Message::Ui(UiMsg::AddPointer),
+    ));
+    let pointers = pointers.wrap().vertical_spacing(8);
 
     let pres = s.choice(point::PRESENTATION);
     let seg = |label: &'static str, id: &'static str, enabled: bool| -> Element<'a, Message> {
@@ -269,12 +293,12 @@ fn appearance<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         .step(4.0)
         .style(theme::range);
 
-    let current = s.color(system::INK_COLOR);
+    let current_ink = s.color(system::INK_COLOR);
     let width = s.float(system::INK_WIDTH);
     let swatches = row(theme::INKS.iter().map(|&(_, c)| {
         button(space().width(28).height(28))
             .padding(0)
-            .style(theme::swatch(theme::rgba(c), c == current))
+            .style(theme::swatch(theme::rgba(c), c == current_ink))
             .on_press(Message::Set(system::INK_COLOR, Value::Color(c)))
             .into()
     }))
@@ -304,6 +328,10 @@ fn appearance<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     .padding([8, 10])
     .style(theme::select);
 
+    let mut ink_row = row![swatches].spacing(12).align_y(Alignment::Center);
+    if let Some(accent) = v.pack.and_then(|p| p.accent) {
+        ink_row = ink_row.push(super::match_pointer(accent, current_ink));
+    }
     let left = column![
         h1("Appearance"),
         section(vec![h2("Pointer"), pointers.into()]),
@@ -311,7 +339,7 @@ fn appearance<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         section(vec![size_row.into(), size_slider.into()]),
         section(vec![
             h2("Ink"),
-            swatches.into(),
+            ink_row.into(),
             row![widths, row![hint("Fade"), fade].spacing(8).align_y(Alignment::Center)]
                 .spacing(16)
                 .align_y(Alignment::Center)
@@ -321,17 +349,21 @@ fn appearance<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     .spacing(22)
     .width(Length::Fill);
 
-    let ink = theme::rgba(current);
+    let ink = theme::rgba(current_ink);
     let tile = |bg: Color| {
         canvas(PreviewTile {
             background: bg,
             ink,
             width: width as f32,
             laser,
+            pack: v.pack.cloned(),
         })
         .width(Length::Fill)
         .height(150)
     };
+    if let Some(draft) = v.draft {
+        return row![left, new_pointer(draft)].spacing(28).into();
+    }
     let preview = column![
         h2("Preview"),
         tile(Color::from_rgb8(0xF4, 0xF4, 0xF5)),
@@ -346,6 +378,140 @@ fn appearance<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     .width(260);
 
     row![left, preview].spacing(28).into()
+}
+
+/// "Add your pointer": click the exact tip, name it, save.
+fn new_pointer<'a>(draft: &'a Draft) -> Element<'a, Message> {
+    column![
+        h2("New pointer"),
+        canvas(HotspotPicker { draft })
+            .width(Length::Fill)
+            .height(260),
+        hint("Click the exact tip of the pointer. Light and dark halves show how it reads on both."),
+        iced::widget::text_input("Name", &draft.name)
+            .on_input(|n| Message::Ui(UiMsg::DraftName(n)))
+            .size(14)
+            .padding([9, 10])
+            .style(|_, status| iced::widget::text_input::Style {
+                background: theme::CONTROL.into(),
+                border: iced::Border {
+                    radius: 8.0.into(),
+                    width: 1.0,
+                    color: if matches!(status, iced::widget::text_input::Status::Focused { .. }) {
+                        theme::CYAN_RING
+                    } else {
+                        theme::LINE_STRONG
+                    },
+                },
+                icon: theme::MUTED,
+                placeholder: theme::FAINT,
+                value: theme::TEXT,
+                selection: theme::CYAN_BG,
+            }),
+        row![
+            button(text("Cancel").size(13).width(Length::Fill).center())
+                .width(Length::Fill)
+                .padding([10, 12])
+                .style(theme::secondary)
+                .on_press(Message::Ui(UiMsg::CancelDraft)),
+            button(text("Save pointer").font(theme::HEADING).size(13).width(Length::Fill).center())
+                .width(Length::Fill)
+                .padding([10, 12])
+                .style(theme::primary)
+                .on_press(Message::Ui(UiMsg::SaveDraft)),
+        ]
+        .spacing(8),
+    ]
+    .spacing(10)
+    .width(260)
+    .into()
+}
+
+/// Shows the new pointer on light and dark halves with a crosshair at the
+/// hotspot; a click inside the image moves the hotspot there.
+struct HotspotPicker<'a> {
+    draft: &'a Draft,
+}
+
+impl HotspotPicker<'_> {
+    fn image_rect(&self, bounds: iced::Size) -> iced::Rectangle {
+        let pad = 16.0;
+        let (w, h) = (self.draft.width as f32, self.draft.height as f32);
+        let fit = ((bounds.width - pad * 2.0) / w).min((bounds.height - pad * 2.0) / h);
+        let size = iced::Size::new(w * fit, h * fit);
+        iced::Rectangle::new(
+            iced::Point::new((bounds.width - size.width) / 2.0, (bounds.height - size.height) / 2.0),
+            size,
+        )
+    }
+}
+
+impl canvas::Program<Message> for HotspotPicker<'_> {
+    type State = ();
+
+    fn update(
+        &self,
+        _state: &mut (),
+        event: &iced::Event,
+        bounds: iced::Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        if let iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) = event
+            && let Some(p) = cursor.position_in(bounds)
+        {
+            let r = self.image_rect(bounds.size());
+            if r.contains(p) {
+                let fx = (p.x - r.x) / r.width;
+                let fy = (p.y - r.y) / r.height;
+                return Some(canvas::Action::publish(Message::Ui(UiMsg::DraftHotspot(fx, fy))).and_capture());
+            }
+        }
+        None
+    }
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &iced::Renderer,
+        _theme: &Theme,
+        bounds: iced::Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        use iced::widget::canvas::{Frame, Path, Stroke};
+        let size = bounds.size();
+        let mut back = Frame::new(renderer, size);
+        back.fill(
+            &Path::rounded_rectangle(iced::Point::ORIGIN, size, 12.0.into()),
+            Color::from_rgb8(0xF4, 0xF4, 0xF5),
+        );
+        back.fill_rectangle(
+            iced::Point::new(size.width / 2.0, 0.0),
+            iced::Size::new(size.width / 2.0, size.height),
+            Color::from_rgb8(0x1B, 0x26, 0x21),
+        );
+        let r = self.image_rect(size);
+        back.draw_image(r, canvas::Image::new(self.draft.image.clone()));
+        // Crosshair in its own frame: images paint above shapes in one frame.
+        let mut marks = Frame::new(renderer, size);
+        let hx = r.x + self.draft.hotspot.0 * r.width;
+        let hy = r.y + self.draft.hotspot.1 * r.height;
+        let ring = Path::circle(iced::Point::new(hx, hy), 7.0);
+        marks.stroke(&ring, Stroke::default().with_color(Color::BLACK).with_width(3.0));
+        marks.stroke(&ring, Stroke::default().with_color(theme::CYAN).with_width(1.5));
+        vec![back.into_geometry(), marks.into_geometry()]
+    }
+
+    fn mouse_interaction(
+        &self,
+        _state: &(),
+        bounds: iced::Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> iced::mouse::Interaction {
+        match cursor.position_in(bounds) {
+            Some(p) if self.image_rect(bounds.size()).contains(p) => iced::mouse::Interaction::Crosshair,
+            _ => iced::mouse::Interaction::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

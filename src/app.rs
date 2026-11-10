@@ -13,6 +13,7 @@ use iced::{Element, Point, Size, Subscription, Task, Theme, event, theme};
 use crate::audio::{self, Audio};
 use crate::features::{point, sound, system, wheel as wheel_feature};
 use crate::platform::{self, External};
+use crate::packs::{self, Draft, Pack};
 use crate::preferences;
 use crate::registry::{
     Dispatched, Key, Registry, ShellAction, ShortcutContext, Unavailable, Value,
@@ -37,6 +38,7 @@ pub enum Message {
     Set(&'static str, Value),
     Ui(UiMsg),
     WavPicked(Option<PathBuf>),
+    PointerPicked(Option<PathBuf>),
     Acquired(Ticket),
     TextChanged(String),
     TextSubmit,
@@ -73,6 +75,8 @@ pub struct App {
     /// Short overlay message and when it appeared.
     overlay_notice: Option<(String, Millis)>,
     editor_focused: bool,
+    packs: Vec<Pack>,
+    pointer_draft: Option<Draft>,
 }
 
 pub fn run(registry: &'static Registry) -> iced::Result {
@@ -164,7 +168,17 @@ impl App {
             next_frame: 0,
             overlay_notice: None,
             editor_focused: false,
+            packs: Vec::new(),
+            pointer_draft: None,
         };
+        let (loaded_packs, problems) = packs::load_all();
+        for problem in &problems {
+            eprintln!("tinypaw: pointer pack skipped: {problem}");
+        }
+        if !problems.is_empty() {
+            app.notice = Some(format!("{} pointer pack(s) could not be loaded", problems.len()));
+        }
+        app.packs = loaded_packs;
         app.sync_tray();
         let task = if loaded.first_run {
             // Saving now means the card shows once.
@@ -232,6 +246,18 @@ impl App {
             }
             Message::Set(id, value) => out.sets.push((id, value)),
             Message::Ui(ui) => tasks.push(self.ui_message(ui, now, &mut out)),
+            Message::PointerPicked(path) => {
+                if let Some(path) = path {
+                    match packs::draft_from_file(&path) {
+                        Ok(draft) => {
+                            self.pointer_draft = Some(draft);
+                            self.page = Page::Appearance;
+                            self.notice = None;
+                        }
+                        Err(e) => self.notice = Some(format!("Could not use that image: {e}")),
+                    }
+                }
+            }
             Message::WavPicked(path) => {
                 if let Some(path) = path {
                     match audio::import_wav(&path) {
@@ -373,6 +399,46 @@ impl App {
                 self.ui.ink_menu = !self.ui.ink_menu;
             }
             UiMsg::Nav(page) => self.page = page,
+            UiMsg::PickPack(id) => {
+                out.sets.push((point::STYLE, Value::Choice("paw")));
+                out.sets.push((point::PACK, Value::Choice(id)));
+            }
+            UiMsg::AddPointer => {
+                return Task::perform(
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Choose a transparent PNG pointer")
+                        .add_filter("PNG image", &["png"])
+                        .pick_file(),
+                    |file| Message::PointerPicked(file.map(|f| f.path().to_path_buf())),
+                );
+            }
+            UiMsg::DraftHotspot(x, y) => {
+                if let Some(d) = &mut self.pointer_draft {
+                    d.hotspot = (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
+                }
+            }
+            UiMsg::DraftName(name) => {
+                if let Some(d) = &mut self.pointer_draft {
+                    d.name = name.chars().take(40).collect();
+                }
+            }
+            UiMsg::CancelDraft => self.pointer_draft = None,
+            UiMsg::SaveDraft => {
+                if let Some(draft) = &self.pointer_draft {
+                    let taken: Vec<&str> = self.packs.iter().map(|p| p.id).collect();
+                    match packs::install(draft, &taken) {
+                        Ok(pack) => {
+                            let id = pack.id;
+                            self.packs.push(pack);
+                            self.pointer_draft = None;
+                            self.notice = None;
+                            out.sets.push((point::STYLE, Value::Choice("paw")));
+                            out.sets.push((point::PACK, Value::Choice(id)));
+                        }
+                        Err(e) => self.notice = Some(format!("Could not save the pointer: {e}")),
+                    }
+                }
+            }
             UiMsg::PreviewSound => {
                 let s = self.session.settings();
                 let (tap, volume) = (s.choice(sound::TAP), s.float(sound::VOLUME) as f32);
@@ -456,8 +522,26 @@ impl App {
         }
     }
 
+    /// The pack the paw draws with; an unknown or missing pack falls back to
+    /// the first loaded one.
+    fn current_pack(&self) -> Option<&Pack> {
+        let id = self.session.settings().choice(point::PACK);
+        self.packs
+            .iter()
+            .find(|p| p.id == id)
+            .or_else(|| self.packs.first())
+    }
+
     /// The single update path for settings: validate, apply, persist.
     fn apply_setting(&mut self, id: &'static str, value: Value, now: Millis) {
+        // A pack must be installed and valid before it can be selected.
+        if id == point::PACK
+            && let Value::Choice(pack) = &value
+            && !self.packs.iter().any(|p| p.id == *pack)
+        {
+            self.notice = Some(format!("{id}: no installed pointer pack `{pack}`"));
+            return;
+        }
         let mut values = self.session.settings().clone();
         match self.registry.set(&mut values, id, value) {
             Ok(()) => {
@@ -639,6 +723,7 @@ impl App {
                     .filter(|(id, _)| Some(*id) == self.session.frozen_frame())
                     .map(|(_, handle)| handle),
                 notice: self.overlay_notice.as_ref().map(|(text, _)| text.as_str()),
+                pack: self.current_pack(),
             });
         }
         if Some(window) == self.settings_window {
@@ -648,6 +733,9 @@ impl App {
                 page: self.page,
                 has_custom_sound: self.audio.has_custom(),
                 taken: self.hotkeys.as_ref().map_or(&[], |h| h.taken.as_slice()),
+                packs: &self.packs,
+                pack: self.current_pack(),
+                draft: self.pointer_draft.as_ref(),
                 notice: self.notice.as_deref(),
             });
         }

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "moro-crayon",
+  "name": "Moro Crayon",
+  "accent": "#FFC21F",
+  "pointer": {
+    "idle": "paw.png",
+    "hotspot": [
+      0.4274,
+      0.0215
+    ],
+    "wrist": [
+      0.4946,
+      0.9785
+    ]
+  }
+}

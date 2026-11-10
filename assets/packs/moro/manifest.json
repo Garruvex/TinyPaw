@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "moro",
+  "name": "Moro",
+  "accent": "#FFC21F",
+  "pointer": {
+    "idle": "paw.png",
+    "hotspot": [
+      0.4022,
+      0.0215
+    ],
+    "wrist": [
+      0.4864,
+      0.9785
+    ]
+  }
+}

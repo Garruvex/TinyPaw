@@ -11,6 +11,7 @@ interprocess = "2.4.8"
 rodio = { version = "0.23", default-features = false, features = ["playback", "wav"] }
 rfd = { version = "0.18", default-features = false }
 serde_json = "1.0"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [features]
 # Opt-in GPU renderer for comparisons. tiny-skia measured faster to activate

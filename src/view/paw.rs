@@ -1,10 +1,17 @@
-//! Placeholder pointer art drawn with vector primitives. The claw tip sits at
-//! the exact input coordinate in every frame; presses compress around it.
+//! Pointer drawing: a pack's PNG sprite, or the vector placeholder when no
+//! pack is available. The claw tip sits at the exact input coordinate in every
+//! frame; presses compress around it.
 
-use iced::widget::canvas::{Frame, LineCap, Path, Stroke};
-use iced::{Color, Point, Radians, Size, Vector};
+use iced::advanced::image::Handle;
+use iced::widget::canvas::{self, Frame, LineCap, Path, Stroke};
+use iced::{Color, Point, Radians, Rectangle, Size, Vector};
 
+use crate::features::point::BASE_SIZE;
+use crate::packs::Pack;
 use crate::session::Tip;
+
+/// Sprite height relative to the size setting: claw to wrist end.
+const SPRITE_SCALE: f32 = 1.15;
 
 const FUR: Color = Color::from_rgb8(0xF2, 0xA6, 0x5A);
 const FUR_DARK: Color = Color::from_rgb8(0xD9, 0x83, 0x3A);
@@ -19,7 +26,7 @@ const WRIST: Vector = Vector::new(7.0, 56.0);
 /// Lean of the free-standing paw, as if reaching in from the lower right.
 const FURRY_LEAN: f32 = 0.35;
 
-pub fn draw_tip(frame: &mut Frame, tip: Tip, area: Size) {
+pub fn draw_tip(frame: &mut Frame, tip: Tip, area: Size, pack: Option<&Pack>) {
     match tip {
         Tip::Paw {
             at,
@@ -29,13 +36,73 @@ pub fn draw_tip(frame: &mut Frame, tip: Tip, area: Size) {
             grip_x,
         } => {
             let at = Point::new(at.x, at.y);
-            if stick {
-                draw_stick(frame, at, grip_x, press, scale, area);
-            } else {
-                draw_paw(frame, at, press, scale, FURRY_LEAN);
+            match pack {
+                Some(pack) => {
+                    let sprite = Sprite::new(pack, scale);
+                    if stick {
+                        draw_stick(frame, at, grip_x, press, scale, area, sprite.wrist(), |f, angle| {
+                            sprite.draw(f, at, press, angle)
+                        });
+                    } else {
+                        sprite.draw(frame, at, press, 0.0);
+                    }
+                }
+                None if stick => draw_stick(frame, at, grip_x, press, scale, area, WRIST * scale, |f, angle| {
+                    draw_paw(f, at, press, scale, angle)
+                }),
+                None => draw_paw(frame, at, press, scale, FURRY_LEAN),
             }
         }
         Tip::Laser { at, press } => draw_laser(frame, Point::new(at.x, at.y), press),
+    }
+}
+
+/// A pack's sprite sized for the current Size setting, positioned from its
+/// hotspot so the tip lands on the pointer.
+struct Sprite<'a> {
+    image: &'a Handle,
+    size: Size,
+    hotspot: (f32, f32),
+    wrist: Option<(f32, f32)>,
+}
+
+impl<'a> Sprite<'a> {
+    fn new(pack: &'a Pack, scale: f32) -> Self {
+        let height = BASE_SIZE * scale * SPRITE_SCALE;
+        let width = height * pack.width as f32 / pack.height as f32;
+        Self {
+            image: &pack.image,
+            size: Size::new(width, height),
+            hotspot: pack.hotspot,
+            wrist: pack.wrist,
+        }
+    }
+
+    /// The wrist in tip-relative pixels before any press; a pack without
+    /// one attaches at the bottom centre.
+    fn wrist(&self) -> Vector {
+        let (wx, wy) = self.wrist.unwrap_or((0.5, 1.0));
+        Vector::new(
+            (wx - self.hotspot.0) * self.size.width,
+            (wy - self.hotspot.1) * self.size.height,
+        )
+    }
+
+    fn draw(&self, frame: &mut Frame, tip: Point, press: f32, angle: f32) {
+        let s = 1.0 - 0.06 * press.clamp(0.0, 1.0);
+        frame.with_save(|f| {
+            f.translate(Vector::new(tip.x, tip.y));
+            f.rotate(Radians(angle));
+            f.scale(s);
+            let corner = Point::new(
+                -self.hotspot.0 * self.size.width,
+                -self.hotspot.1 * self.size.height,
+            );
+            f.draw_image(
+                Rectangle::new(corner, self.size),
+                canvas::Image::new(self.image.clone()),
+            );
+        });
     }
 }
 
@@ -45,8 +112,19 @@ fn outline(width: f32) -> Stroke<'static> {
 
 /// Classic Stick: a slim rod from an off-screen grip below and right of the
 /// pointer, with the paw rotated along it. The grip follows `grip_x`, which
-/// eases after the pointer; the claw stays on `tip` exactly.
-fn draw_stick(frame: &mut Frame, tip: Point, grip_x: f32, press: f32, scale: f32, area: Size) {
+/// eases after the pointer; the claw stays on `tip` exactly. `wrist` is where
+/// the rod attaches, tip-relative, in the paw's upright coordinates.
+#[allow(clippy::too_many_arguments)]
+fn draw_stick(
+    frame: &mut Frame,
+    tip: Point,
+    grip_x: f32,
+    press: f32,
+    scale: f32,
+    area: Size,
+    wrist: Vector,
+    draw_paw: impl FnOnce(&mut Frame, f32),
+) {
     let grip = Point::new(
         (grip_x + area.width * 0.3).clamp(area.width * 0.2, area.width * 1.05),
         area.height * 1.12,
@@ -54,11 +132,11 @@ fn draw_stick(frame: &mut Frame, tip: Point, grip_x: f32, press: f32, scale: f32
     let dir = Vector::new(grip.x - tip.x, grip.y - tip.y);
     // Rotate local "down" (0,1) onto the direction of the grip.
     let angle = dir.y.atan2(dir.x) - std::f32::consts::FRAC_PI_2;
-    let s = scale * (1.0 - 0.06 * press.clamp(0.0, 1.0));
+    let s = 1.0 - 0.06 * press.clamp(0.0, 1.0);
     let (sin, cos) = angle.sin_cos();
     let wrist = Point::new(
-        tip.x + (WRIST.x * cos - WRIST.y * sin) * s,
-        tip.y + (WRIST.x * sin + WRIST.y * cos) * s,
+        tip.x + (wrist.x * cos - wrist.y * sin) * s,
+        tip.y + (wrist.x * sin + wrist.y * cos) * s,
     );
     let rod = Path::line(wrist, grip);
     frame.stroke(
@@ -75,7 +153,7 @@ fn draw_stick(frame: &mut Frame, tip: Point, grip_x: f32, press: f32, scale: f32
             .with_width(1.5 * scale)
             .with_line_cap(LineCap::Round),
     );
-    draw_paw(frame, tip, press, scale, angle);
+    draw_paw(frame, angle);
 }
 
 fn draw_paw(frame: &mut Frame, tip: Point, press: f32, scale: f32, angle: f32) {

@@ -1687,6 +1687,7 @@ dependencies = [
  "byteorder-lite",
  "moxcms",
  "num-traits",
+ "png 0.18.1",
 ]
 
 [[package]]
@@ -3661,6 +3662,7 @@ version = "0.1.0"
 dependencies = [
  "global-hotkey",
  "iced",
+ "image",
  "interprocess",
  "rfd",
  "rodio",

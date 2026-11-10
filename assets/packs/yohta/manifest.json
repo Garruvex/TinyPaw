@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "yohta",
+  "name": "Yohta",
+  "accent": "#5B9BFF",
+  "pointer": {
+    "idle": "paw.png",
+    "hotspot": [
+      0.3447,
+      0.0215
+    ],
+    "wrist": [
+      0.4921,
+      0.9785
+    ]
+  }
+}

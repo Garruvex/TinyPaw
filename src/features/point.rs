@@ -18,6 +18,8 @@ pub const USE_LASER: &str = "point.laser";
 pub const STYLE: &str = "point.style";
 pub const PRESENTATION: &str = "point.presentation";
 pub const SIZE: &str = "point.size";
+/// The installed pack the paw draws with (open-ended: user packs have new IDs).
+pub const PACK: &str = "point.pack";
 
 /// Paw height in logical pixels that the artwork is drawn at by default.
 pub const BASE_SIZE: f32 = 56.0;
@@ -96,6 +98,14 @@ pub fn register(r: &mut Registrar) {
         default: Value::Choice("furry"),
         // "stretch" joins once a pack supplies forearm art.
         constraint: Constraint::Choices(&["furry", "stick"]),
+    });
+    r.setting(SettingDef {
+        id: PACK,
+        label: "Pointer pack",
+        group: "Appearance",
+        order: 0,
+        default: Value::Choice(crate::packs::DEFAULT),
+        constraint: Constraint::None,
     });
     r.setting(SettingDef {
         id: SIZE,

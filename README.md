@@ -7,14 +7,16 @@ TinyPaw is a desktop helper for pointing and drawing over presentations and game
 
 Working on Windows:
 
-- **Overlay:** a transparent overlay on the primary display with a placeholder Yohta paw or a laser dot, ink in six colours and four widths, optional fade after 3 seconds, and a tap animation.
+- **Overlay:** a transparent overlay on the primary display with your Yohta, Moro, Moro Crayon or Zaeri pointer art (Furry Paw or Classic Stick) or a laser dot, ink in six colours and four widths, optional fade after 3 seconds, and a tap animation.
 - **Quick bar and wheel:** the Graphite quick bar holds the tools, ink, Undo, Clear, Mute and Exit, with shortcut tooltips. The quick wheel opens with a held **Ctrl+Alt+W**.
 - **Settings window:** Controls, Display, Appearance and Sound sections with a live preview and a master switch. Choices are saved to `%APPDATA%\TinyPaw\preferences.json`.
 - **Sound:** three synthesized tap sounds (Blackboard Knock, Bubble Pop, Rubber Bonk) or an imported WAV, with volume and mute.
 - **Activation:** Toggle and Hold-to-draw styles, a tray menu, a first-run card, and a CLI that forwards to the running instance.
 - **Tools:** Text labels (IME-aware: the first Enter accepts a candidate, the next places the label), numbered Pins, Spotlight, and Freeze (**Ctrl+Alt+F**) to draw on a still of the screen, with Return Live.
 
-Lens appears in the interface but is not built yet. Pointer packs and Add your pointer, Stretch Paw, shortcut rebinding, multiple monitors, Niri and macOS also come later. The interface design is the Graphite canvas (TinyPaw Interface artifact).
+- **Pointer packs:** built-in packs ship inside the executable. **Add your pointer** (Settings > Appearance) imports a transparent PNG; click the exact tip to set the hotspot, name it, and save it to `%APPDATA%\TinyPaw\packs`. To build a pack from large source art, run `python tools/prepare_pack.py`.
+
+Lens appears in the interface but is not built yet. Aamox art, pressed poses, Stretch Paw, shortcut rebinding, multiple monitors, Niri and macOS also come later. The interface design is the Graphite canvas (TinyPaw Interface artifact).
 
 ## Build and run
 
