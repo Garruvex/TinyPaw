@@ -46,26 +46,21 @@ jobs:
           if-no-files-found: error
 
   linux:
-    # Linux is not shipped yet. This job keeps the platform-independent
-    # modules (session, registry, features, packs) compiling and their tests
-    # passing on Linux ahead of the Niri/Wayland port. Win32-only code is
-    # behind `cfg(windows)`, with no-op stand-ins in src/platform/fallback.rs
-    # (no Lens, window sources, keyboard hook or focus handoff on Linux).
-    # Warnings are not denied here: Windows-only paths leave dead code.
+    # Linux is not shipped yet. This job builds the Niri/Wayland port
+    # (src/platform/wayland.rs, see docs/niri.md) and runs every test on
+    # Linux. Warnings are not denied here yet.
     name: Linux (check, test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # tray-icon/muda: gtk3, xdo, appindicator. rodio/cpal: ALSA.
-      # global-hotkey (x11-dl) and winit/xkbcommon load their libraries at
-      # runtime, so they need nothing at build time.
+      # iced_exwlshell links libwayland-client and libxkbcommon; rodio/cpal
+      # link ALSA. The tray and global-hotkey are not built on Linux.
       - name: Install system packages
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pkg-config libgtk-3-dev libxdo-dev \
-            libayatana-appindicator3-dev libasound2-dev
+            pkg-config libwayland-dev libxkbcommon-dev libasound2-dev
 
       - uses: dtolnay/rust-toolchain@stable
 

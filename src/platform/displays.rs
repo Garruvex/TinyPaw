@@ -76,7 +76,11 @@ pub fn list() -> Vec<Display> {
     }
     items
 }
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+pub fn list() -> Vec<Display> {
+    super::wayland::displays()
+}
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn list() -> Vec<Display> {
     vec![Display {
         id: crate::session::OutputId(0),

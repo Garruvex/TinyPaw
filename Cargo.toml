@@ -5,11 +5,8 @@ edition = "2024"
 
 [dependencies]
 iced = { version = "0.14.0", default-features = false, features = ["tiny-skia", "canvas", "svg", "crisp", "smol", "advanced", "image-without-codecs"] }
-global-hotkey = "0.10.0"
-tray-icon = "0.26.1"
 interprocess = "2.4.8"
 rodio = { version = "0.23", default-features = false, features = ["playback", "wav"] }
-rfd = { version = "0.18", default-features = false }
 serde_json = "1.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
@@ -26,9 +23,17 @@ strip = true
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Console", "Win32_System_Threading", "Win32_Graphics_Gdi", "Win32_UI_Shell", "Win32_System_RemoteDesktop", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Dwm", "Win32_UI_HiDpi", "Win32_System_LibraryLoader"] }
 
-# Linux is not shipped yet; these only keep it compiling in CI. With default
-# features off, iced has no windowing backend on Linux, and rfd needs exactly
-# one dialog backend (the portal suits the planned Niri/Wayland port).
+# Global shortcuts and the tray are native on Windows and macOS. On Wayland a
+# compositor binding drives `tinypaw toggle`, and tray-icon would pull in GTK.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+global-hotkey = "0.10.0"
+tray-icon = "0.26.1"
+rfd = { version = "0.18", default-features = false }
+
+# Niri/Wayland: layer-shell overlays through iced_exwlshell. Pin it exactly; each
+# release tracks one Iced minor (0.21.x is Iced 0.14). See docs/architecture.md.
 [target.'cfg(target_os = "linux")'.dependencies]
-iced = { version = "0.14.0", default-features = false, features = ["wayland", "x11"] }
+iced = { version = "0.14.0", default-features = false, features = ["wayland"] }
+iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
+wayland-client = "0.31"
 rfd = { version = "0.18", default-features = false, features = ["xdg-portal"] }

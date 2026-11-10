@@ -8,9 +8,12 @@ pub mod displays;
 pub mod hotkeys;
 pub mod ipc;
 pub mod tray;
+#[cfg(target_os = "linux")]
+pub mod wayland;
 #[cfg(windows)]
 pub mod windows;
-#[cfg(not(windows))]
+// Linux has its own adapter in `wayland`; macOS still uses the no-op stand-in.
+#[cfg(not(any(windows, target_os = "linux")))]
 #[path = "fallback.rs"]
 pub mod windows;
 
@@ -105,7 +108,10 @@ mod tests {
     fn interning_stores_each_string_once() {
         let a = super::intern("window:1234");
         let b = super::intern(&String::from("window:1234"));
-        assert!(std::ptr::eq(a, b), "repeat refreshes reuse the same allocation");
+        assert!(
+            std::ptr::eq(a, b),
+            "repeat refreshes reuse the same allocation"
+        );
         assert_ne!(super::intern("window:5678"), a);
     }
 }

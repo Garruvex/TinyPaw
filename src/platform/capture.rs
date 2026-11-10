@@ -74,6 +74,6 @@ pub fn display(d: &super::displays::Display) -> Result<Still, String> {
 }
 
 #[cfg(not(windows))]
-pub fn display(d: &super::displays::Display) -> Result<Still, String> {
+pub fn display(_d: &super::displays::Display) -> Result<Still, String> {
     Err("Freeze capture is not available on this desktop yet".into())
 }

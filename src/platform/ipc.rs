@@ -69,3 +69,46 @@ pub fn request(line: &str) -> io::Result<String> {
     conn.read_line(&mut reply)?;
     Ok(reply.trim_end().to_owned())
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::features::{self, point, system};
+    use crate::registry::{Registry, Value};
+    use crate::session::{Mode, OverlayState, Session};
+
+    /// Runs one `tinypaw <name>` line the way the resident instance does.
+    fn cli(reg: &Registry, s: &mut Session, name: &str) {
+        let def = reg.command_by_cli(name).expect("CLI command exists");
+        reg.dispatch(def.id, s, 0).expect("available");
+    }
+
+    /// The compositor-driven flow from docs/niri.md: press-only bindings,
+    /// repeated or unmatched edges, and `off` as the recovery command.
+    #[test]
+    fn compositor_bindings_drive_the_session_over_cli() {
+        let reg = Registry::build(features::BUILTINS).expect("valid built-ins");
+        let mut values = reg.defaults();
+        reg.set(&mut values, system::ACTIVATION_STYLE, Value::Choice("hold"))
+            .unwrap();
+        let mut s = Session::new(point::TOOL, point::new_state, values);
+
+        cli(&reg, &mut s, "hold-end"); // unmatched end while Off
+        assert_eq!(s.mode(), Mode::Off);
+        cli(&reg, &mut s, "toggle");
+        assert_eq!(s.mode(), Mode::Passthrough);
+        cli(&reg, &mut s, "hold-begin");
+        cli(&reg, &mut s, "hold-begin"); // a second press is ignored
+        let ticket = s.pending_ticket().expect("hold asks for input");
+        s.handle(crate::session::Event::InputAcquired(ticket), 0);
+        assert_eq!(s.overlay_state(), OverlayState::Interactive);
+        cli(&reg, &mut s, "hold-end");
+        cli(&reg, &mut s, "hold-end"); // duplicate end is ignored
+        assert_eq!(s.mode(), Mode::Passthrough);
+        // No marks yet, so passthrough shows nothing and takes no clicks.
+        assert_eq!(s.overlay_state(), OverlayState::Hidden);
+        cli(&reg, &mut s, "off");
+        assert_eq!(s.mode(), Mode::Off);
+        cli(&reg, &mut s, "off"); // idempotent recovery
+        assert_eq!(s.overlay_state(), OverlayState::Hidden);
+    }
+}
