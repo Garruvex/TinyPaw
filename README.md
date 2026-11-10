@@ -34,6 +34,8 @@ cargo build --release
 target/release/tinypaw
 ```
 
+The build produces two programs. `tinypaw.exe` is the console CLI and the resident instance. `tinypawd.exe` is a small GUI-subsystem launcher that starts it without a console window; the Start-menu shortcut and the sign-in entry use it, and launching it while TinyPaw runs opens Settings.
+
 TinyPaw starts Off in the tray. Left-click the tray icon or press **Ctrl+Alt+P** to switch it On.
 
 | Input | Action |
@@ -47,6 +49,33 @@ TinyPaw starts Off in the tray. Left-click the tray icon or press **Ctrl+Alt+P**
 | Ctrl+Alt+D (held) | Point and draw in Hold-to-draw mode |
 | Ctrl+Alt+W (held) | Quick wheel: point at a tool, release to pick |
 | Ctrl+Alt+F | Freeze the screen and draw on the still; again to return live |
+
+## Windows installer
+
+The installer is an [Inno Setup 6](https://jrsoftware.org/isinfo.php) script in [`installer/tinypaw.iss`](installer/tinypaw.iss). Install Inno Setup once:
+
+```bash
+winget install --id JRSoftware.InnoSetup -e --scope user
+```
+
+Then build the release binaries and the installer from the repository root:
+
+```bash
+cargo build --release
+```
+
+```bash
+"$LOCALAPPDATA/Programs/Inno Setup 6/ISCC.exe" installer/tinypaw.iss
+```
+
+This writes `target/installer/TinyPaw-0.1.0-setup.exe`. Pass `/DAppVersion=x.y.z` to ISCC to stamp another version, or `/DBinDir=<folder>` to package binaries from elsewhere.
+
+The installer is per-user and needs no admin rights:
+
+- Files go to `%LOCALAPPDATA%\Programs\TinyPaw`, and a **TinyPaw** Start-menu shortcut runs `tinypawd.exe`.
+- The **Add the tinypaw command to my PATH** task (on by default) appends that folder to the user `PATH`, so new terminals can run `tinypaw status`. If you untick it, run the CLI by full path, or add the folder yourself.
+- **Settings > Controls > Start TinyPaw when I sign in** (off by default) writes a `TinyPaw` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` pointing at `tinypawd.exe`. It is also available as `tinypaw set system.start_at_sign_in true`.
+- Uninstall (Settings > Apps) quits the running instance and removes the files, shortcut, `PATH` entry and Run value. It then asks whether to delete `%APPDATA%\TinyPaw` (settings and imported pointers); the default is to keep it. A silent uninstall (`/VERYSILENT`) always keeps it.
 
 ## CLI
 

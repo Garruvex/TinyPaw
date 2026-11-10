@@ -37,8 +37,9 @@ pub fn allow_any_foreground() {
 }
 
 /// The binary is a console program so shells wait for CLI replies. When the
-/// resident instance was started from Explorer it owns a console nobody reads;
-/// release it so no window lingers. A shared terminal console is kept.
+/// resident instance owns a console nobody reads (the hidden one `tinypawd`
+/// starts it with, or a window from double-clicking `tinypaw.exe`), release
+/// it. A shared terminal console is kept.
 pub fn release_own_console() {
     unsafe {
         let mut pids = [0u32; 2];

@@ -1030,6 +1030,14 @@ fn controls<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         .style(theme::select),
         section(vec![h2("When switched On"), styles.into()]),
         section(vec![
+            h2("Startup"),
+            check(
+                "Start TinyPaw when I sign in",
+                v.session.settings().bool(system::START_AT_SIGN_IN),
+                system::START_AT_SIGN_IN,
+            ),
+        ]),
+        section(vec![
             h2("Shortcuts"),
             rows.into(),
             button("Restore default shortcuts")
