@@ -86,6 +86,18 @@ pub enum UiMsg {
     SaveDraft,
     CancelDraft,
     ResetMascotPosition,
+    PickCharacter(&'static str),
+    AddCharacter,
+    ImportCharacter,
+    ExportCharacter,
+    RemoveCharacter,
+    CharacterName(String),
+    CharacterGround(f32, f32),
+    SaveCharacter,
+    CancelCharacter,
+    /// A folder import's ID is taken: `true` keeps both, `false` replaces.
+    ResolveCharacter(bool),
+    CancelCharacterImport,
 }
 
 /// Cached committed ink, invalidated by scene revision.

@@ -9,6 +9,8 @@ pub const ENABLED: &str = "mascot.enabled";
 pub const SIZE: &str = "mascot.size";
 pub const EYES: &str = "mascot.eyes";
 pub const IDLE: &str = "mascot.idle";
+/// The selected character's ID: bundled `yohta` or an installed pack.
+pub const CHARACTER: &str = "mascot.character";
 /// Ground anchor (bottom centre of the character) in physical desktop pixels.
 /// Internal: written when a drag ends, not shown in Settings.
 pub const X: &str = "mascot.x";
@@ -30,6 +32,15 @@ pub fn register(r: &mut Registrar) {
         group: "Character",
         order: 0,
         default: Value::Bool(false),
+        constraint: Constraint::None,
+    });
+    r.setting(SettingDef {
+        id: CHARACTER,
+        label: "Character",
+        group: "Character",
+        order: 0,
+        default: Value::Choice("yohta"),
+        // Installed IDs aren't known at registration.
         constraint: Constraint::None,
     });
     r.setting(SettingDef {

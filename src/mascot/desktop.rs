@@ -18,7 +18,7 @@ use iced::{
 };
 
 use super::Msg;
-use super::rig::{self, Rig};
+use super::rig::Rig;
 use crate::app::Message;
 use crate::features::mascot as feature;
 use crate::platform::windows as native;
@@ -60,12 +60,13 @@ pub struct Layout {
     menu: Size,
 }
 
-/// `height` is the character's logical height; `ground` the rig row the feet
-/// rest on; `rows` the number of menu entries.
-pub fn layout(height: f32, ground: f32, rows: usize) -> Layout {
-    let scale = height / rig::HEIGHT;
-    let size = Size::new(rig::WIDTH * scale, rig::HEIGHT * scale);
-    let below = (rig::HEIGHT - ground).max(0.0) * scale;
+/// `height` is the character's logical height; `canvas` the rig's size and
+/// `feet` where it meets the ground, both in rig pixels; `rows` the number of
+/// menu entries.
+pub fn layout(height: f32, canvas: Size, feet: Point, rows: usize) -> Layout {
+    let scale = height / canvas.height;
+    let size = Size::new(canvas.width * scale, canvas.height * scale);
+    let below = (canvas.height - feet.y).max(0.0) * scale;
     let menu = Size::new(MENU_W, menu_height(rows));
     let side = MENU_W + GAP;
     let h = size.height.max(menu.height + below).ceil();
@@ -73,7 +74,7 @@ pub fn layout(height: f32, ground: f32, rows: usize) -> Layout {
     Layout {
         scale,
         character,
-        anchor: Point::new(character.x + size.width * 0.5, character.y + ground * scale),
+        anchor: Point::new(character.x + feet.x * scale, character.y + feet.y * scale),
         window: Size::new((size.width + 2.0 * side).ceil(), h),
         menu,
     }
@@ -181,6 +182,10 @@ pub struct Desktop {
     pub id: window::Id,
     hwnd: isize,
     rig: Rig,
+    /// The selected character this rig was loaded for.
+    character: &'static str,
+    /// Press feedback, 0 (none) to 1 (fully squashed).
+    squash: f32,
     size: f32,
     rows: usize,
     layout: Layout,
@@ -207,13 +212,14 @@ impl Desktop {
     /// later never presents a frame with Iced 0.14 here, so it starts visible
     /// but out of sight.)
     pub fn open(
+        character: &'static str,
+        rig: Rig,
         size: f32,
         anchor: (f64, f64),
         rows: usize,
         hidden: bool,
     ) -> (Self, Task<window::Id>) {
-        let rig = Rig::load();
-        let layout = layout(size, rig.ground(), rows);
+        let layout = layout(size, rig.size(), rig.anchor(), rows);
         let (id, task) = window::open(window::Settings {
             size: layout.window,
             position: window::Position::Specific(Point::new(-32000.0, -32000.0)),
@@ -236,6 +242,8 @@ impl Desktop {
             id,
             hwnd: 0,
             rig,
+            character,
+            squash: 0.0,
             size,
             rows,
             layout,
@@ -252,6 +260,21 @@ impl Desktop {
             left_down: false,
         };
         (desktop, task)
+    }
+
+    /// The selected character this window shows.
+    pub fn character(&self) -> &'static str {
+        self.character
+    }
+
+    /// Shows another character, keeping its feet where these were.
+    pub fn set_rig(&mut self, character: &'static str, rig: Rig) {
+        self.character = character;
+        self.rig = rig;
+        self.menu = None;
+        self.press = None;
+        self.layout = layout(self.size, self.rig.size(), self.rig.anchor(), self.rows);
+        self.place();
     }
 
     /// The native window, once known; 0 before then.
@@ -360,9 +383,18 @@ impl Desktop {
             Task::none()
         };
 
+        // A short press squashes the character around its feet.
+        let pressing = self.press.as_ref().is_some_and(|p| !p.dragging) && !o.reduced;
+        let squash = if pressing { 1.0 } else { 0.0 };
+        self.squash = if o.reduced {
+            0.0
+        } else {
+            self.squash + (squash - self.squash) * 0.45
+        };
+
         let eyes =
             self.layout.character.position() + Vector::new(EYES.x, EYES.y) * self.layout.scale;
-        self.target = if o.eyes {
+        self.target = if o.eyes && self.rig.has_eyes() {
             gaze_toward(local, eyes, GAZE_REACH * self.layout.scale)
         } else {
             Vector::ZERO
@@ -443,7 +475,7 @@ impl Desktop {
         }
         self.size = size;
         self.rows = rows;
-        self.layout = layout(size, self.rig.ground(), rows);
+        self.layout = layout(size, self.rig.size(), self.rig.anchor(), rows);
         self.place();
     }
 
@@ -489,7 +521,7 @@ impl Desktop {
         }
         let settling = {
             let d = self.target - self.gaze;
-            d.x.hypot(d.y) > 0.01
+            d.x.hypot(d.y) > 0.01 || self.squash > 0.01
         };
         Some(Duration::from_millis(if self.press.is_some() {
             16
@@ -630,6 +662,13 @@ impl canvas::Program<Message> for Stage<'_> {
         let mut frame = Frame::new(renderer, bounds.size());
         frame.translate(Vector::new(0.0, l.character.y + m.bounce * l.scale));
         frame.scale(l.scale);
+        if d.squash > 0.001 {
+            // Wider and shorter, with the feet still on the ground.
+            let feet = d.rig.anchor();
+            frame.translate(Vector::new(feet.x, feet.y));
+            frame.scale_nonuniform(Vector::new(1.0 + 0.06 * d.squash, 1.0 - 0.08 * d.squash));
+            frame.translate(Vector::new(-feet.x, -feet.y));
+        }
         // Counter-rotate the gaze into the head's space so it stays
         // directional while the neck tilts.
         let (s, c) = (-m.head).sin_cos();
@@ -661,14 +700,24 @@ impl canvas::Program<Message> for Stage<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mascot::rig;
 
     const GROUND: f32 = 807.0;
+
+    fn yohta(height: f32) -> Layout {
+        layout(
+            height,
+            Size::new(rig::WIDTH, rig::HEIGHT),
+            Point::new(rig::WIDTH * 0.5, GROUND),
+            5,
+        )
+    }
     const WORK: (i32, i32, i32, i32) = (0, 0, 1920, 1040);
 
     #[test]
     fn layout_fits_character_and_menu_with_feet_on_the_anchor() {
         for height in [96.0, 160.0, 320.0] {
-            let l = layout(height, GROUND, 5);
+            let l = yohta(height);
             assert!((l.character.height - height).abs() < 0.01);
             for side in [Side::Left, Side::Right] {
                 let m = l.menu(side);
@@ -688,7 +737,7 @@ mod tests {
 
     #[test]
     fn clamping_keeps_the_character_on_the_work_area() {
-        let l = layout(160.0, GROUND, 5);
+        let l = yohta(160.0);
         for k in [1.0, 1.5, 2.0] {
             for wanted in [(-5000.0, -5000.0), (99999.0, 99999.0), (960.0, 500.0)] {
                 let (x, y) = l.clamp(wanted, k, WORK);
@@ -704,7 +753,7 @@ mod tests {
 
     #[test]
     fn origin_round_trips_the_anchor() {
-        let l = layout(200.0, GROUND, 5);
+        let l = yohta(200.0);
         let (ox, oy) = l.origin((1000.0, 900.0), 1.25);
         assert!((ox as f32 + l.anchor.x * 1.25 - 1000.0).abs() <= 1.0);
         assert!((oy as f32 + l.anchor.y * 1.25 - 900.0).abs() <= 1.0);
@@ -712,7 +761,7 @@ mod tests {
 
     #[test]
     fn default_spot_is_bottom_right_on_the_taskbar() {
-        let l = layout(160.0, GROUND, 5);
+        let l = yohta(160.0);
         let (x, y) = l.default_anchor(1.0, WORK);
         assert_eq!(y, 1040.0);
         assert!(x > 1700.0 && x < 1920.0);
@@ -720,7 +769,7 @@ mod tests {
 
     #[test]
     fn menu_flips_left_near_the_right_edge() {
-        let l = layout(160.0, GROUND, 5);
+        let l = yohta(160.0);
         assert_eq!(l.menu_side(400.0, 1.0, 1920), Side::Right);
         assert_eq!(l.menu_side(1850.0, 1.0, 1920), Side::Left);
     }
@@ -733,6 +782,15 @@ mod tests {
         assert!((near.x - 0.5).abs() < 1e-4 && near.y.abs() < 1e-4);
         let far = gaze_toward(Point::new(100.0, -900.0), eyes, 50.0);
         assert!((far.y + 1.0).abs() < 1e-4 && far.x.abs() < 1e-4);
+    }
+
+    #[test]
+    fn layout_follows_a_custom_canvas_and_off_centre_feet() {
+        // A wide image whose feet sit left of centre.
+        let l = layout(100.0, Size::new(400.0, 200.0), Point::new(100.0, 190.0), 3);
+        assert!((l.character.width - 200.0).abs() < 0.01);
+        assert!((l.anchor.x - (l.character.x + 50.0)).abs() < 0.01);
+        assert!((l.anchor.y - (l.character.y + 95.0)).abs() < 0.01);
     }
 
     #[test]

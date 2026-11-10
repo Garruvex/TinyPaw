@@ -12,6 +12,7 @@ use iced::{Element, Point, Size, Subscription, Task, Theme, event, theme};
 
 use crate::audio::{self, Audio};
 use crate::features::{mascot as character, point, sound, system, wheel as wheel_feature};
+use crate::mascot::pack::{self as characters, Character};
 use crate::packs::{self, Draft, Pack};
 use crate::platform::{
     self, External,
@@ -44,6 +45,9 @@ pub enum Message {
     ForearmPicked(Option<PathBuf>),
     PressedPicked(Option<PathBuf>),
     PackTapPicked(Option<PathBuf>),
+    CharacterPicked(Option<PathBuf>),
+    CharacterFolderPicked(Option<PathBuf>),
+    CharacterExportPicked(Option<PathBuf>),
     Acquired(Ticket),
     TextChanged(String),
     TextSubmit,
@@ -90,6 +94,12 @@ pub struct App {
     editor_focused: bool,
     packs: Vec<Pack>,
     pointer_draft: Option<Draft>,
+    /// Bundled Yohta first, then installed characters.
+    characters: Vec<Character>,
+    /// "Add character" in progress.
+    character_draft: Option<characters::Draft>,
+    /// A folder import waiting on Keep both or Replace: its source and name.
+    character_conflict: Option<(PathBuf, String)>,
     editing_pack: Option<&'static str>,
     rebinding: Option<&'static str>,
     alt_down: bool,
@@ -210,6 +220,9 @@ impl App {
             overlay_notice: None,
             editor_focused: false,
             packs: Vec::new(),
+            characters: Vec::new(),
+            character_draft: None,
+            character_conflict: None,
             pointer_draft: None,
             editing_pack: None,
             rebinding: None,
@@ -237,6 +250,11 @@ impl App {
             ));
         }
         app.packs = loaded_packs;
+        let (loaded_characters, problems) = characters::load_all();
+        for problem in &problems {
+            eprintln!("tinypaw: character skipped: {problem}");
+        }
+        app.characters = loaded_characters;
         app.sync_tray();
         let task = if loaded.first_run {
             // Saving now means the card shows once.
@@ -419,6 +437,28 @@ impl App {
                     }
                 }
             }
+            Message::CharacterPicked(Some(path)) => match characters::draft_from_png(&path) {
+                Ok(draft) => {
+                    self.character_draft = Some(draft);
+                    self.character_conflict = None;
+                    self.page = Page::Character;
+                    self.notice = None;
+                }
+                Err(e) => self.notice = Some(format!("Could not use that image: {e}")),
+            },
+            Message::CharacterFolderPicked(Some(path)) => {
+                self.import_character(path, characters::OnDuplicate::Ask, &mut out);
+            }
+            Message::CharacterExportPicked(Some(into)) => {
+                let c = self.current_character().clone();
+                self.notice = Some(match characters::export(&c, &into) {
+                    Ok(folder) => format!("Exported {} to {}", c.name, folder.display()),
+                    Err(e) => format!("Could not export {}: {e}", c.name),
+                });
+            }
+            Message::CharacterPicked(None)
+            | Message::CharacterFolderPicked(None)
+            | Message::CharacterExportPicked(None) => {}
             Message::PointerPicked(path) => {
                 if let Some(path) = path {
                     match packs::draft_from_file(&path) {
@@ -790,14 +830,24 @@ impl App {
             let hidden = self.session.overlay_state() == OverlayState::Interactive;
             // The menu is as tall as its visible rows.
             let rows = self.mascot_menu().len();
-            match (&mut self.mascot, want) {
-                (None, true) => {
-                    let anchor = (s.float(character::X), s.float(character::Y));
-                    let (m, open) =
-                        crate::mascot::desktop::Desktop::open(size, anchor, rows, hidden);
-                    self.mascot = Some(m);
-                    return open.map(Message::WindowOpened);
+            let selected = s.choice(character::CHARACTER);
+            let anchor = (s.float(character::X), s.float(character::Y));
+            let stale = self.mascot.as_ref().is_some_and(|m| m.character() != selected);
+            if want && (self.mascot.is_none() || stale) {
+                let rig = self.character_rig(selected);
+                match &mut self.mascot {
+                    Some(m) => m.set_rig(selected, rig),
+                    None => {
+                        let (m, open) = crate::mascot::desktop::Desktop::open(
+                            selected, rig, size, anchor, rows, hidden,
+                        );
+                        self.mascot = Some(m);
+                        return open.map(Message::WindowOpened);
+                    }
                 }
+            }
+            match (&mut self.mascot, want) {
+                (None, true) => {}
                 (Some(_), false) => {
                     let m = self.mascot.take().expect("mascot window");
                     return window::close(m.id);
@@ -810,6 +860,68 @@ impl App {
             }
         }
         Task::none()
+    }
+
+    /// Decodes the selected character's art. A missing or broken pack shows
+    /// Yohta instead and says why, without retrying until the choice changes.
+    #[cfg(windows)]
+    fn character_rig(&mut self, id: &str) -> crate::mascot::rig::Rig {
+        let Some(c) = self.characters.iter().find(|c| c.id == id) else {
+            return crate::mascot::rig::Rig::load();
+        };
+        c.rig().unwrap_or_else(|e| {
+            self.notice = Some(format!("Could not show {}: {e}. Showing Yohta.", c.name));
+            crate::mascot::rig::Rig::load()
+        })
+    }
+
+    /// The selected character, or bundled Yohta if it's gone.
+    fn current_character(&self) -> &Character {
+        let id = self.session.settings().choice(character::CHARACTER);
+        self.characters
+            .iter()
+            .find(|c| c.id == id)
+            .unwrap_or(&self.characters[0])
+    }
+
+    /// Adds or replaces a character in the list, keeping Yohta first and the
+    /// rest by name.
+    fn add_character(&mut self, c: Character) {
+        self.characters.retain(|x| x.id != c.id);
+        self.characters.push(c);
+        self.characters[1..].sort_by_key(|c| c.name.to_lowercase());
+    }
+
+    fn import_character(
+        &mut self,
+        source: PathBuf,
+        choice: characters::OnDuplicate,
+        out: &mut Outcomes,
+    ) {
+        let taken: Vec<&str> = self.characters.iter().map(|c| c.id).collect();
+        match characters::import_folder(&source, &taken, choice) {
+            Ok(characters::Imported::Installed(c)) => {
+                let id = c.id;
+                self.add_character(c);
+                self.character_conflict = None;
+                self.notice = None;
+                self.page = Page::Character;
+                // A replaced character that is showing reloads its art.
+                #[cfg(windows)]
+                if self.mascot.as_ref().is_some_and(|m| m.character() == id) {
+                    let rig = self.character_rig(id);
+                    if let Some(m) = &mut self.mascot {
+                        m.set_rig(id, rig);
+                    }
+                }
+                out.sets.push((character::CHARACTER, Value::Choice(id)));
+            }
+            Ok(characters::Imported::Duplicate { name }) => {
+                self.character_conflict = Some((source, name));
+                self.page = Page::Character;
+            }
+            Err(e) => self.notice = Some(format!("Could not import that character: {e}")),
+        }
     }
 
     /// The character's menu: annotation, its own settings and Hide. Commands
@@ -912,6 +1024,86 @@ impl App {
                 self.ui.ink_menu = !self.ui.ink_menu;
             }
             UiMsg::Nav(page) => self.page = page,
+            UiMsg::PickCharacter(id) => {
+                self.character_draft = None;
+                out.sets.push((character::CHARACTER, Value::Choice(id)));
+            }
+            UiMsg::AddCharacter => {
+                return Task::perform(
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Choose a transparent PNG of your character")
+                        .add_filter("PNG image", &["png"])
+                        .pick_file(),
+                    |file| Message::CharacterPicked(file.map(|f| f.path().to_path_buf())),
+                );
+            }
+            UiMsg::ImportCharacter => {
+                return Task::perform(
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Import a character folder")
+                        .pick_folder(),
+                    |f| Message::CharacterFolderPicked(f.map(|f| f.path().to_path_buf())),
+                );
+            }
+            UiMsg::ExportCharacter => {
+                return Task::perform(
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Choose where to save the character folder")
+                        .pick_folder(),
+                    |f| Message::CharacterExportPicked(f.map(|f| f.path().to_path_buf())),
+                );
+            }
+            UiMsg::RemoveCharacter => {
+                let c = self.current_character().clone();
+                match characters::remove(&c) {
+                    Ok(()) => {
+                        self.characters.retain(|x| x.id != c.id);
+                        out.sets
+                            .push((character::CHARACTER, Value::Choice(characters::BUILTIN)));
+                        self.notice = None;
+                    }
+                    Err(e) => self.notice = Some(e),
+                }
+            }
+            UiMsg::CharacterName(name) => {
+                if let Some(d) = &mut self.character_draft {
+                    d.name = name.chars().take(60).collect();
+                }
+            }
+            UiMsg::CharacterGround(x, y) => {
+                if let Some(d) = &mut self.character_draft {
+                    d.ground = (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
+                }
+            }
+            UiMsg::CancelCharacter => self.character_draft = None,
+            UiMsg::SaveCharacter => {
+                if let Some(draft) = &self.character_draft {
+                    let taken: Vec<&str> = self.characters.iter().map(|c| c.id).collect();
+                    match characters::install(draft, &taken) {
+                        Ok(c) => {
+                            let id = c.id;
+                            self.add_character(c);
+                            self.character_draft = None;
+                            self.notice = None;
+                            // "Use character": select it and put it on the desktop.
+                            out.sets.push((character::CHARACTER, Value::Choice(id)));
+                            out.sets.push((character::ENABLED, Value::Bool(true)));
+                        }
+                        Err(e) => self.notice = Some(format!("Could not add the character: {e}")),
+                    }
+                }
+            }
+            UiMsg::ResolveCharacter(keep_both) => {
+                if let Some((path, _)) = self.character_conflict.take() {
+                    let choice = if keep_both {
+                        characters::OnDuplicate::KeepBoth
+                    } else {
+                        characters::OnDuplicate::Replace
+                    };
+                    self.import_character(path, choice, out);
+                }
+            }
+            UiMsg::CancelCharacterImport => self.character_conflict = None,
             UiMsg::ResetMascotPosition => {
                 #[cfg(windows)]
                 if let Some(m) = &mut self.mascot {
@@ -1575,6 +1767,10 @@ impl App {
                 editing: self.editing_pack.is_some(),
                 notice: self.notice.as_deref(),
                 frame: self.settings_frame(),
+                characters: &self.characters,
+                character: self.current_character().id,
+                character_draft: self.character_draft.as_ref(),
+                character_conflict: self.character_conflict.as_ref().map(|(_, n)| n.as_str()),
             });
         }
         #[cfg(windows)]

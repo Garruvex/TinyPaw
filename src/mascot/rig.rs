@@ -1,5 +1,6 @@
-//! Sprite-region renderer for the approved Yohta concept. The source remains
-//! untouched; regions are decoded once, and small masked eye frames are cached.
+//! Character renderer. Bundled Yohta is cut from the approved concept sheet
+//! (the source stays untouched; regions are decoded once and small masked eye
+//! frames are cached). An imported character is one whole image for now.
 use iced::advanced::image::Handle;
 use iced::widget::canvas::{self, Frame};
 use iced::{Point, Rectangle, Size, Vector};
@@ -7,6 +8,7 @@ use image::{Rgba, RgbaImage};
 use std::collections::VecDeque;
 
 const SOURCE: &[u8] = include_bytes!("../../assets/mascot/yohta/source/approved.png");
+/// Yohta's rig canvas.
 pub const WIDTH: f32 = 620.0;
 pub const HEIGHT: f32 = 860.0;
 const STEPS: i32 = 3;
@@ -20,11 +22,23 @@ const BODY_AT: (Point, Size) = (Point::new(91.0, 457.0), Size::new(410.0, 350.0)
 const HEAD_AT: (Point, Size) = (Point::new(0.0, 0.0), Size::new(544.0, 520.0));
 
 pub struct Rig {
-    head: Handle,
-    body: Handle,
-    tail: Handle,
-    eyes: Vec<Eye>,
+    kind: Kind,
+    /// Canvas size in rig pixels.
+    size: Size,
+    /// Where the feet meet the ground, in rig pixels.
+    anchor: Point,
     silhouette: Silhouette,
+}
+
+enum Kind {
+    Yohta {
+        head: Handle,
+        body: Handle,
+        tail: Handle,
+        eyes: Vec<Eye>,
+    },
+    /// One whole image: it moves as one piece.
+    Sprite(Handle),
 }
 
 /// Which rig cells hold visible artwork, for alpha-aware hit testing.
@@ -37,9 +51,9 @@ struct Silhouette {
 }
 
 impl Silhouette {
-    fn new() -> Self {
-        let columns = (WIDTH / CELL).ceil() as usize;
-        let rows = (HEIGHT / CELL).ceil() as usize;
+    fn new(size: Size) -> Self {
+        let columns = (size.width / CELL).ceil() as usize;
+        let rows = (size.height / CELL).ceil() as usize;
         Self {
             columns,
             rows,
@@ -103,17 +117,52 @@ impl Rig {
         ];
         let body = crop(720, 638, 410, 350);
         let tail = crop(1138, 600, 385, 390);
-        let mut silhouette = Silhouette::new();
+        let size = Size::new(WIDTH, HEIGHT);
+        let mut silhouette = Silhouette::new(size);
         silhouette.stamp(&tail, TAIL_AT);
         silhouette.stamp(&body, BODY_AT);
         silhouette.stamp(&head, HEAD_AT);
         Self {
-            head: handle(head),
-            body: handle(body),
-            tail: handle(tail),
-            eyes,
+            anchor: Point::new(WIDTH * 0.5, silhouette.ground),
+            kind: Kind::Yohta {
+                head: handle(head),
+                body: handle(body),
+                tail: handle(tail),
+                eyes,
+            },
+            size,
             silhouette,
         }
+    }
+
+    /// A character drawn from one image, standing at `ground` (fractions of
+    /// the image from its top-left).
+    pub fn sprite(pixels: RgbaImage, ground: (f32, f32)) -> Self {
+        let size = Size::new(pixels.width() as f32, pixels.height() as f32);
+        let mut silhouette = Silhouette::new(size);
+        silhouette.stamp(&pixels, (Point::ORIGIN, size));
+        Self {
+            anchor: Point::new(ground.0 * size.width, ground.1 * size.height),
+            kind: Kind::Sprite(handle(pixels)),
+            size,
+            silhouette,
+        }
+    }
+
+    /// Yohta's head, small, for character lists.
+    pub fn yohta_thumbnail(side: u32) -> RgbaImage {
+        let sheet = image::load_from_memory(SOURCE)
+            .expect("embedded Yohta PNG")
+            .to_rgba8();
+        let mut head = image::imageops::crop_imm(&sheet, 688, 60, 544, 520).to_image();
+        isolate(&mut head, (250, 200));
+        let scale = side as f32 / head.width().max(head.height()) as f32;
+        image::imageops::resize(
+            &head,
+            ((head.width() as f32 * scale).round() as u32).max(1),
+            ((head.height() as f32 * scale).round() as u32).max(1),
+            image::imageops::FilterType::Triangle,
+        )
     }
 
     /// Whether a rig-space point lies on visible artwork.
@@ -121,9 +170,19 @@ impl Rig {
         self.silhouette.contains(p)
     }
 
-    /// The rig row the character stands on.
-    pub fn ground(&self) -> f32 {
-        self.silhouette.ground
+    /// Canvas size in rig pixels.
+    pub fn size(&self) -> Size {
+        self.size
+    }
+
+    /// Where the feet meet the ground, in rig pixels.
+    pub fn anchor(&self) -> Point {
+        self.anchor
+    }
+
+    /// Whether the character has eyes that can follow the cursor.
+    pub fn has_eyes(&self) -> bool {
+        matches!(&self.kind, Kind::Yohta { eyes, .. } if !eyes.is_empty())
     }
 
     /// All positions are in rig coordinates. Rotation is around attachment
@@ -136,9 +195,30 @@ impl Rig {
         tail_angle: f32,
         blink: bool,
     ) {
+        let (head, body, tail, eyes) = match &self.kind {
+            Kind::Yohta {
+                head,
+                body,
+                tail,
+                eyes,
+            } => (head, body, tail, eyes),
+            // One piece: a gentle sway around the feet stands in for the
+            // head's idle tilt.
+            Kind::Sprite(image) => {
+                sprite(
+                    frame,
+                    image,
+                    Point::ORIGIN,
+                    self.size,
+                    self.anchor,
+                    head_angle * 0.5,
+                );
+                return;
+            }
+        };
         sprite(
             frame,
-            &self.tail,
+            tail,
             TAIL_AT.0,
             TAIL_AT.1,
             Point::new(345.0, 510.0),
@@ -146,7 +226,7 @@ impl Rig {
         );
         sprite(
             frame,
-            &self.body,
+            body,
             BODY_AT.0,
             BODY_AT.1,
             Point::new(295.0, 820.0),
@@ -159,9 +239,9 @@ impl Rig {
             f.translate(Vector::new(-pivot.x, -pivot.y));
             f.draw_image(
                 Rectangle::new(HEAD_AT.0, HEAD_AT.1),
-                canvas::Image::new(self.head.clone()),
+                canvas::Image::new(head.clone()),
             );
-            for eye in &self.eyes {
+            for eye in eyes {
                 let index = gaze_index(gaze);
                 let image = if blink {
                     &eye.closed
@@ -305,8 +385,28 @@ mod tests {
     #[test]
     fn approved_sheet_has_valid_regions_and_eye_masks() {
         let rig = Rig::load();
-        assert_eq!(rig.eyes.len(), 2);
-        assert!(rig.eyes.iter().all(|eye| eye.frames.len() == 49));
+        let Kind::Yohta { eyes, .. } = &rig.kind else {
+            panic!("Yohta rig");
+        };
+        assert_eq!(eyes.len(), 2);
+        assert!(eyes.iter().all(|eye| eye.frames.len() == 49));
+        assert!(rig.has_eyes());
+    }
+
+    #[test]
+    fn sprite_rig_uses_its_own_canvas_and_ground() {
+        let mut img = RgbaImage::new(40, 80);
+        for y in 10..70 {
+            for x in 10..30 {
+                img.put_pixel(x, y, Rgba([90, 120, 200, 255]));
+            }
+        }
+        let rig = Rig::sprite(img, (0.5, 70.0 / 80.0));
+        assert_eq!(rig.size(), Size::new(40.0, 80.0));
+        assert!((rig.anchor().y - 70.0).abs() < 1e-4);
+        assert!(rig.opaque(Point::new(20.0, 40.0)));
+        assert!(!rig.opaque(Point::new(2.0, 2.0)));
+        assert!(!rig.has_eyes());
     }
     #[test]
     fn silhouette_covers_the_character_and_not_the_corners() {
@@ -317,6 +417,6 @@ mod tests {
         assert!(!rig.opaque(Point::new(2.0, HEIGHT - 2.0)));
         assert!(!rig.opaque(Point::new(WIDTH - 2.0, 2.0)));
         assert!(!rig.opaque(Point::new(-5.0, 300.0)));
-        assert!(rig.ground() > 700.0 && rig.ground() <= HEIGHT);
+        assert!(rig.anchor().y > 700.0 && rig.anchor().y <= HEIGHT);
     }
 }

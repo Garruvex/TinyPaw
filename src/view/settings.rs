@@ -72,6 +72,14 @@ pub struct SettingsView<'a> {
     pub editing: bool,
     /// Set when the Windows merged header replaced the system title bar.
     pub frame: Option<caption::Frame>,
+    /// Bundled Yohta first, then installed characters.
+    pub characters: &'a [crate::mascot::pack::Character],
+    /// The selected character's ID.
+    pub character: &'static str,
+    /// "Add character" in progress.
+    pub character_draft: Option<&'a crate::mascot::pack::Draft>,
+    /// A folder import waiting on Keep both or Replace: the character's name.
+    pub character_conflict: Option<&'a str>,
 }
 
 fn h1<'a>(label: &'a str) -> Element<'a, Message> {
@@ -282,7 +290,7 @@ fn main<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         Page::Controls => (controls(v), None),
         Page::Display => (display_page(v), None),
         Page::Sound => (sound_page(v), None),
-        Page::Character => (character_page(v), None),
+        Page::Character => character_page(v),
     };
     content.push(body);
     let pad = |left: f32, right: f32| iced::Padding {
@@ -1272,22 +1280,133 @@ fn check<'a>(label: &'a str, on: bool, id: &'static str) -> Element<'a, Message>
         .into()
 }
 
-fn character_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
+/// The characters, the selected one's desktop options, and the Add
+/// character draft beside them while one is in progress.
+fn character_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Element<'a, Message>>) {
     let s = v.session.settings();
     let size = s.float(mascot::SIZE);
-    column![
+    let selected = v
+        .characters
+        .iter()
+        .find(|c| c.id == v.character)
+        .or(v.characters.first());
+    let name = selected.map_or("the character", |c| c.name.as_str());
+
+    let card = |art: Element<'a, Message>, label: String, on: bool, msg: Message| {
+        button(
+            column![
+                container(art)
+                    .height(52)
+                    .align_x(Alignment::Center)
+                    .align_y(Alignment::Center),
+                text(label).font(theme::MEDIUM).size(12),
+            ]
+            .spacing(6)
+            .width(Length::Fill)
+            .align_x(Alignment::Center),
+        )
+        .width(92)
+        .height(96)
+        .padding([10, 6])
+        .style(theme::card(on))
+        .on_press(msg)
+    };
+    let mut cards = row(v.characters.iter().map(|c| {
+        let art: Element<'a, Message> = match c.thumbnail() {
+            Some(thumb) => iced::widget::image(thumb).height(48).into(),
+            None => icon(Glyph::Head, 28.0, theme::MUTED).into(),
+        };
+        card(
+            art,
+            c.name.clone(),
+            c.id == v.character && v.character_draft.is_none(),
+            Message::Ui(UiMsg::PickCharacter(c.id)),
+        )
+        .into()
+    }))
+    .spacing(8);
+    cards = cards.push(card(
+        container(icon(Glyph::Plus, 22.0, theme::MUTED))
+            .width(40)
+            .height(40)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .style(theme::outlined(Color::TRANSPARENT, 20.0, theme::LINE_STRONG))
+            .into(),
+        "Add character".into(),
+        v.character_draft.is_some(),
+        Message::Ui(UiMsg::AddCharacter),
+    ));
+    let custom = selected.filter(|c| !c.is_builtin());
+    let manage = row![
+        button("Import folder")
+            .style(theme::secondary)
+            .on_press(Message::Ui(UiMsg::ImportCharacter)),
+        button("Export…")
+            .style(theme::secondary)
+            .on_press_maybe(custom.map(|_| Message::Ui(UiMsg::ExportCharacter))),
+        button("Remove")
+            .style(theme::secondary)
+            .on_press_maybe(custom.map(|_| Message::Ui(UiMsg::RemoveCharacter))),
+    ]
+    .spacing(8);
+
+    let mut page = column![
         h1("Character"),
         section(vec![
-            check(
-                "Show Yohta on the desktop",
-                s.bool(mascot::ENABLED),
-                mascot::ENABLED
-            ),
-            hint(
-                "Click Yohta for a quick menu and drag him anywhere. He stays while TinyPaw                  is Off and steps aside while you draw. The tray menu can show or hide him."
-            ),
+            h2("Characters"),
+            cards.wrap().vertical_spacing(8).into(),
+            manage.into(),
+            hint("Add character takes one transparent PNG. Import folder takes a character.json folder, like one made with Export."),
         ]),
-        section(vec![
+    ]
+    .spacing(22)
+    .max_width(640);
+
+    if let Some(other) = v.character_conflict {
+        page = page.push(
+            container(
+                column![
+                    text(format!("A character called {other} is already installed."))
+                        .size(13)
+                        .color(theme::AMBER_TEXT),
+                    row![
+                        button("Keep both")
+                            .style(theme::secondary)
+                            .on_press(Message::Ui(UiMsg::ResolveCharacter(true))),
+                        button("Replace")
+                            .style(theme::secondary)
+                            .on_press(Message::Ui(UiMsg::ResolveCharacter(false))),
+                        button("Cancel")
+                            .style(theme::secondary)
+                            .on_press(Message::Ui(UiMsg::CancelCharacterImport)),
+                    ]
+                    .spacing(8),
+                ]
+                .spacing(10),
+            )
+            .padding([10, 12])
+            .style(theme::fill(theme::AMBER_BG, 8.0)),
+        );
+    }
+
+    let eyes: Element<'a, Message> = if selected.is_some_and(|c| c.is_builtin()) {
+        check("Eyes follow the cursor", s.bool(mascot::EYES), mascot::EYES)
+    } else {
+        hint("Eyes follow the cursor when a character has separate eye art.")
+    };
+    page = page
+        .push(section(vec![
+            check(
+                "Show on the desktop",
+                s.bool(mascot::ENABLED),
+                mascot::ENABLED,
+            ),
+            hint(format!(
+                "Click {name} for a quick menu and drag to move. It stays while annotation is off and steps aside while you draw. The tray menu can show or hide it."
+            )),
+        ]))
+        .push(section(vec![
             row![
                 h2("Size"),
                 space().width(Length::Fill),
@@ -1300,36 +1419,177 @@ fn character_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
             .step(4.0)
             .style(theme::range)
             .into(),
-        ]),
-        check(
-            "Eyes follow the cursor",
-            s.bool(mascot::EYES),
-            mascot::EYES
-        ),
-        check(
+        ]))
+        .push(eyes)
+        .push(check(
             "Idle motion and blinking",
             s.bool(mascot::IDLE),
-            mascot::IDLE
-        ),
+            mascot::IDLE,
+        ))
+        .push(
+            row![
+                hint("Reduced motion also stops idle motion and blinking."),
+                button(text("Motion settings").size(12).color(theme::CYAN_TEXT))
+                    .padding([2, 4])
+                    .style(theme::tool_button(theme::Tone::Plain))
+                    .on_press(Message::Ui(UiMsg::Nav(Page::Controls))),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        )
+        .push(
+            button(text("Reset position").size(13))
+                .padding([7, 12])
+                .style(theme::secondary)
+                .on_press_maybe(
+                    s.bool(mascot::ENABLED)
+                        .then_some(Message::Ui(UiMsg::ResetMascotPosition)),
+                ),
+        );
+
+    (page.into(), v.character_draft.map(new_character))
+}
+
+/// "Add character": name it, check it on light and dark, click its feet.
+fn new_character<'a>(draft: &'a crate::mascot::pack::Draft) -> Element<'a, Message> {
+    column![
+        h2("New character"),
+        canvas(GroundPicker { draft })
+            .width(Length::Fill)
+            .height(260),
+        hint("Click where it stands. The marker is suggested from the bottom of the art."),
+        iced::widget::text_input("Name", &draft.name)
+            .on_input(|n| Message::Ui(UiMsg::CharacterName(n)))
+            .size(14)
+            .padding([9, 10])
+            .style(|_, status| iced::widget::text_input::Style {
+                background: theme::CONTROL.into(),
+                border: iced::Border {
+                    radius: 8.0.into(),
+                    width: 1.0,
+                    color: if matches!(status, iced::widget::text_input::Status::Focused { .. }) {
+                        theme::CYAN_RING
+                    } else {
+                        theme::LINE_STRONG
+                    },
+                },
+                icon: theme::MUTED,
+                placeholder: theme::FAINT,
+                value: theme::TEXT,
+                selection: theme::CYAN_BG,
+            }),
+        hint("A single image clicks, drags and sways as one piece. Moving parts come later."),
         row![
-            hint("Reduced motion also stops idle motion and blinking."),
-            button(text("Motion settings").size(12).color(theme::CYAN_TEXT))
-                .padding([2, 4])
-                .style(theme::tool_button(theme::Tone::Plain))
-                .on_press(Message::Ui(UiMsg::Nav(Page::Controls))),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center),
-        button(text("Reset position").size(13))
-            .padding([7, 12])
-            .style(theme::secondary)
+            button(text("Cancel").size(13).width(Length::Fill).center())
+                .width(Length::Fill)
+                .padding([10, 12])
+                .style(theme::secondary)
+                .on_press(Message::Ui(UiMsg::CancelCharacter)),
+            button(
+                text("Use character")
+                    .font(theme::HEADING)
+                    .size(13)
+                    .width(Length::Fill)
+                    .center()
+            )
+            .width(Length::Fill)
+            .padding([10, 12])
+            .style(theme::primary)
             .on_press_maybe(
-                s.bool(mascot::ENABLED).then_some(Message::Ui(UiMsg::ResetMascotPosition))
+                (!draft.name.trim().is_empty()).then_some(Message::Ui(UiMsg::SaveCharacter))
             ),
+        ]
+        .spacing(8),
     ]
-    .spacing(22)
-    .max_width(560)
+    .spacing(10)
+    .width(260)
     .into()
+}
+
+/// The draft's art on light and dark halves, with a ground marker that a
+/// click moves.
+struct GroundPicker<'a> {
+    draft: &'a crate::mascot::pack::Draft,
+}
+
+impl GroundPicker<'_> {
+    fn image_rect(&self, bounds: iced::Size) -> iced::Rectangle {
+        let pad = 16.0;
+        let (w, h) = (self.draft.width as f32, self.draft.height as f32);
+        let fit = ((bounds.width - pad * 2.0) / w).min((bounds.height - pad * 2.0) / h);
+        let size = iced::Size::new(w * fit, h * fit);
+        iced::Rectangle::new(
+            iced::Point::new(
+                (bounds.width - size.width) / 2.0,
+                (bounds.height - size.height) / 2.0,
+            ),
+            size,
+        )
+    }
+}
+
+impl canvas::Program<Message> for GroundPicker<'_> {
+    type State = ();
+
+    fn update(
+        &self,
+        _state: &mut (),
+        event: &iced::Event,
+        bounds: iced::Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        if let iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) =
+            event
+            && let Some(p) = cursor.position_in(bounds)
+        {
+            let r = self.image_rect(bounds.size());
+            if r.contains(p) {
+                let message = UiMsg::CharacterGround((p.x - r.x) / r.width, (p.y - r.y) / r.height);
+                return Some(canvas::Action::publish(Message::Ui(message)).and_capture());
+            }
+        }
+        None
+    }
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &iced::Renderer,
+        _theme: &Theme,
+        bounds: iced::Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        use iced::widget::canvas::{Frame, Path, Stroke};
+        let size = bounds.size();
+        let mut frame = Frame::new(renderer, size);
+        frame.fill(
+            &Path::rounded_rectangle(iced::Point::ORIGIN, size, 12.0.into()),
+            Color::from_rgb8(0xF4, 0xF4, 0xF5),
+        );
+        frame.fill_rectangle(
+            iced::Point::new(size.width / 2.0, 0.0),
+            iced::Size::new(size.width / 2.0, size.height),
+            Color::from_rgb8(0x1B, 0x26, 0x21),
+        );
+        let r = self.image_rect(size);
+        frame.draw_image(r, canvas::Image::new(self.draft.image.clone()));
+        let (gx, gy) = self.draft.ground;
+        let at = iced::Point::new(r.x + gx * r.width, r.y + gy * r.height);
+        // The ground line, then the feet marker.
+        let line = Stroke::default()
+            .with_color(Color::from_rgba8(0xF5, 0x9E, 0x0B, 0.7))
+            .with_width(1.0);
+        frame.stroke(
+            &Path::line(iced::Point::new(r.x, at.y), iced::Point::new(r.x + r.width, at.y)),
+            line,
+        );
+        frame.fill(&Path::circle(at, 6.0), Color::from_rgb8(0xF5, 0x9E, 0x0B));
+        frame.stroke(
+            &Path::circle(at, 6.0),
+            Stroke::default().with_color(Color::WHITE).with_width(1.5),
+        );
+        vec![frame.into_geometry()]
+    }
 }
 
 fn display_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {

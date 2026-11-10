@@ -19,8 +19,10 @@ Agreed direction:
 - Large head, small body, anime-influenced styling, thick outlines and subtle
   pixel/graffiti accents for the bundled Yohta artwork.
 - Eyes look toward the cursor. Head and tail can move independently.
-- A click opens the menu; dragging moves the character.
+- A left click reacts (and can speak); a right click opens the menu; dragging
+  moves the character.
 - Optional music response.
+- Optional speech lines in a bubble, set per character.
 - Custom character import is part of the feature.
 
 The numerical defaults and format below are proposed implementation decisions.
@@ -31,20 +33,24 @@ Custom art may use any style; the importer does not enforce Yohta's proportions.
 | Action | Behaviour |
 | --- | --- |
 | Enable | Show the selected character in a small transparent desktop window. Default disabled until the user chooses it. |
-| Click | Open a compact menu beside the character. A second click, Escape or an outside click dismisses it. Closing the menu does not disable the character. |
+| Click | A left click plays the character's click reaction and may show a speech line. Until click reactions exist (character creation step 2), left click opens the menu. |
+| Right click | Open a compact menu beside the character. Another right click, Escape or an outside click dismisses it. Closing the menu does not disable the character. |
 | Drag | Move after approximately 5 logical pixels of movement. A drag never also opens the menu. Keep the character reachable on a connected display. |
 | Menu | Offer the existing annotation On/Off, Settings and Mute controls, plus character/pose selection and Hide character. Dispatch app actions through the existing registry and respect their availability. |
 | Look | Move pupils within their eye masks toward the cursor, with small limits and smooth settling. The head need not follow the cursor. |
 | Idle | Occasional blinking, a gentle head tilt and tail sway. Avoid constant large bounces. |
 | Music | Optionally bob the head and subtly compress/bounce the body in response to local playback. Stop and settle when playback is silent. |
+| Lines | Optionally show a short speech line in a bubble on click, drag, drop, idle, music start or annotation end, with an optional sound. Idle lines can be muted. |
 | Pose | Choose Sitting or Standing if supplied by the pack. Changing pose preserves desktop position and display size without sliding the feet. |
 | Hide | Remove the character window; retain its settings and installed artwork. The tray and keyboard shortcuts remain available. |
 | Restart | Restore character, pose, size, position and motion choices. Recover to a visible display if the saved monitor is missing. |
 
 Proposed defaults: sitting, about 160 logical pixels tall, eye tracking and subtle
 idle motion enabled, music response disabled. Size range: 96–320 logical pixels.
-Do not add automatic walking, pose switching, dialogue, reminders or pet-care
-systems to the initial feature.
+Do not add automatic walking, pose switching, reminders, alarms or pet-care
+systems. Speech lines are in scope as planned in the
+[character creation plan](character-creation-plan.md); conversations and
+scripted dialogue are not.
 
 ### Relationship to annotation
 
@@ -92,7 +98,7 @@ the visible part. A pose ground anchor keeps sitting/standing changes stable.
 
 ### Quick import: one PNG
 
-1. Choose **Add character** in Appearance.
+1. Choose **Add character** in Settings → Character.
 2. Select a transparent PNG and give the character a display name.
 3. Preview it at desktop size on light and dark backgrounds.
 4. Set the ground anchor, with a bottom-centre suggestion.
@@ -291,6 +297,36 @@ Character use must remain functional without any audio backend.
   underneath. The vertical clamp keeps room for the menu above the feet, so
   Yohta cannot sit flush with the top edge. Non-Windows builds keep the settings
   but report that the character is unavailable.
+
+### Stage 2 progress: character packs and one-PNG import
+
+Implemented on Windows, 11 November 2026 (step 1 of the
+[character creation plan](character-creation-plan.md)):
+
+- **Packs.** `src/mascot/pack.rs` loads `character.json` folders from
+  `%APPDATA%\TinyPaw\characters\<id>` using the version 1 manifest above.
+  Each pose currently renders its `body` image only; a manifest declaring
+  `head`, `tail`, `eyes` or `parts` is rejected with a message that moving
+  parts arrive later. Every install is written to a hidden staging folder,
+  validated there (canvas size, alpha, paths inside the folder, 64 MiB per
+  file) and only then moved into place.
+- **Selection.** `mascot.character` (default `yohta`) chooses the character;
+  bundled Yohta is the first entry in the same list. A missing or broken
+  pack shows Yohta and says why.
+- **Add character.** One transparent PNG: empty margins are trimmed, art taller
+  than 1024 px is scaled down, and the ground point is suggested from the
+  bottom of the art. The draft previews on light and dark; clicking moves the
+  ground point. **Use character** installs it, selects it and shows it.
+- **Import folder / Export / Remove.** Import copies only the files the
+  manifest names; a taken ID asks **Keep both** or **Replace** (Yohta is never
+  replaced). Export writes a re-importable folder; Remove deletes TinyPaw's
+  copy and falls back to Yohta.
+- **Desktop.** The window layout, hit test and placement use each character's
+  own canvas and ground point. A single image sways gently and squashes on
+  press; reduced motion turns both off.
+- **Not yet.** Yohta's own art still comes from the concept sheet rather than
+  a pack folder, so he can't be exported; that moves with layered parts in
+  step 2.
 
 Completion checks:
 

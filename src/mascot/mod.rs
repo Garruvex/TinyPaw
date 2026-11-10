@@ -3,7 +3,8 @@
 //! starts no hooks, capture, tray or audio device. Both share the rig.
 #[cfg(windows)]
 pub mod desktop;
-mod rig;
+pub mod pack;
+pub mod rig;
 
 /// Messages from the desktop character window.
 #[derive(Debug, Clone)]
