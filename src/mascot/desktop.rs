@@ -19,7 +19,7 @@ use iced::{
 
 use super::Msg;
 use super::lines::{Lines, Picker, SoundRef, Speech, Trigger};
-use super::motion::{Animator, Inputs, PartMotion, Pose};
+use super::motion::{Animator, Expression, Inputs, PartMotion, Pose};
 use super::rig::Rig;
 use crate::app::Message;
 use crate::features::mascot as feature;
@@ -32,6 +32,8 @@ const MENU_PAD: f32 = 6.0;
 const GAP: f32 = 8.0;
 /// Logical pixels the cursor must travel before a press becomes a drag.
 const DRAG_START: f32 = 5.0;
+/// Seconds to ease from the pose held during a press back to live motion.
+const SETTLE: f32 = 0.25;
 /// Gaze reaches its limit this far from the eyes, as a share of the
 /// character's height (Yohta: about 420 rig pixels).
 const GAZE_REACH: f32 = 0.49;
@@ -103,6 +105,24 @@ impl Layout {
             (anchor.0 - self.anchor.x * k).round() as i32,
             (anchor.1 - self.anchor.y * k).round() as i32,
         )
+    }
+
+    /// Recovers a released or restored character just enough to leave it
+    /// reachable on a work area: at least half its width inside the sides,
+    /// with the same top and bottom limits as `clamp`. A character partly
+    /// past a side edge stays where it was put.
+    pub fn recover(&self, anchor: (f32, f32), k: f32, work: (i32, i32, i32, i32)) -> (f32, f32) {
+        let (left, right) = (work.0 as f32, work.2 as f32);
+        let before = (self.anchor.x - self.character.x) * k;
+        let after = (self.character.x + self.character.width - self.anchor.x) * k;
+        let half = (before + after) * 0.5;
+        let (min_x, max_x) = (left - half + before, right + half - after);
+        let x = if min_x <= max_x {
+            anchor.0.clamp(min_x, max_x)
+        } else {
+            (left + right) * 0.5
+        };
+        (x, self.clamp(anchor, k, work).1)
     }
 
     /// Keeps the character on a work area (`left, top, right, bottom`): feet
@@ -187,10 +207,26 @@ pub struct Item {
     pub on_press: Option<Msg>,
 }
 
+/// A left press on the character, held until release.
 struct Press {
     cursor: (i32, i32),
-    origin: (i32, i32),
+    /// The grabbed point, in window logical pixels. While dragging, the
+    /// window goes wherever keeps this point under the cursor.
+    grab: Point,
+    /// The pose when pressed. Its geometry holds until release, so nothing
+    /// pulls the grabbed point away from the cursor; faces and gaze still
+    /// change.
+    pose: Pose,
     dragging: bool,
+}
+
+/// Where the window goes so window point `grab` sits under `cursor`, both
+/// physical, at `k` physical pixels per logical pixel.
+pub fn carried_origin(cursor: (i32, i32), grab: Point, k: f32) -> (i32, i32) {
+    (
+        (cursor.0 as f32 - grab.x * k).round() as i32,
+        (cursor.1 as f32 - grab.y * k).round() as i32,
+    )
 }
 
 pub struct Desktop {
@@ -226,6 +262,8 @@ pub struct Desktop {
     target: Vector,
     menu: Option<Side>,
     press: Option<Press>,
+    /// When the last press ended and the pose it held, to ease out of.
+    released: Option<(f32, Pose)>,
     /// Mouse passthrough last applied to the window, once known.
     passthrough: Option<bool>,
     /// Annotation owns input, so the character steps aside.
@@ -294,6 +332,7 @@ impl Desktop {
             target: Vector::ZERO,
             menu: None,
             press: None,
+            released: None,
             passthrough: None,
             hidden,
             shown: false,
@@ -410,9 +449,14 @@ impl Desktop {
                 if let (Some(cursor), Some(rect)) =
                     (native::cursor_pos(), native::window_rect(self.hwnd))
                 {
+                    let k = self.k(rect);
                     self.press = Some(Press {
                         cursor,
-                        origin: (rect.0, rect.1),
+                        grab: Point::new(
+                            (cursor.0 - rect.0) as f32 / k,
+                            (cursor.1 - rect.1) as f32 / k,
+                        ),
+                        pose: self.pose.clone(),
                         dragging: false,
                     });
                 }
@@ -465,8 +509,8 @@ impl Desktop {
                     picked_up = true;
                 }
                 if press.dragging {
-                    let origin = (press.origin.0 + delta.0, press.origin.1 + delta.1);
-                    self.drag_to(origin, k);
+                    let origin = carried_origin(cursor, press.grab, k);
+                    self.carry_to(origin, k);
                 }
             }
         }
@@ -538,7 +582,6 @@ impl Desktop {
     fn step_motion(&mut self, o: &Options, k: f32) {
         let dt = (self.now - self.stepped).max(0.0);
         self.stepped = self.now;
-        let dragging = self.press.as_ref().is_some_and(|p| p.dragging);
         let moved = (self.anchor.0 - self.last_anchor.0, self.anchor.1 - self.last_anchor.1);
         self.last_anchor = self.anchor;
         let velocity = if dt > 0.0 {
@@ -546,6 +589,18 @@ impl Desktop {
         } else {
             Vector::ZERO
         };
+        // Held: keep the pressed pose's geometry; only the face changes.
+        if let Some(press) = &self.press {
+            let mut pose = press.pose.clone();
+            pose.expression = if press.dragging {
+                Expression::Dragging
+            } else {
+                Expression::Pressed
+            };
+            pose.gaze = self.head_gaze(&pose);
+            self.pose = pose;
+            return;
+        }
         let mut pose = self.animator.step(
             &self.parts,
             &Inputs {
@@ -553,27 +608,42 @@ impl Desktop {
                 dt,
                 idle: o.idle && !o.reduced,
                 reduced: o.reduced,
-                pressed: self.press.as_ref().is_some_and(|p| !p.dragging),
-                dragging,
+                pressed: false,
+                dragging: false,
                 velocity,
                 music: o.music,
                 beat: o.beat,
                 bop: self.rig.bop(),
             },
         );
-        // Counter-rotate the gaze into the head's space so it stays
-        // directional while the head tilts.
-        let (s, c) = (-self.rig.head_angle(&pose)).sin_cos();
-        let g = self.gaze;
-        pose.gaze = Vector::new(g.x * c - g.y * s, g.x * s + g.y * c);
+        if let Some((at, held)) = &self.released {
+            let t = (self.now - at) / SETTLE;
+            if t >= 1.0 {
+                self.released = None;
+            } else {
+                pose = super::motion::blend(held, pose, t);
+            }
+        }
+        pose.gaze = self.head_gaze(&pose);
         self.pose = pose;
+    }
+
+    /// The gaze counter-rotated into the head's space, so it stays
+    /// directional while the head tilts.
+    fn head_gaze(&self, pose: &Pose) -> Vector {
+        let (s, c) = (-self.rig.head_angle(pose)).sin_cos();
+        let g = self.gaze;
+        Vector::new(g.x * c - g.y * s, g.x * s + g.y * c)
     }
 
     /// Ends a press: a short one is a click the character reacts to, a drag
     /// saves the spot. The menu is on the right button.
     fn release(&mut self, o: &Options) -> Option<(f64, f64)> {
         let press = self.press.take()?;
+        self.released = Some((self.now, self.pose.clone()));
         if press.dragging {
+            // Left where it was put, unless that leaves it out of reach.
+            self.place();
             self.say(Trigger::Drop, o);
             return Some((self.anchor.0 as f64, self.anchor.1 as f64));
         }
@@ -597,15 +667,15 @@ impl Desktop {
         ((rect.2 - rect.0) as f32 / self.layout.window.width).max(0.25)
     }
 
-    fn drag_to(&mut self, origin: (i32, i32), k: f32) {
-        let anchor = (
+    /// Moves the window to `origin` while carried. No clamping: the
+    /// character follows the cursor past screen edges and is recovered on
+    /// release.
+    fn carry_to(&mut self, origin: (i32, i32), k: f32) {
+        self.anchor = (
             origin.0 as f32 + self.layout.anchor.x * k,
             origin.1 as f32 + self.layout.anchor.y * k,
         );
-        let (work, _) = native::monitor_at(anchor.0 as i32, anchor.1 as i32 - 1, false);
-        self.anchor = self.layout.clamp(anchor, k, work);
-        let (x, y) = self.layout.origin(self.anchor, k);
-        native::move_window(self.hwnd, x, y, None);
+        native::move_window(self.hwnd, origin.0, origin.1, None);
     }
 
     /// Puts the window at the saved anchor, recovering to the nearest display
@@ -621,7 +691,7 @@ impl Desktop {
         self.anchor = if unplaced {
             self.layout.default_anchor(k, work)
         } else {
-            self.layout.clamp(self.anchor, k, work)
+            self.layout.recover(self.anchor, k, work)
         };
         let (x, y) = self.layout.origin(self.anchor, k);
         let size = (
@@ -649,7 +719,12 @@ impl Desktop {
     }
 
     /// A display was added, removed or rescaled.
+    /// While carried, the next poll repositions from the window's own new
+    /// size instead, and release recovers.
     pub fn displays_changed(&mut self) {
+        if self.press.as_ref().is_some_and(|p| p.dragging) {
+            return;
+        }
         self.place();
     }
 
@@ -685,7 +760,7 @@ impl Desktop {
         }
         let settling = {
             let d = self.target - self.gaze;
-            d.x.hypot(d.y) > 0.01 || self.animator.settling()
+            d.x.hypot(d.y) > 0.01 || self.animator.settling() || self.released.is_some()
         };
         Some(Duration::from_millis(if self.press.is_some() {
             16
@@ -697,14 +772,9 @@ impl Desktop {
         }))
     }
 
-    /// Whether a window-space point lies on visible artwork.
+    /// Whether a window-space point lies on visible artwork as drawn now.
     fn over_character(&self, p: Point) -> bool {
-        let c = self.layout.character;
-        let local = Point::new(
-            (p.x - c.x) / self.layout.scale,
-            (p.y - c.y) / self.layout.scale,
-        );
-        self.rig.opaque(local)
+        over(&self.layout, &self.rig, &self.pose, p)
     }
 
     pub fn view<'a>(&'a self, items: Vec<Item>, o: &Options) -> Element<'a, Message> {
@@ -781,6 +851,15 @@ impl Desktop {
             .align_y(Alignment::End);
         iced::widget::stack![body, band].into()
     }
+}
+
+/// Whether window point `p` lies on the artwork `Stage::draw` draws for
+/// `pose`: the inverse of its transforms, from the window to each layer.
+fn over(l: &Layout, rig: &Rig, pose: &Pose, p: Point) -> bool {
+    let c = l.character;
+    let drawn = Point::new((p.x - c.x) / l.scale, (p.y - c.y) / l.scale);
+    let local = super::motion::unplaced(pose, rig.anchor(), rig.size().height, drawn);
+    rig.hit(local, pose).is_some()
 }
 
 fn menu_row(item: Item) -> Element<'static, Message> {
@@ -994,5 +1073,118 @@ mod tests {
         // Five logical pixels are ten physical ones at 200 %.
         assert!(!is_drag((8, 0), 2.0));
         assert!(is_drag((11, 0), 2.0));
+    }
+
+    /// Contact error: physical distance between the cursor and where the
+    /// grabbed window point ends up after a carry step.
+    fn contact_error(cursor: (i32, i32), grab: Point, k: f32) -> f32 {
+        let o = carried_origin(cursor, grab, k);
+        let held = (o.0 as f32 + grab.x * k, o.1 as f32 + grab.y * k);
+        (held.0 - cursor.0 as f32).hypot(held.1 - cursor.1 as f32)
+    }
+
+    #[test]
+    fn the_grabbed_point_stays_under_the_cursor() {
+        // Centre, head, tail and edge grabs, in window logical pixels.
+        let grabs = [(310.0, 450.0), (250.0, 200.0), (420.0, 700.0), (213.7, 801.3)];
+        // A path across a negative-origin monitor and off the right edge.
+        let path = [(-1500, 300), (-3, -40), (0, 0), (960, 540), (1919, 1079), (2600, 1500)];
+        for k in [1.0, 1.25, 1.5, 2.0] {
+            for g in grabs {
+                for c in path {
+                    let e = contact_error(c, Point::new(g.0, g.1), k);
+                    assert!(e <= 1.0, "{k} {g:?} {c:?}: {e}");
+                }
+            }
+        }
+        // Crossing from 100 % to 200 % mid-drag: the window's own size
+        // gives the new scale, and the same logical grab point holds.
+        let g = Point::new(250.0, 200.0);
+        for k in [1.0, 2.0, 1.5] {
+            assert!(contact_error((1900, 500), g, k) <= 1.0);
+        }
+    }
+
+    #[test]
+    fn carrying_is_not_clamped_but_release_recovers() {
+        let l = yohta(160.0);
+        let k = 1.0;
+        let width = l.character.width * k;
+        let before = (l.anchor.x - l.character.x) * k;
+        // A third past the left edge, so most of it shows: kept.
+        let partly = (before - width * 0.3, 600.0);
+        assert_eq!(l.recover(partly, k, WORK), partly);
+        // Far off the right: brought back until half its width shows.
+        let (x, _) = l.recover((99999.0, 600.0), k, WORK);
+        let right = x + (l.character.x + l.character.width - l.anchor.x) * k;
+        assert!((right - (1920.0 + width * 0.5)).abs() < 0.01, "{right}");
+        // Above the top or below the taskbar: the same limits as clamp.
+        for wanted in [(960.0, -5000.0), (960.0, 99999.0)] {
+            assert_eq!(l.recover(wanted, k, WORK).1, l.clamp(wanted, k, WORK).1);
+        }
+        // A spot on screen is left alone.
+        assert_eq!(l.recover((960.0, 500.0), k, WORK), (960.0, 500.0));
+    }
+
+    #[test]
+    fn hit_testing_follows_the_drawn_lean() {
+        let rig = Rig::load();
+        let l = yohta(320.0);
+        let rest = Pose::default();
+        let leaning = Pose { lean: 0.15, squash: 1.0, ..Pose::default() };
+        // A face point, drawn where the lean puts it.
+        let face = Point::new(232.0, 360.0);
+        let to_window = |pose: &Pose| {
+            let d = super::super::motion::placed(pose, rig.anchor(), rig.size().height, face);
+            Point::new(l.character.x + d.x * l.scale, l.character.y + d.y * l.scale)
+        };
+        assert!(over(&l, &rig, &rest, to_window(&rest)));
+        assert!(over(&l, &rig, &leaning, to_window(&leaning)));
+        // A corner of the window is never the character.
+        assert!(!over(&l, &rig, &leaning, Point::new(1.0, 1.0)));
+    }
+
+    #[test]
+    fn a_held_press_keeps_its_pose_and_eases_out_on_release() {
+        let (mut d, _) = Desktop::open("yohta", Rig::load(), 160.0, (500.0, 500.0), 5, false);
+        let o = Options {
+            eyes: false,
+            idle: true,
+            reduced: false,
+            lines: false,
+            quiet: true,
+            idle_every: (60.0, 300.0),
+            music: 1.0,
+            beat: None,
+        };
+        for i in 1..=10 {
+            d.now = i as f32 * 0.033;
+            d.step_motion(&o, 1.0);
+        }
+        let held = d.pose.clone();
+        d.press = Some(Press { cursor: (0, 0), grab: Point::ORIGIN, pose: held.clone(), dragging: false });
+        for dragging in [false, true] {
+            d.press.as_mut().unwrap().dragging = dragging;
+            for i in 0..30 {
+                d.now += 0.033;
+                d.last_anchor.0 -= 40.0 * i as f32;
+                d.step_motion(&o, 1.0);
+                // No squash, lean, bounce or part motion while held.
+                assert_eq!((d.pose.angles.clone(), d.pose.lean, d.pose.squash, d.pose.bounce),
+                    (held.angles.clone(), held.lean, held.squash, held.bounce));
+            }
+            let face = if dragging { Expression::Dragging } else { Expression::Pressed };
+            assert_eq!(d.pose.expression, face);
+        }
+        // Release: the first frame starts from the held geometry.
+        d.release(&o);
+        d.now += 0.001;
+        d.step_motion(&o, 1.0);
+        assert!((d.pose.lean - held.lean).abs() < 0.01 && (d.pose.bounce - held.bounce).abs() < 0.01);
+        for _ in 0..20 {
+            d.now += 0.033;
+            d.step_motion(&o, 1.0);
+        }
+        assert!(d.released.is_none(), "back on live motion");
     }
 }

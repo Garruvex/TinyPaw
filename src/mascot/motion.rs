@@ -576,11 +576,67 @@ fn bop_body(bop: Bop, b: Beat) -> Body {
 /// Shared by the desktop and the Settings preview.
 pub fn place(frame: &mut iced::widget::canvas::Frame, pose: &Pose, feet: iced::Point, height: f32) {
     frame.translate(Vector::new(0.0, -pose.bounce * height));
-    if pose.squash.abs() > 0.001 || pose.lean.abs() > 0.0005 {
+    if deforms(pose) {
+        let (sx, sy) = squash_scale(pose);
         frame.translate(Vector::new(feet.x, feet.y));
         frame.rotate(pose.lean);
-        frame.scale_nonuniform(Vector::new(1.0 + 0.06 * pose.squash, 1.0 - 0.08 * pose.squash));
+        frame.scale_nonuniform(Vector::new(sx, sy));
         frame.translate(Vector::new(-feet.x, -feet.y));
+    }
+}
+
+/// Whether `place` turns and scales for this pose, beyond the bounce.
+fn deforms(pose: &Pose) -> bool {
+    pose.squash.abs() > 0.001 || pose.lean.abs() > 0.0005
+}
+
+fn squash_scale(pose: &Pose) -> (f32, f32) {
+    (1.0 + 0.06 * pose.squash, 1.0 - 0.08 * pose.squash)
+}
+
+/// Where `place` draws a rig point: the forward whole-character transform.
+#[cfg(test)]
+pub fn placed(pose: &Pose, feet: iced::Point, height: f32, p: iced::Point) -> iced::Point {
+    let lift = Vector::new(0.0, -pose.bounce * height);
+    if !deforms(pose) {
+        return p + lift;
+    }
+    let (sx, sy) = squash_scale(pose);
+    let (x, y) = ((p.x - feet.x) * sx, (p.y - feet.y) * sy);
+    let (s, c) = pose.lean.sin_cos();
+    iced::Point::new(feet.x + x * c - y * s, feet.y + x * s + y * c) + lift
+}
+
+/// The rig point `place` draws at `q`: the inverse of `placed`.
+pub fn unplaced(pose: &Pose, feet: iced::Point, height: f32, q: iced::Point) -> iced::Point {
+    let q = q - Vector::new(0.0, -pose.bounce * height);
+    if !deforms(pose) {
+        return q;
+    }
+    let (sx, sy) = squash_scale(pose);
+    let (x, y) = (q.x - feet.x, q.y - feet.y);
+    let (s, c) = pose.lean.sin_cos();
+    let (x, y) = (x * c + y * s, -x * s + y * c);
+    iced::Point::new(feet.x + x / sx, feet.y + y / sy)
+}
+
+/// Eases geometry from `from` (the pose held during a press) to `to` (live
+/// motion), `t` from 0 to 1. Face and gaze come from `to`.
+pub fn blend(from: &Pose, to: Pose, t: f32) -> Pose {
+    let t = t.clamp(0.0, 1.0);
+    let t = t * t * (3.0 - 2.0 * t);
+    let mix = |a: f32, b: f32| a + (b - a) * t;
+    Pose {
+        angles: to
+            .angles
+            .iter()
+            .enumerate()
+            .map(|(i, b)| mix(from.angles.get(i).copied().unwrap_or(*b), *b))
+            .collect(),
+        lean: mix(from.lean, to.lean),
+        squash: mix(from.squash, to.squash),
+        bounce: mix(from.bounce, to.bounce),
+        ..to
     }
 }
 
@@ -642,6 +698,32 @@ mod tests {
         assert!(pose.angles.iter().all(|a| *a == 0.0));
         assert_eq!((pose.lean, pose.squash), (0.0, 0.0));
         assert_eq!(pose.expression, Expression::Dragging);
+    }
+
+    #[test]
+    fn unplaced_inverts_placed() {
+        let feet = iced::Point::new(310.0, 807.0);
+        for (lean, squash, bounce) in [(0.0, 0.0, 0.0), (0.15, 0.0, 0.0), (-0.12, 1.0, 0.03), (0.06, -0.6, 0.035)] {
+            let pose = Pose { lean, squash, bounce, ..Pose::default() };
+            for p in [(310.0, 807.0), (0.0, 0.0), (620.0, 120.0), (40.0, 860.0)] {
+                let p = iced::Point::new(p.0, p.1);
+                let back = unplaced(&pose, feet, 860.0, placed(&pose, feet, 860.0, p));
+                assert!(p.distance(back) < 1e-3, "{pose:?} {p:?} -> {back:?}");
+            }
+        }
+        // The feet stay put through lean and squash; bounce lifts them.
+        let pose = Pose { lean: 0.15, squash: 1.0, ..Pose::default() };
+        assert!(placed(&pose, feet, 860.0, feet).distance(feet) < 1e-3);
+    }
+
+    #[test]
+    fn blend_eases_geometry_and_takes_the_live_face() {
+        let held = Pose { angles: vec![0.4], lean: 0.1, expression: Expression::Dragging, ..Pose::default() };
+        let live = Pose { angles: vec![0.0], expression: Expression::Idle, ..Pose::default() };
+        let start = blend(&held, live.clone(), 0.0);
+        assert_eq!((start.angles[0], start.lean, start.expression), (0.4, 0.1, Expression::Idle));
+        let end = blend(&held, live, 1.0);
+        assert_eq!((end.angles[0], end.lean), (0.0, 0.0));
     }
 
     #[test]

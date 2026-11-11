@@ -23,7 +23,9 @@ pub struct Rig {
     size: Size,
     /// Where the feet meet the ground, in rig pixels.
     anchor: Point,
-    silhouette: Silhouette,
+    /// Visible cells per layer, unposed: the body (or the whole sprite)
+    /// first, then each part in order.
+    silhouettes: Vec<Silhouette>,
     /// Motion per moving part, in `motion_parts` order.
     motion: Vec<MotionSpec>,
     /// How it bops to music.
@@ -194,6 +196,20 @@ impl LayerEye {
     }
 }
 
+/// A drawn layer: the body (or a one-image sprite), or a moving part.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Layer {
+    Body,
+    Part(usize),
+}
+
+/// `q` turned by `-angle` around `pivot`: undoes a part's rotation.
+fn unrotate(q: Point, pivot: Point, angle: f32) -> Point {
+    let (s, c) = angle.sin_cos();
+    let (x, y) = (q.x - pivot.x, q.y - pivot.y);
+    Point::new(pivot.x + x * c + y * s, pivot.y - x * s + y * c)
+}
+
 /// Which rig cells hold visible artwork, for alpha-aware hit testing.
 #[derive(Debug, Clone)]
 struct Silhouette {
@@ -261,10 +277,10 @@ impl Rig {
         let mut silhouette = Silhouette::new(size);
         silhouette.stamp(&pixels, (Point::ORIGIN, size));
         Self {
+            silhouettes: vec![silhouette],
             anchor: Point::new(ground.0 * size.width, ground.1 * size.height),
             kind: Kind::Sprite(handle(pixels)),
             size,
-            silhouette,
             // The whole image sways a little, like a tilting head.
             motion: vec![MotionSpec::of(Preset::Tilt)],
             bop: Bop::default(),
@@ -274,9 +290,10 @@ impl Rig {
     /// A character built from a body and moving parts on one canvas.
     pub fn layered(art: LayeredArt) -> Self {
         let size = Size::new(art.body.width() as f32, art.body.height() as f32);
-        let mut silhouette = Silhouette::new(size);
-        let stamp = |s: &mut Silhouette, p: &Piece, pixels: &RgbaImage| {
+        let stamped = |p: &Piece, pixels: &RgbaImage| {
+            let mut s = Silhouette::new(size);
             s.stamp(pixels, (p.at, p.size));
+            s
         };
         let (body, body_pixels) = piece(&art.body).unwrap_or_else(|| {
             (
@@ -288,13 +305,13 @@ impl Rig {
                 RgbaImage::new(1, 1),
             )
         });
-        stamp(&mut silhouette, &body, &body_pixels);
+        let mut silhouettes = vec![stamped(&body, &body_pixels)];
         let mut parts = Vec::new();
         for p in &art.parts {
             let Some((main, pixels)) = piece(&p.image) else {
                 continue;
             };
-            stamp(&mut silhouette, &main, &pixels);
+            silhouettes.push(stamped(&main, &pixels));
             parts.push(Part {
                 kind: p.kind,
                 piece: main,
@@ -320,7 +337,7 @@ impl Rig {
             bop: Bop::default(),
             kind: Kind::Layered { body, parts, eyes },
             size,
-            silhouette,
+            silhouettes,
         }
     }
 
@@ -449,9 +466,77 @@ impl Rig {
         }
     }
 
-    /// Whether a rig-space point lies on visible artwork.
+    /// Whether a rig-space point lies on visible artwork, unposed.
+    #[cfg(test)]
     pub fn opaque(&self, p: Point) -> bool {
-        self.silhouette.contains(p)
+        self.silhouettes.iter().any(|s| s.contains(p))
+    }
+
+    /// The front-most layer drawn at rig point `p` in `pose`, undoing each
+    /// part's rotation the way `draw_pose` applies it. The whole-character
+    /// lean, squash and bounce are the host's (see `motion::unplaced`).
+    pub fn hit(&self, p: Point, pose: &Pose) -> Option<Layer> {
+        let angle = |i: usize| pose.angles.get(i).copied().unwrap_or_default();
+        let opaque = |layer: usize, p: Point| self.silhouettes.get(layer).is_some_and(|s| s.contains(p));
+        match &self.kind {
+            Kind::Sprite(_) => opaque(0, unrotate(p, self.anchor, angle(0) * 0.5)).then_some(Layer::Body),
+            Kind::Layered { parts, .. } => {
+                // Reverse draw order: front roots, the body, behind roots.
+                let roots = |behind: bool| {
+                    parts
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .filter(move |(_, c)| c.parent.is_none() && c.behind == behind)
+                };
+                roots(false)
+                    .find_map(|(i, _)| self.hit_part(parts, i, p, &angle))
+                    .or_else(|| opaque(0, p).then_some(Layer::Body))
+                    .or_else(|| roots(true).find_map(|(i, _)| self.hit_part(parts, i, p, &angle)))
+            }
+        }
+    }
+
+    /// Hit test within part `index` and its children, `p` in its parent's space.
+    fn hit_part(&self, parts: &[Part], index: usize, p: Point, angle: &dyn Fn(usize) -> f32) -> Option<Layer> {
+        let part = &parts[index];
+        let local = unrotate(p, part.pivot, angle(index));
+        let children = |behind: bool| {
+            parts
+                .iter()
+                .enumerate()
+                .rev()
+                .filter(move |(_, c)| c.parent == Some(index) && c.behind == behind)
+        };
+        children(false)
+            .find_map(|(i, _)| self.hit_part(parts, i, local, angle))
+            .or_else(|| {
+                self.silhouettes[index + 1]
+                    .contains(local)
+                    .then_some(Layer::Part(index))
+            })
+            .or_else(|| children(true).find_map(|(i, _)| self.hit_part(parts, i, local, angle)))
+    }
+
+    /// Where `draw_pose` draws a point of `layer`'s unposed artwork.
+    #[cfg(test)]
+    pub fn posed(&self, layer: Layer, p: Point, pose: &Pose) -> Point {
+        let angle = |i: usize| pose.angles.get(i).copied().unwrap_or_default();
+        let rotate = |q: Point, pivot: Point, a: f32| unrotate(q, pivot, -a);
+        match (&self.kind, layer) {
+            (Kind::Sprite(_), _) => rotate(p, self.anchor, angle(0) * 0.5),
+            (Kind::Layered { .. }, Layer::Body) => p,
+            (Kind::Layered { parts, .. }, Layer::Part(mut i)) => {
+                let mut q = p;
+                loop {
+                    q = rotate(q, parts[i].pivot, angle(i));
+                    match parts[i].parent {
+                        Some(parent) => i = parent,
+                        None => return q,
+                    }
+                }
+            }
+        }
     }
 
     /// Canvas size in rig pixels.
@@ -617,6 +702,41 @@ mod tests {
         // The head counts for clicks, the empty corners don't.
         assert!(rig.opaque(Point::new(50.0, 20.0)));
         assert!(!rig.opaque(Point::new(3.0, 3.0)));
+    }
+
+    #[test]
+    fn hit_testing_follows_the_posed_head() {
+        let rig = Rig::layered(layered_art());
+        let rest = Pose { angles: vec![0.0], ..Pose::default() };
+        let tilted = Pose { angles: vec![0.6], ..Pose::default() };
+        // The head's top-left corner: on the head at rest, empty once the
+        // head turns away from it.
+        let corner = Point::new(22.0, 12.0);
+        assert_eq!(rig.hit(corner, &rest), Some(Layer::Part(0)));
+        assert_eq!(rig.hit(corner, &tilted), None);
+        // Points of the head art are hit wherever the pose draws them.
+        for p in [(25.0, 15.0), (75.0, 20.0), (50.0, 30.0)] {
+            let drawn = rig.posed(Layer::Part(0), Point::new(p.0, p.1), &tilted);
+            assert_eq!(rig.hit(drawn, &tilted), Some(Layer::Part(0)), "{p:?} at {drawn:?}");
+        }
+        // The head is drawn over the body, so the overlap hits the head;
+        // below it is body.
+        assert_eq!(rig.hit(Point::new(50.0, 52.0), &rest), Some(Layer::Part(0)));
+        assert_eq!(rig.hit(Point::new(50.0, 80.0), &tilted), Some(Layer::Body));
+    }
+
+    #[test]
+    fn sprite_hit_testing_follows_its_sway() {
+        let mut img = RgbaImage::new(40, 80);
+        for y in 10..70 {
+            for x in 10..30 {
+                img.put_pixel(x, y, Rgba([90, 120, 200, 255]));
+            }
+        }
+        let rig = Rig::sprite(img, (0.5, 70.0 / 80.0));
+        let pose = Pose { angles: vec![0.4], ..Pose::default() };
+        let top = rig.posed(Layer::Body, Point::new(12.0, 12.0), &pose);
+        assert_eq!(rig.hit(top, &pose), Some(Layer::Body));
     }
 
     #[test]

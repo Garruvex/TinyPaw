@@ -197,6 +197,8 @@ The stored resting anchor may remain the persistence coordinate for pack compati
 
 Stage 1 is an acceptable stability fix; the expressive carrying feature is complete only after stage 2/3 acceptance passes.
 
+**Stage 1 status, 11 November 2026: implemented, not yet checked on a native desktop.** `src/mascot/desktop.rs` keeps the window at `c − g·k` from the window's own scale each poll, with the pose frozen from press to release (faces and gaze still change). There is no clamp while held. Release recovers with `Layout::recover`: at least half the width stays inside the sides, with the old top and bottom limits. Restored positions use the same rule, and live motion eases back over 0.25 s. Hit testing inverts `motion::place` and each part's rotation (`Rig::hit`). Automated checks cover the per-poll contact error at 100–200 % and across a scale change, recovery, posed hit testing and the frozen pose. A known stage 1 trade-off: tails and ears no longer trail while carried, which returns in stage 2. The Settings preview still squashes and leans as before.
+
 ## Artwork placement and animation joints
 
 Normal artwork editing uses select, move, proportional resize, rotate, duplicate/remove where supported, and layer order. Exact X/Y/scale/angle values are optional inspector controls, not the primary workflow.
