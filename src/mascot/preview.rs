@@ -172,7 +172,7 @@ impl MotionPreview {
 
     /// Advances the preview by `dt` seconds.
     /// `music` is live playback loudness (0 when off or silent).
-    pub fn tick(&mut self, dt: f32, idle: bool, reduced: bool, music: f32) {
+    pub fn tick(&mut self, dt: f32, idle: bool, reduced: bool, music: f32, beat: Option<f32>) {
         self.now += dt.clamp(0.0, 0.1);
         if let Some(s) = &mut self.speech
             && !s.advance(self.now)
@@ -185,6 +185,7 @@ impl MotionPreview {
             idle: idle && !reduced,
             reduced,
             music,
+            beat,
             ..Inputs::default()
         };
         if let Some((test, started)) = self.test {
@@ -205,6 +206,7 @@ impl MotionPreview {
                 Test::Music if t < MUSIC => {
                     // Rises and falls like a short phrase.
                     inputs.music = inputs.music.max((t / MUSIC * std::f32::consts::PI).sin());
+                    inputs.beat = Some((t * 2.0).fract());
                 }
                 Test::DragLeft | Test::DragRight | Test::Speak | Test::Music => self.test = None,
             }
@@ -259,7 +261,7 @@ mod tests {
         p.test(Test::Speak);
         assert_eq!(p.speech(), Some("Hmm"), "falls back to other triggers' lines");
         for _ in 0..200 {
-            p.tick(0.05, true, false, 0.0);
+            p.tick(0.05, true, false, 0.0, None);
         }
         assert!(p.speech().is_none(), "the line ends");
         p.mark_lines_saved();
@@ -274,20 +276,20 @@ mod tests {
         let mut dragged = false;
         let mut leaned = 0.0f32;
         for _ in 0..20 {
-            p.tick(0.033, true, false, 0.0);
+            p.tick(0.033, true, false, 0.0, None);
             dragged |= p.pose().expression == Expression::Dragging;
             leaned = leaned.min(p.pose().lean);
         }
         assert!(dragged && leaned < -0.01, "a rightward drag leans the character left");
         // Let it settle, then click.
         for _ in 0..40 {
-            p.tick(0.033, true, false, 0.0);
+            p.tick(0.033, true, false, 0.0, None);
         }
         p.test(Test::Click);
         let mut squashed = false;
         let mut pressed_face = false;
         for _ in 0..12 {
-            p.tick(0.033, true, false, 0.0);
+            p.tick(0.033, true, false, 0.0, None);
             squashed |= p.pose().squash > 0.1;
             pressed_face |= p.pose().expression == Expression::Pressed;
         }

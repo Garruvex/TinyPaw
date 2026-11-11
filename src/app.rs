@@ -137,6 +137,9 @@ pub struct App {
     /// The playback meter, while music response is on and needed.
     #[cfg(windows)]
     music: Option<platform::music::Meter>,
+    /// The Follow beat trial's loopback analysis, while it's on.
+    #[cfg(windows)]
+    beat: Option<platform::beat::Follower>,
     editing_pack: Option<&'static str>,
     rebinding: Option<&'static str>,
     alt_down: bool,
@@ -267,6 +270,8 @@ impl App {
             motion_ticked: None,
             #[cfg(windows)]
             music: None,
+            #[cfg(windows)]
+            beat: None,
             pointer_draft: None,
             editing_pack: None,
             rebinding: None,
@@ -644,8 +649,9 @@ impl App {
                 self.motion_ticked = Some(now_i);
                 let o = self.motion_options();
                 let music = self.music_level();
+                let beat = self.beat_phase();
                 if let Some(p) = &mut self.motion_preview {
-                    p.tick(dt, o.0, o.1, music);
+                    p.tick(dt, o.0, o.1, music, beat);
                 }
             }
             Message::CharacterPicked(None)
@@ -995,6 +1001,58 @@ impl App {
         0.0
     }
 
+    fn beat_sensitivity(&self) -> crate::mascot::beat::Sensitivity {
+        use crate::mascot::beat::Sensitivity;
+        match self.session.settings().choice(character::BEAT_SENSITIVITY) {
+            "low" => Sensitivity::Low,
+            "high" => Sensitivity::High,
+            _ => Sensitivity::Normal,
+        }
+    }
+
+    /// The followed beat's phase, shifted by Beat timing, while music plays.
+    fn beat_phase(&self) -> Option<f32> {
+        #[cfg(windows)]
+        if let Some(b) = &self.beat
+            && self.music_level() > 0.0
+        {
+            let offset = match self.session.settings().choice(character::BEAT_TIMING) {
+                "earlier" => 0.06,
+                "later" => -0.06,
+                _ => 0.0,
+            };
+            return b.phase(offset);
+        }
+        None
+    }
+
+    /// The Follow beat trial's status line.
+    fn beat_status(&self) -> String {
+        #[cfg(windows)]
+        if let Some(b) = &self.beat {
+            return match (b.available(), b.bpm()) {
+                (false, _) => "Can't listen to the output".into(),
+                (true, Some(bpm)) => format!("Following · {bpm:.0} BPM"),
+                (true, None) => "Looking for a beat".into(),
+            };
+        }
+        if self.session.settings().bool(character::BEAT) {
+            "Starts with music response".into()
+        } else {
+            "Off".into()
+        }
+    }
+
+    /// TinyPaw is playing a sound: Follow beat's loopback hears it too, so
+    /// onsets are held off meanwhile.
+    fn own_sound(&self, seconds: f32) {
+        #[cfg(windows)]
+        if let Some(b) = &self.beat {
+            b.hold_off(seconds);
+        }
+        let _ = seconds;
+    }
+
     /// What the Music section shows: off, starting, silent, playing or
     /// unavailable, with the raw level for the meter.
     fn music_status(&self) -> (&'static str, f32) {
@@ -1029,6 +1087,15 @@ impl App {
                 (true, false) => self.music = Some(platform::music::Meter::start()),
                 (false, true) => self.music = None,
                 _ => {}
+            }
+            // Follow beat runs only alongside music response.
+            let follow = wanted && self.session.settings().bool(character::BEAT);
+            let sensitivity = self.beat_sensitivity();
+            match (follow, &self.beat) {
+                (true, None) => self.beat = Some(platform::beat::Follower::start(sensitivity)),
+                (true, Some(b)) => b.set_sensitivity(sensitivity),
+                (false, Some(_)) => self.beat = None,
+                (false, None) => {}
             }
             if self.music.as_ref().is_some_and(|m| m.take_started()) {
                 let options = self.mascot_options();
@@ -1103,6 +1170,7 @@ impl App {
                 s.float(character::IDLE_MAX) as f32 * 60.0,
             ),
             music: self.music_level(),
+            beat: self.beat_phase(),
         }
     }
 
@@ -1238,6 +1306,7 @@ impl App {
         match crate::audio::decode_wav(&path) {
             Ok(clip) => {
                 self.audio.play_clip(&clip, volume);
+                self.own_sound(clip.seconds());
                 Some(clip.seconds())
             }
             Err(e) => {
@@ -2049,6 +2118,8 @@ impl App {
                 self.audio
                     .set_pack(self.current_pack().and_then(|p| p.tap.clone()));
                 self.audio.play(tap, volume);
+        self.own_sound(0.25);
+                self.own_sound(0.25);
             }
             UiMsg::ImportWav => {
                 return Task::perform(
@@ -2562,6 +2633,7 @@ impl App {
                 art: self.art.as_ref(),
                 motion: self.motion_preview.as_ref(),
                 music: self.music_status(),
+                beat: self.beat_status(),
             });
         }
         #[cfg(windows)]

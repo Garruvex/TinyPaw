@@ -10,6 +10,8 @@ pub mod ipc;
 #[cfg(windows)]
 pub mod lens;
 #[cfg(windows)]
+pub mod beat;
+#[cfg(windows)]
 pub mod music;
 pub mod tray;
 #[cfg(windows)]

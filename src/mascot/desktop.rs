@@ -176,6 +176,8 @@ pub struct Options {
     pub idle_every: (f32, f32),
     /// Playback loudness to move with, 0 when off or silent.
     pub music: f32,
+    /// The followed beat's phase, while Follow beat has one.
+    pub beat: Option<f32>,
 }
 
 /// One menu row. `checked` draws a tick column; `on_press: None` disables it.
@@ -546,6 +548,7 @@ impl Desktop {
                 dragging,
                 velocity,
                 music: o.music,
+                beat: o.beat,
             },
         );
         // Counter-rotate the gaze into the head's space so it stays

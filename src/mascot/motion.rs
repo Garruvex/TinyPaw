@@ -210,6 +210,9 @@ pub struct Inputs {
     /// Playback loudness, 0 (silent or off) to 1, already scaled by the
     /// user's music strength.
     pub music: f32,
+    /// Where we are between followed beats (0 on the beat), while Follow
+    /// beat has one; otherwise music bobs at a relaxed fixed pace.
+    pub beat: Option<f32>,
 }
 
 /// Everything the renderer needs for one frame.
@@ -314,7 +317,7 @@ impl Animator {
                 let base = if i.idle { idle_angle(spec.preset, t, i.dragging) } else { 0.0 };
                 let drag = drag_angle(part.kind, spec.preset, self.velocity.x, i.dragging);
                 let music = if i.music > 0.0 {
-                    music_angle(part.kind, i.now) * i.music.min(2.0)
+                    music_angle(part.kind, music_phase(i)) * i.music.min(2.0)
                 } else {
                     0.0
                 };
@@ -356,7 +359,12 @@ impl Animator {
         let bounce = if i.reduced || i.music <= 0.0 {
             0.0
         } else {
-            (i.now * MUSIC_TEMPO * std::f32::consts::TAU).sin().abs() * 0.012 * i.music.min(2.0)
+            let lift = match i.beat {
+                // A quick hop on each beat, settling before the next.
+                Some(p) => (1.0 - p).powi(4) * 0.014,
+                None => music_phase(i).sin().abs() * 0.012,
+            };
+            lift * i.music.min(2.0)
         };
         Pose {
             angles,
@@ -409,9 +417,16 @@ fn drag_angle(kind: PartType, preset: Preset, vx: f32, dragging: bool) -> f32 {
 /// Bobs per second while music plays: a relaxed nod, not a beat match.
 const MUSIC_TEMPO: f32 = 2.0;
 
-/// How a part moves with the music at full level.
-fn music_angle(kind: PartType, now: f32) -> f32 {
-    let phase = now * MUSIC_TEMPO * std::f32::consts::TAU;
+/// The music cycle in radians: on the followed beat when there is one.
+fn music_phase(i: &Inputs) -> f32 {
+    match i.beat {
+        Some(p) => p * std::f32::consts::TAU,
+        None => i.now * MUSIC_TEMPO * std::f32::consts::TAU,
+    }
+}
+
+/// How a part moves with the music at full level, at `phase` radians.
+fn music_angle(kind: PartType, phase: f32) -> f32 {
     match kind {
         PartType::Head => phase.sin() * 0.05,
         PartType::Tail => (phase * 0.5).sin() * 0.1,
@@ -584,6 +599,27 @@ mod tests {
             },
         );
         assert_eq!((pose.bounce, pose.angles[0]), (0.0, 0.0));
+    }
+
+    #[test]
+    fn a_followed_beat_hops_on_the_beat() {
+        let mut a = Animator::default();
+        let at = |a: &mut Animator, p: f32| {
+            a.step(
+                &[],
+                &Inputs {
+                    now: 1.0,
+                    dt: 0.03,
+                    music: 1.0,
+                    beat: Some(p),
+                    ..Inputs::default()
+                },
+            )
+            .bounce
+        };
+        let on = at(&mut a, 0.0);
+        let between = at(&mut a, 0.6);
+        assert!(on > 0.01 && between < on * 0.1, "{on} {between}");
     }
 
     #[test]

@@ -3,6 +3,7 @@
 //! starts no hooks, capture, tray or audio device. Both share the rig.
 #[cfg(windows)]
 pub mod desktop;
+pub mod beat;
 pub mod editor;
 pub mod lines;
 pub mod motion;

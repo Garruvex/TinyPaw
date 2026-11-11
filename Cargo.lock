@@ -3667,6 +3667,7 @@ dependencies = [
 name = "tinypaw"
 version = "0.1.0"
 dependencies = [
+ "cpal",
  "global-hotkey",
  "iced",
  "iced_tiny_skia",

@@ -136,6 +136,7 @@ fn settings_view<'a>(
         art: None,
         motion: None,
         music: ("Off", 0.0),
+        beat: "Off".into(),
     }
 }
 

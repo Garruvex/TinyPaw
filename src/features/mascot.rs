@@ -17,6 +17,10 @@ pub const VOICE_VOLUME: &str = "mascot.voice_volume";
 /// Music response: move with playback, and how strongly.
 pub const MUSIC: &str = "mascot.music";
 pub const MUSIC_STRENGTH: &str = "mascot.music_strength";
+/// The Follow beat trial: on/off, how readily it commits, and a timing nudge.
+pub const BEAT: &str = "mascot.follow_beat";
+pub const BEAT_SENSITIVITY: &str = "mascot.beat_sensitivity";
+pub const BEAT_TIMING: &str = "mascot.beat_timing";
 /// Idle lines come at a random time within this many minutes.
 pub const IDLE_MIN: &str = "mascot.idle_lines_min";
 pub const IDLE_MAX: &str = "mascot.idle_lines_max";
@@ -130,6 +134,30 @@ pub fn register(r: &mut Registrar) {
         order: 10,
         default: Value::Float(1.0),
         constraint: Constraint::Range { min: 0.0, max: 2.0 },
+    });
+    r.setting(SettingDef {
+        id: BEAT,
+        label: "Follow beat (trial)",
+        group: "Character",
+        order: 11,
+        default: Value::Bool(false),
+        constraint: Constraint::None,
+    });
+    r.setting(SettingDef {
+        id: BEAT_SENSITIVITY,
+        label: "Beat sensitivity",
+        group: "Character",
+        order: 12,
+        default: Value::Choice("normal"),
+        constraint: Constraint::Choices(&["low", "normal", "high"]),
+    });
+    r.setting(SettingDef {
+        id: BEAT_TIMING,
+        label: "Beat timing",
+        group: "Character",
+        order: 13,
+        default: Value::Choice("default"),
+        constraint: Constraint::Choices(&["earlier", "default", "later"]),
     });
     for (id, order) in [(X, 90), (Y, 91)] {
         r.setting(SettingDef {

@@ -479,7 +479,49 @@ Implemented 11 November 2026.
   a live meter with its status (Off, Listening, Silent, Hearing playback,
   Unavailable) and **Music strength**. The preview's **Music** test simulates
   a few seconds of music without any audio.
-- **Not yet.** Following the beat (step 5).
+
+### Follow beat trial (character creation step 5)
+
+Implemented 11 November 2026, behind **Follow beat (trial)** (off by default).
+
+- **Tracker.** `src/mascot/beat.rs` finds onsets as rises in high-passed
+  loudness over 10 ms frames, the tempo from the autocorrelation of the last
+  6 s of onsets (60–180 BPM, preferring moderate tempos so it doesn't lock to
+  half or double time), and the phase from a comb over past onsets. It emits
+  beats at predicted times, so it holds through off-beats and short gaps,
+  and goes quiet when the pattern's confidence drops below the Sensitivity
+  threshold.
+- **Live input.** `src/platform/beat.rs` opens a WASAPI loopback stream of
+  the default output with `cpal` (already used by rodio). The audio callback
+  only downmixes and hands chunks to an analysis thread without blocking; a
+  stalled stream is reopened, which follows device changes. It runs only
+  alongside music response. Loopback hears TinyPaw too, so onsets are held
+  off while TinyPaw plays a tap or line sound (approximate, as planned).
+- **Motion.** With a followed beat, music nods use the beat's phase and the
+  body hops on each beat; without one, the relaxed fixed bob continues.
+  **Timing** shifts it 60 ms earlier or later; **Sensitivity** (Low, Normal,
+  High) sets how clear the pattern must be.
+
+**Trial results** (`cargo test beat_trial -- --nocapture`; synthetic tracks
+at 44.1 kHz, fed in 10 ms chunks; a hit is within ±70 ms; scored after 4 s
+to lock on, and 4 s after the tempo change):
+
+| Signal | Beats | Hits | Missed | Extra | Mean offset |
+| --- | --- | --- | --- | --- | --- |
+| 80 BPM clicks | 21 | 21 | 0 | 0 | 0 ms |
+| 120 BPM clicks | 32 | 32 | 0 | 1 | 0 ms |
+| 160 BPM clicks | 43 | 43 | 0 | 0 | −3 ms |
+| 120 BPM with off-beat hats | 32 | 32 | 0 | 1 | 0 ms |
+| 100 → 140 BPM change | 24 | 24 | 0 | 0 | +1 ms |
+| Speech-like bursts, 20 s | 0 | – | – | 0 | – |
+| Silence, 20 s | 0 | – | – | 0 | – |
+
+The test fails if a steady signal drops below 90 % hits, exceeds 10 % extra
+beats or drifts beyond ±40 ms, or if silence or speech produce beats. Measured
+confidence: speech-like bursts peak at 0.25, the click tracks never fall
+below 0.45, hence Normal's threshold of 0.35. These are synthetic signals; real
+music with soft attacks and loopback latency still needs listening checks,
+which is why the option stays labelled a trial.
 
 Completion checks:
 

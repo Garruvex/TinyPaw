@@ -87,6 +87,8 @@ pub struct SettingsView<'a> {
     pub motion: Option<&'a crate::mascot::preview::MotionPreview>,
     /// Music response status and live level, for the meter.
     pub music: (&'static str, f32),
+    /// The Follow beat trial's status line.
+    pub beat: String,
 }
 
 fn h1<'a>(label: &'a str) -> Element<'a, Message> {
@@ -1953,8 +1955,56 @@ fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         .spacing(8)
         .align_y(Alignment::Center)
         .into(),
-        hint("Try it without music using Music in the preview. Following the beat is a later trial."),
+        check("Follow beat (trial)", s.bool(mascot::BEAT), mascot::BEAT),
+        hint("Nods land on the beat instead of a steady bob. It listens to what's playing (TinyPaw's own sounds are held off while they play) and keeps nothing."),
+        row![
+            text("Beat").size(12).color(theme::MUTED).width(110),
+            text(v.beat.clone()).size(12).color(theme::MUTED).width(Length::Fill),
+        ]
+        .align_y(Alignment::Center)
+        .into(),
+        row![
+            text("Sensitivity").size(12).color(theme::MUTED).width(110),
+            pick_list(
+                [Choice("low", "Low"), Choice("normal", "Normal"), Choice("high", "High")],
+                Some(Choice::of(s.choice(mascot::BEAT_SENSITIVITY), &[("low", "Low"), ("normal", "Normal"), ("high", "High")])),
+                |c| Message::Set(mascot::BEAT_SENSITIVITY, Value::Choice(c.0)),
+            )
+            .text_size(13)
+            .padding([6, 10])
+            .style(theme::select),
+            text("Timing").size(12).color(theme::MUTED),
+            pick_list(
+                [Choice("earlier", "Earlier"), Choice("default", "Default"), Choice("later", "Later")],
+                Some(Choice::of(s.choice(mascot::BEAT_TIMING), &[("earlier", "Earlier"), ("default", "Default"), ("later", "Later")])),
+                |c| Message::Set(mascot::BEAT_TIMING, Value::Choice(c.0)),
+            )
+            .text_size(13)
+            .padding([6, 10])
+            .style(theme::select),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center)
+        .into(),
+        hint("Try it without music using Music in the preview."),
     ])
+}
+
+/// A setting value with its display label, for pick lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Choice(&'static str, &'static str);
+
+impl Choice {
+    fn of(value: &'static str, all: &[(&'static str, &'static str)]) -> Self {
+        let label = all.iter().find(|(v, _)| *v == value).map_or(value, |(_, l)| l);
+        Choice(value, label)
+    }
+}
+
+impl std::fmt::Display for Choice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.1)
+    }
 }
 
 /// The selected character, animated, with buttons to try its reactions.
