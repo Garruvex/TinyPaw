@@ -406,8 +406,18 @@ as shorthand for parts. Limits: 16 parts, 4 eyes, 32 images per pack.
   [cropped-parts improvement plan](character-creation-plan.md#improvement-import-and-arrange-cropped-parts)
   adds differently sized PNG inputs, visual arrangement and automatic canvas
   preparation on Save, with complete eyes supported as static head layers.
-- **Not yet.** The Motion tab (2c) and Yohta as a pack folder (2d). Until 2d,
-  Yohta's art comes from the concept sheet and he can't be edited or exported.
+- **Motion tab (2c).** The Character page lists each moving part (Yohta's
+  head and tail, a single image as "Whole character", or a layered pack's
+  parts) with its preset, Strength and Speed, showing exact values. A pinned
+  preview animates the character with the same rig and animator as the desktop,
+  with **Click**, **Drag ←** and **Drag →** tests. **Save motion** stores the
+  choices in `characters/.overrides/<id>.json`, beside rather than inside the
+  pack, so re-importing or replacing the pack keeps them; the desktop reloads
+  at once. **Reset to pack** returns to the pack's own motion. Saved motion
+  that no longer fits the parts is ignored. The preview runs only while the
+  page is open.
+- **Not yet.** Yohta as a pack folder (2d). Until then his art comes from the
+  concept sheet and he can't be edited or exported.
 
 Completion checks:
 

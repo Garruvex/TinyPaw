@@ -83,6 +83,8 @@ pub struct SettingsView<'a> {
     pub character_conflict: Option<&'a str>,
     /// The Art tab's open character, while editing.
     pub art: Option<&'a crate::mascot::editor::Editor>,
+    /// The Motion tab's live preview, on the Character page.
+    pub motion: Option<&'a crate::mascot::preview::MotionPreview>,
 }
 
 fn h1<'a>(label: &'a str) -> Element<'a, Message> {
@@ -1638,12 +1640,153 @@ fn character_page<'a>(
                         .then_some(Message::Ui(UiMsg::ResetMascotPosition)),
                 ),
         );
+    if let Some(m) = v.motion {
+        page = page.push(motion_section(m));
+    }
 
-    (
-        page.into(),
-        v.character_draft
-            .map(|d| new_character(d, v.character_busy)),
-    )
+    let side = match (v.character_draft, v.motion) {
+        (Some(d), _) => Some(new_character(d, v.character_busy)),
+        (None, Some(m)) => Some(motion_preview(m)),
+        (None, None) => None,
+    };
+    (page.into(), side)
+}
+
+/// The Motion tab: a preset, strength and speed for each moving part.
+fn motion_section<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'a, Message> {
+    let mut rows = column![].spacing(14);
+    for (i, (label, spec)) in m.labels.iter().zip(&m.specs).enumerate() {
+        let kind = m.kinds[i];
+        let number = |value: f32| text(format!("{value:.2}")).size(12).color(theme::MUTED).width(34);
+        rows = rows.push(
+            column![
+                row![
+                    text(label.clone()).font(theme::MEDIUM).size(13).width(Length::Fill),
+                    pick_list(kind.presets(), Some(spec.preset), move |p| {
+                        Message::Ui(UiMsg::MotionPreset(i, p))
+                    })
+                    .text_size(13)
+                    .padding([6, 10])
+                    .style(theme::select),
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center),
+                row![
+                    text("Strength").size(12).color(theme::MUTED).width(64),
+                    slider(0.0..=2.0, spec.strength, move |x| Message::Ui(
+                        UiMsg::MotionStrength(i, x)
+                    ))
+                    .step(0.05_f32)
+                    .style(theme::range),
+                    number(spec.strength),
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center),
+                row![
+                    text("Speed").size(12).color(theme::MUTED).width(64),
+                    slider(0.0..=2.0, spec.speed, move |x| Message::Ui(UiMsg::MotionSpeed(i, x)))
+                        .step(0.05_f32)
+                        .style(theme::range),
+                    number(spec.speed),
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center),
+            ]
+            .spacing(6),
+        );
+    }
+    section(vec![
+        row![
+            h2("Motion"),
+            space().width(Length::Fill),
+            button(text("Reset to pack").size(12))
+                .padding([5, 10])
+                .style(theme::secondary)
+                .on_press_maybe(m.customised().then_some(Message::Ui(UiMsg::MotionReset))),
+            button(text("Save motion").font(theme::MEDIUM).size(12))
+                .padding([5, 12])
+                .style(theme::primary)
+                .on_press_maybe(m.dirty().then_some(Message::Ui(UiMsg::MotionSave))),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .into(),
+        hint("Pick how each part moves. Strength and Speed run from 0 to 2; 1 is the preset as designed. Changes show in the preview straight away and on the desktop once saved."),
+        rows.into(),
+    ])
+}
+
+/// The selected character, animated, with buttons to try its reactions.
+fn motion_preview<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'a, Message> {
+    use crate::mascot::preview::Test;
+    let test = |label: &'static str, t: Test| {
+        button(text(label).size(12).width(Length::Fill).center())
+            .width(Length::Fill)
+            .padding([7, 8])
+            .style(theme::secondary)
+            .on_press(Message::Ui(UiMsg::MotionTest(t)))
+    };
+    column![
+        h2("Preview"),
+        canvas(MotionStage { preview: m })
+            .width(Length::Fill)
+            .height(300),
+        row![
+            test("Click", Test::Click),
+            test("Drag ←", Test::DragLeft),
+            test("Drag →", Test::DragRight),
+        ]
+        .spacing(6),
+        hint("Idle motion follows Settings → Character. Reduced motion stops it, as on the desktop."),
+    ]
+    .spacing(10)
+    .width(260)
+    .into()
+}
+
+struct MotionStage<'a> {
+    preview: &'a crate::mascot::preview::MotionPreview,
+}
+
+impl canvas::Program<Message> for MotionStage<'_> {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &iced::Renderer,
+        _theme: &Theme,
+        bounds: iced::Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        use iced::widget::canvas::{Frame, Path};
+        let size = bounds.size();
+        let mut frame = Frame::new(renderer, size);
+        frame.fill(
+            &Path::rounded_rectangle(iced::Point::ORIGIN, size, 12.0.into()),
+            theme::WELL,
+        );
+        let rig = self.preview.rig();
+        let pose = self.preview.pose();
+        let canvas_size = rig.size();
+        let pad = 18.0;
+        let k = ((size.width - pad * 2.0) / canvas_size.width)
+            .min((size.height - pad * 2.0) / canvas_size.height);
+        let feet = rig.anchor();
+        // Stand the feet on a floor line near the bottom, centred.
+        let origin = iced::Vector::new(size.width / 2.0 - feet.x * k, size.height - pad - feet.y * k);
+        frame.translate(origin);
+        frame.scale(k);
+        frame.translate(iced::Vector::new(feet.x, feet.y));
+        frame.rotate(pose.lean);
+        frame.scale_nonuniform(iced::Vector::new(
+            1.0 + 0.06 * pose.squash,
+            1.0 - 0.08 * pose.squash,
+        ));
+        frame.translate(iced::Vector::new(-feet.x, -feet.y));
+        rig.draw_pose(&mut frame, pose);
+        vec![frame.into_geometry()]
+    }
 }
 
 /// The Art tab: a character's body, moving parts, head faces and eyes.

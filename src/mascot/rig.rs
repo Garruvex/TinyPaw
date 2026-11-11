@@ -31,6 +31,8 @@ pub struct Rig {
     /// Where the feet meet the ground, in rig pixels.
     anchor: Point,
     silhouette: Silhouette,
+    /// Motion per moving part, in `motion_parts` order.
+    motion: Vec<MotionSpec>,
 }
 
 #[derive(Debug, Clone)]
@@ -296,6 +298,10 @@ impl Rig {
             },
             size,
             silhouette,
+            motion: vec![
+                MotionSpec::of(Preset::Tilt),
+                MotionSpec::of(Preset::Sway),
+            ],
         }
     }
 
@@ -310,6 +316,8 @@ impl Rig {
             kind: Kind::Sprite(handle(pixels)),
             size,
             silhouette,
+            // The whole image sways a little, like a tilting head.
+            motion: vec![MotionSpec::of(Preset::Tilt)],
         }
     }
 
@@ -358,6 +366,7 @@ impl Rig {
             .unwrap_or_default();
         Self {
             anchor: Point::new(art.ground.0 * size.width, art.ground.1 * size.height),
+            motion: parts.iter().map(|p| p.motion).collect(),
             kind: Kind::Layered { body, parts, eyes },
             size,
             silhouette,
@@ -366,31 +375,62 @@ impl Rig {
 
     /// The parts the animator moves, in the order of `Pose::angles`.
     pub fn motion_parts(&self) -> Vec<PartMotion> {
-        let preset = |kind: PartType, preset: Preset| PartMotion {
-            kind,
-            spec: MotionSpec {
-                preset,
-                strength: 1.0,
-                speed: 1.0,
-            },
-            parent: None,
+        let (kinds, parents): (Vec<PartType>, Vec<Option<usize>>) = match &self.kind {
+            Kind::Yohta { .. } => (vec![PartType::Head, PartType::Tail], vec![None, None]),
+            Kind::Sprite(_) => (vec![PartType::Head], vec![None]),
+            Kind::Layered { parts, .. } => parts.iter().map(|p| (p.kind, p.parent)).unzip(),
         };
+        kinds
+            .into_iter()
+            .zip(parents)
+            .zip(&self.motion)
+            .map(|((kind, parent), spec)| PartMotion {
+                kind,
+                spec: *spec,
+                parent,
+            })
+            .collect()
+    }
+
+    /// What the Motion tab calls each moving part, in `motion_parts` order.
+    pub fn motion_labels(&self) -> Vec<String> {
         match &self.kind {
-            Kind::Yohta { .. } => vec![
-                preset(PartType::Head, Preset::Tilt),
-                preset(PartType::Tail, Preset::Sway),
-            ],
-            // The whole image sways a little, like a tilting head.
-            Kind::Sprite(_) => vec![preset(PartType::Head, Preset::Tilt)],
+            Kind::Yohta { .. } => vec!["Head".into(), "Tail".into()],
+            Kind::Sprite(_) => vec!["Whole character".into()],
             Kind::Layered { parts, .. } => parts
                 .iter()
-                .map(|p| PartMotion {
-                    kind: p.kind,
-                    spec: p.motion,
-                    parent: p.parent,
-                })
+                .enumerate()
+                .map(|(i, p)| format!("{} {}", i + 1, p.kind))
                 .collect(),
         }
+    }
+
+    /// The current motion per part.
+    pub fn motion(&self) -> &[MotionSpec] {
+        &self.motion
+    }
+
+    /// Replaces the motion, part by part. A spec whose preset the part's type
+    /// doesn't offer, or a list of the wrong length, is ignored.
+    pub fn set_motion(&mut self, specs: &[MotionSpec]) -> bool {
+        let parts = self.motion_parts();
+        if specs.len() != parts.len()
+            || specs
+                .iter()
+                .zip(&parts)
+                .any(|(s, p)| !p.kind.presets().contains(&s.preset))
+        {
+            return false;
+        }
+        self.motion = specs
+            .iter()
+            .map(|s| MotionSpec {
+                preset: s.preset,
+                strength: s.strength.clamp(0.0, 2.0),
+                speed: s.speed.clamp(0.0, 2.0),
+            })
+            .collect();
+        true
     }
 
     /// The point between the eyes, in rig pixels, for gaze.

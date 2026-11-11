@@ -92,6 +92,17 @@ pub enum Preset {
     Spring,
 }
 
+impl std::fmt::Display for Preset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = self.name();
+        let mut c = name.chars();
+        if let Some(first) = c.next() {
+            write!(f, "{}{}", first.to_ascii_uppercase(), c.as_str())?;
+        }
+        Ok(())
+    }
+}
+
 impl Preset {
     const ALL: [Preset; 11] = [
         Preset::Still,
@@ -143,6 +154,15 @@ pub struct MotionSpec {
 }
 
 impl MotionSpec {
+    /// A preset at its designed strength and speed.
+    pub fn of(preset: Preset) -> Self {
+        Self {
+            preset,
+            strength: 1.0,
+            speed: 1.0,
+        }
+    }
+
     pub fn default_for(kind: PartType) -> Self {
         Self {
             preset: kind.default_preset(),

@@ -134,6 +134,7 @@ fn settings_view<'a>(
         character_busy: false,
         character_conflict: None,
         art: None,
+        motion: None,
     }
 }
 

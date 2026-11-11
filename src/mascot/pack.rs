@@ -91,6 +91,15 @@ impl Character {
         self.thumb.clone()
     }
 
+    /// The rig with the user's Motion tab settings applied, if they still fit.
+    pub fn rig_with_motion(&self) -> Result<Rig, String> {
+        let mut rig = self.rig()?;
+        if let Some(specs) = load_motion(self.id) {
+            rig.set_motion(&specs);
+        }
+        Ok(rig)
+    }
+
     /// Decodes the art for the desktop. Done when shown, released when hidden.
     pub fn rig(&self) -> Result<Rig, String> {
         if let Some(rig) = &self.cached_rig
@@ -1470,7 +1479,77 @@ pub(super) fn installed_folder(c: &Character) -> Result<PathBuf, String> {
 
 /// Deletes TinyPaw's installed copy; the original source is never touched.
 pub fn remove(c: &Character) -> Result<(), String> {
-    fs::remove_dir_all(installed_folder(c)?).map_err(|e| e.to_string())
+    fs::remove_dir_all(installed_folder(c)?).map_err(|e| e.to_string())?;
+    let _ = clear_motion(c.id);
+    Ok(())
+}
+
+// ---- Motion overrides --------------------------------------------------------
+
+/// The user's Motion tab settings for a character, kept beside (not inside)
+/// its installed pack so replacing or re-importing the pack keeps them.
+fn motion_file(root: &Path, id: &str) -> PathBuf {
+    root.join(".overrides").join(format!("{id}.json"))
+}
+
+/// Saved motion for `id`, if any. The rig checks it still fits its parts.
+pub fn load_motion(id: &str) -> Option<Vec<MotionSpec>> {
+    load_motion_in(&user_dir()?, id)
+}
+
+fn load_motion_in(root: &Path, id: &str) -> Option<Vec<MotionSpec>> {
+    let path = motion_file(root, id);
+    if fs::metadata(&path).ok()?.len() > MAX_MANIFEST {
+        return None;
+    }
+    let v: Json = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
+    if v["schema_version"].as_u64() != Some(1) {
+        return None;
+    }
+    v["motion"]
+        .as_array()?
+        .iter()
+        .map(|m| {
+            Some(MotionSpec {
+                preset: Preset::parse(m["preset"].as_str()?)?,
+                strength: (m["strength"].as_f64()? as f32).clamp(0.0, 2.0),
+                speed: (m["speed"].as_f64()? as f32).clamp(0.0, 2.0),
+            })
+        })
+        .collect()
+}
+
+pub fn save_motion(id: &str, specs: &[MotionSpec]) -> Result<(), String> {
+    save_motion_in(&user_dir().ok_or("no per-user data folder")?, id, specs)
+}
+
+fn save_motion_in(root: &Path, id: &str, specs: &[MotionSpec]) -> Result<(), String> {
+    if !(valid_id(id) || id == BUILTIN) {
+        return Err("unknown character".into());
+    }
+    let path = motion_file(root, id);
+    fs::create_dir_all(path.parent().expect("overrides folder")).map_err(|e| e.to_string())?;
+    let json = json!({
+        "schema_version": 1,
+        "motion": specs
+            .iter()
+            .map(|s| json!({ "preset": s.preset.name(), "strength": s.strength, "speed": s.speed }))
+            .collect::<Vec<_>>(),
+    });
+    // Write then rename, so a crash never leaves half a file.
+    let partial = path.with_extension("json.partial");
+    fs::write(&partial, serde_json::to_vec_pretty(&json).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    fs::rename(&partial, &path).map_err(|e| e.to_string())
+}
+
+/// Forgets the Motion tab settings, returning the character to its pack's.
+pub fn clear_motion(id: &str) -> Result<(), String> {
+    let root = user_dir().ok_or("no per-user data folder")?;
+    match fs::remove_file(motion_file(&root, id)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+        _ => Ok(()),
+    }
 }
 
 /// Writes the character as a folder inside `into`, ready to share or
@@ -1979,6 +2058,37 @@ mod tests {
         };
         assert_ne!(copy.id, BUILTIN);
         assert!(remove(&Character::builtin()).is_err());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn motion_overrides_round_trip_and_must_fit_the_rig() {
+        let dir = scratch("motion");
+        let specs = [
+            MotionSpec {
+                preset: Preset::Nod,
+                strength: 1.4,
+                speed: 0.6,
+            },
+            MotionSpec {
+                preset: Preset::Wag,
+                strength: 2.5,
+                speed: 1.0,
+            },
+        ];
+        save_motion_in(&dir, BUILTIN, &specs).unwrap();
+        let loaded = load_motion_in(&dir, BUILTIN).unwrap();
+        assert_eq!(loaded[0], specs[0]);
+        assert_eq!(loaded[1].strength, 2.0, "clamped to the slider range");
+        assert!(!dir.join(".overrides/yohta.json.partial").exists());
+        // Yohta's rig takes two specs; a single one, or a preset the part
+        // can't use, is refused and the rig keeps its own motion.
+        let mut rig = Rig::load();
+        assert!(rig.set_motion(&loaded));
+        assert_eq!(rig.motion()[0].preset, Preset::Nod);
+        assert!(!rig.set_motion(&loaded[..1]));
+        assert!(!rig.set_motion(&[specs[1], specs[1]]), "a head can't wag");
+        assert!(save_motion_in(&dir, "../escape", &specs).is_err());
         fs::remove_dir_all(&dir).unwrap();
     }
 }

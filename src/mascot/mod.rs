@@ -7,6 +7,7 @@ pub mod editor;
 pub mod motion;
 pub mod pack;
 pub mod placement;
+pub mod preview;
 pub mod rig;
 
 /// Messages from the desktop character window.

@@ -136,6 +136,13 @@ pub enum UiMsg {
     ArtName(String),
     ArtSave,
     ArtCancel,
+    /// Motion tab: a part's preset, strength and speed.
+    MotionPreset(usize, crate::mascot::motion::Preset),
+    MotionStrength(usize, f32),
+    MotionSpeed(usize, f32),
+    MotionTest(crate::mascot::preview::Test),
+    MotionSave,
+    MotionReset,
 }
 
 /// Each live or frozen scene has its own revision counter.

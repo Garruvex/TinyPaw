@@ -54,6 +54,8 @@ pub enum Message {
     CharacterWorked(u64, Result<CharacterWork, String>),
     CharacterExportPicked(Option<PathBuf>),
     ArtFilesPicked(u64, crate::mascot::editor::Target, Vec<PathBuf>),
+    /// Frames for the Motion tab's preview.
+    MotionTick,
     ArtBodyPicked(u64, Option<PathBuf>),
     Acquired(Ticket),
     TextChanged(String),
@@ -124,6 +126,12 @@ pub struct App {
     quit_pending: bool,
     /// The Art tab's open character, while editing.
     art: Option<crate::mascot::editor::Editor>,
+    /// The Motion tab's live preview, while Settings shows Character.
+    motion_preview: Option<crate::mascot::preview::MotionPreview>,
+    /// A character whose preview failed to load, so it isn't retried
+    /// on every update.
+    motion_failed: Option<&'static str>,
+    motion_ticked: Option<Instant>,
     editing_pack: Option<&'static str>,
     rebinding: Option<&'static str>,
     alt_down: bool,
@@ -249,6 +257,9 @@ impl App {
             character_jobs: std::collections::BTreeMap::new(),
             quit_pending: false,
             art: None,
+            motion_preview: None,
+            motion_failed: None,
+            motion_ticked: None,
             pointer_draft: None,
             editing_pack: None,
             rebinding: None,
@@ -604,6 +615,17 @@ impl App {
                 }
             }
             Message::ArtBodyPicked(_, _) | Message::ArtFilesPicked(_, _, _) => {}
+            Message::MotionTick => {
+                let now_i = Instant::now();
+                let dt = self
+                    .motion_ticked
+                    .map_or(0.0, |t| now_i.duration_since(t).as_secs_f32());
+                self.motion_ticked = Some(now_i);
+                let o = self.motion_options();
+                if let Some(p) = &mut self.motion_preview {
+                    p.tick(dt, o.0, o.1);
+                }
+            }
             Message::CharacterPicked(None)
             | Message::CharacterFolderPicked(None)
             | Message::CharacterExportPicked(None) => {}
@@ -921,6 +943,7 @@ impl App {
         }
         tasks.push(self.reconcile());
         tasks.push(self.reconcile_mascot());
+        self.sync_motion_preview();
         if self.quit_pending && self.character_jobs.is_empty() {
             self.quit(now);
         }
@@ -939,6 +962,51 @@ impl App {
     }
 
     #[cfg(windows)]
+    /// Idle motion on, and reduced motion, for the Motion tab preview.
+    fn motion_options(&self) -> (bool, bool) {
+        let s = self.session.settings();
+        (s.bool(character::IDLE), system::reduced(s))
+    }
+
+    /// Builds the Motion tab's preview while Settings shows the Character
+    /// page (not while editing art or adding a character), and drops it
+    /// otherwise so its art isn't held in memory.
+    fn sync_motion_preview(&mut self) {
+        let wanted = self.settings_window.is_some()
+            && self.page == Page::Character
+            && self.art.is_none()
+            && self.character_draft.is_none();
+        if !wanted {
+            self.motion_preview = None;
+            self.motion_ticked = None;
+            return;
+        }
+        let c = self.current_character().clone();
+        if self.motion_preview.as_ref().is_some_and(|p| p.id == c.id)
+            || self.motion_failed == Some(c.id)
+        {
+            return;
+        }
+        match c.rig() {
+            Ok(base) => {
+                let defaults = base.motion().to_vec();
+                let mut rig = base;
+                if let Some(specs) = characters::load_motion(c.id) {
+                    rig.set_motion(&specs);
+                }
+                self.motion_preview =
+                    Some(crate::mascot::preview::MotionPreview::new(c.id, rig, defaults));
+                self.motion_failed = None;
+                self.motion_ticked = None;
+            }
+            Err(e) => {
+                self.motion_preview = None;
+                self.motion_failed = Some(c.id);
+                self.notice = Some(format!("Could not preview {}: {e}", c.name));
+            }
+        }
+    }
+
     fn mascot_options(&self) -> crate::mascot::desktop::Options {
         let s = self.session.settings();
         crate::mascot::desktop::Options {
@@ -1045,7 +1113,7 @@ impl App {
         let Some(c) = self.characters.iter().find(|c| c.id == id) else {
             return crate::mascot::rig::Rig::load();
         };
-        c.rig().unwrap_or_else(|e| {
+        c.rig_with_motion().unwrap_or_else(|e| {
             self.notice = Some(format!("Could not show {}: {e}. Showing Yohta.", c.name));
             crate::mascot::rig::Rig::load()
         })
@@ -1305,6 +1373,63 @@ impl App {
                     } else {
                         characters::OnDuplicate::Replace
                     });
+                }
+            }
+            UiMsg::MotionPreset(i, preset) => {
+                if let Some(p) = &mut self.motion_preview
+                    && let Some(spec) = p.specs.get(i).copied()
+                {
+                    p.set(i, crate::mascot::motion::MotionSpec { preset, ..spec });
+                }
+            }
+            UiMsg::MotionStrength(i, strength) => {
+                if let Some(p) = &mut self.motion_preview
+                    && let Some(spec) = p.specs.get(i).copied()
+                {
+                    p.set(i, crate::mascot::motion::MotionSpec { strength, ..spec });
+                }
+            }
+            UiMsg::MotionSpeed(i, speed) => {
+                if let Some(p) = &mut self.motion_preview
+                    && let Some(spec) = p.specs.get(i).copied()
+                {
+                    p.set(i, crate::mascot::motion::MotionSpec { speed, ..spec });
+                }
+            }
+            UiMsg::MotionTest(test) => {
+                if let Some(p) = &mut self.motion_preview {
+                    p.test(test);
+                }
+            }
+            UiMsg::MotionReset => {
+                if let Some(p) = &mut self.motion_preview {
+                    p.reset();
+                }
+            }
+            UiMsg::MotionSave => {
+                if let Some(p) = &mut self.motion_preview {
+                    let id = p.id;
+                    let result = if p.customised() {
+                        characters::save_motion(id, &p.specs)
+                    } else {
+                        // Matching the pack again: forget the override.
+                        characters::clear_motion(id)
+                    };
+                    match result {
+                        Ok(()) => {
+                            p.mark_saved();
+                            self.notice = None;
+                            // The desktop picks up the new motion at once.
+                            #[cfg(windows)]
+                            if self.mascot.as_ref().is_some_and(|m| m.character() == id) {
+                                let rig = self.character_rig(id);
+                                if let Some(m) = &mut self.mascot {
+                                    m.set_rig(id, rig);
+                                }
+                            }
+                        }
+                        Err(e) => self.notice = Some(format!("Could not save motion: {e}")),
+                    }
                 }
             }
             UiMsg::CancelCharacterImport => {
@@ -2179,6 +2304,7 @@ impl App {
                 character_busy: self.character_job.is_some(),
                 character_conflict: self.character_conflict.as_deref(),
                 art: self.art.as_ref(),
+                motion: self.motion_preview.as_ref(),
             });
         }
         #[cfg(windows)]
@@ -2247,6 +2373,10 @@ impl App {
             .and_then(|m| m.poll_interval(&self.mascot_options()))
         {
             subs.push(iced::time::every(every).map(|_| Message::Mascot(crate::mascot::Msg::Poll)));
+        }
+        // The Motion tab's preview animates while it's open.
+        if self.motion_preview.is_some() {
+            subs.push(iced::time::every(Duration::from_millis(33)).map(|_| Message::MotionTick));
         }
         // Frames only while something animates; otherwise the process sleeps.
         if self.session.animating(now) {
