@@ -23,6 +23,11 @@ pub enum Role {
     RightEye,
     LeftBrow,
     RightBrow,
+    /// Head faces that replace the head: eyes closed (blinking), pressed
+    /// (clicked) and being carried. They need painted-in eyes.
+    HeadBlink,
+    HeadPressed,
+    HeadCarried,
     /// The whole character in a carried pose, for Pick up's held pose.
     Held,
 }
@@ -37,7 +42,20 @@ impl Role {
             Role::RightEye => "right_eye.png",
             Role::LeftBrow => "left_eyebrow.png",
             Role::RightBrow => "right_eyebrow.png",
+            Role::HeadBlink => "head_eyes_closed.png",
+            Role::HeadPressed => "head_pressed.png",
+            Role::HeadCarried => "head_carried.png",
             Role::Held => "held.png",
+        }
+    }
+
+    /// The head face slot a face role fills: blink, pressed, dragging.
+    pub fn face_slot(self) -> Option<usize> {
+        match self {
+            Role::HeadBlink => Some(0),
+            Role::HeadPressed => Some(1),
+            Role::HeadCarried => Some(2),
+            _ => None,
         }
     }
 
@@ -50,6 +68,9 @@ impl Role {
             Role::RightEye => "Right eye",
             Role::LeftBrow => "Left eyebrow",
             Role::RightBrow => "Right eyebrow",
+            Role::HeadBlink => "Head, eyes closed",
+            Role::HeadPressed => "Head, pressed",
+            Role::HeadCarried => "Head, being carried",
             Role::Held => "Held pose",
         }
     }
@@ -63,6 +84,19 @@ impl Role {
     /// before eyes, since "eyebrow" contains "eye".
     pub fn guess(path: &Path) -> Option<Role> {
         let name = path.file_stem()?.to_str()?.to_lowercase();
+        // Head faces before eyes and the held pose: "head_eyes_closed" and
+        // "head_carried" name those words too.
+        if name.contains("head") {
+            if name.contains("closed") || name.contains("blink") {
+                return Some(Role::HeadBlink);
+            }
+            if name.contains("pressed") {
+                return Some(Role::HeadPressed);
+            }
+            if name.contains("carried") || name.contains("drag") {
+                return Some(Role::HeadCarried);
+            }
+        }
         let side = |left: Role, right: Role| {
             if name.contains("left") || name.ends_with("_l") || name.ends_with("-l") {
                 Some(left)
@@ -114,6 +148,10 @@ pub struct Request {
     /// Separate eye and eyebrow images instead of painted-in ones.
     pub eyes: bool,
     pub brows: bool,
+    /// Head faces: eyes closed for blinking, and pressed and carried
+    /// reactions. Only with a separate head and painted-in eyes.
+    pub blink: bool,
+    pub faces: bool,
     pub held: bool,
     /// Returned PNGs and the role each fills (`None`: not used).
     pub results: Vec<(PathBuf, Option<Role>)>,
@@ -129,6 +167,8 @@ impl Request {
             tail: false,
             eyes: false,
             brows: false,
+            blink: false,
+            faces: false,
             held: false,
             results: Vec::new(),
         }
@@ -142,6 +182,8 @@ impl Request {
             (self.tail, &[Role::Tail][..]),
             (self.eyes, &[Role::LeftEye, Role::RightEye][..]),
             (self.brows, &[Role::LeftBrow, Role::RightBrow][..]),
+            (self.blink && self.faces_possible(), &[Role::HeadBlink][..]),
+            (self.faces && self.faces_possible(), &[Role::HeadPressed, Role::HeadCarried][..]),
             (self.held, &[Role::Held][..]),
         ] {
             if on {
@@ -149,6 +191,12 @@ impl Request {
             }
         }
         out
+    }
+
+    /// Head faces replace the head art, so they need a separate head with
+    /// its eyes painted in: separate eye layers would stay open on top.
+    pub fn faces_possible(&self) -> bool {
+        self.head && !self.eyes
     }
 
     fn style(&self) -> String {
@@ -204,6 +252,9 @@ impl Request {
             Role::RightEye => facial("eye", "right"),
             Role::LeftBrow => facial("eyebrow", "left"),
             Role::RightBrow => facial("eyebrow", "right"),
+            Role::HeadBlink => "only the head, identical to head.png in position, size and outline, with the eyes gently closed as in a blink".into(),
+            Role::HeadPressed => "only the head, identical to head.png in position, size and outline, with a surprised or delighted expression, as when poked".into(),
+            Role::HeadCarried => "only the head, identical to head.png in position, size and outline, with a startled or excited expression, as when being picked up".into(),
             Role::Held => "the whole character in a carried pose, as if lifted by the scruff and dangling, at the same scale as the body file, with the eyes and eyebrows painted in".into(),
         }
     }
@@ -327,6 +378,31 @@ mod tests {
         // Without separate eyes, the face keeps them painted in.
         let plain = Request::new("ref.png".into());
         assert!(plain.brief().contains("eyes and eyebrows painted in"));
+    }
+
+    #[test]
+    fn head_faces_need_a_head_with_painted_in_eyes() {
+        let mut r = Request::new("ref.png".into());
+        r.blink = true;
+        r.faces = true;
+        assert_eq!(r.roles(), [Role::Body], "no head, no faces");
+        r.head = true;
+        assert_eq!(
+            r.roles(),
+            [Role::Body, Role::Head, Role::HeadBlink, Role::HeadPressed, Role::HeadCarried]
+        );
+        assert!(r.brief().contains("head_eyes_closed.png") && r.brief().contains("eyes gently closed"));
+        r.eyes = true;
+        assert!(!r.roles().contains(&Role::HeadBlink), "separate eyes would stay open on top");
+        for (name, role) in [
+            ("head_eyes_closed.png", Role::HeadBlink),
+            ("Head-Blink.png", Role::HeadBlink),
+            ("head_pressed.png", Role::HeadPressed),
+            ("head_carried.png", Role::HeadCarried),
+            ("held.png", Role::Held),
+        ] {
+            assert_eq!(Role::guess(Path::new(name)), Some(role), "{name}");
+        }
     }
 
     #[test]

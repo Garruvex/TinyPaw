@@ -2494,6 +2494,16 @@ impl App {
                     r.brows = on;
                 }
             }
+            UiMsg::ReferenceBlink(on) => {
+                if let Some(r) = &mut self.reference {
+                    r.blink = on;
+                }
+            }
+            UiMsg::ReferenceFaces(on) => {
+                if let Some(r) = &mut self.reference {
+                    r.faces = on;
+                }
+            }
             UiMsg::ReferenceHeld(on) => {
                 if let Some(r) = &mut self.reference {
                     r.held = on;
@@ -2544,6 +2554,11 @@ impl App {
                 let head = r.file_for(Role::Head).map(PathBuf::from);
                 let tail = r.file_for(Role::Tail).map(PathBuf::from);
                 let held = r.file_for(Role::Held).map(PathBuf::from);
+                let head_faces: Vec<(usize, PathBuf)> = r
+                    .roles()
+                    .into_iter()
+                    .filter_map(|role| Some((role.face_slot()?, PathBuf::from(r.file_for(role)?))))
+                    .collect();
                 let faces: Vec<(Role, PathBuf)> = r
                     .roles()
                     .into_iter()
@@ -2566,6 +2581,13 @@ impl App {
                             p.kind = crate::mascot::motion::PartType::Head;
                             p.motion = crate::mascot::motion::MotionSpec::default_for(p.kind);
                             p.name = "Head".into();
+                        }
+                        // Its faces: eyes closed, pressed, being carried.
+                        let index = editor.parts.len() - 1;
+                        for (slot, path) in head_faces {
+                            if let Err(e) = editor.set_image(Target::Face(index, slot), &path) {
+                                errors.push(format!("{}: {e}", path.display()));
+                            }
                         }
                     }
                     for (role, path) in faces {

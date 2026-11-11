@@ -140,6 +140,8 @@ pub enum UiMsg {
     ReferenceHead(bool),
     ReferenceEyes(bool),
     ReferenceBrows(bool),
+    ReferenceBlink(bool),
+    ReferenceFaces(bool),
     ReferenceHeld(bool),
     /// Copy the whole brief (`None`) or one file's prompt.
     ReferenceCopy(Option<crate::mascot::reference::Role>),

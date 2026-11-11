@@ -149,6 +149,23 @@ fn reference_panel<'a>(
             checkbox(r.tail).label("Moving tail (a separate tail, and a body without it)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceTail(on))).into(),
             checkbox(r.eyes).label("Separate eyes (left and right eye images)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceEyes(on))).into(),
             checkbox(r.brows).label("Separate eyebrows (left and right eyebrow images)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceBrows(on))).into(),
+            checkbox(r.blink && r.faces_possible())
+                .label("Eyes closed head, for blinking")
+                .text_size(13)
+                .on_toggle_maybe(r.faces_possible().then_some(|on| Message::Ui(UiMsg::ReferenceBlink(on))))
+                .into(),
+            checkbox(r.faces && r.faces_possible())
+                .label("Pressed and being-carried head faces")
+                .text_size(13)
+                .on_toggle_maybe(r.faces_possible().then_some(|on| Message::Ui(UiMsg::ReferenceFaces(on))))
+                .into(),
+            hint(if r.faces_possible() {
+                "Head faces replace the head for a moment: closed eyes when it blinks, and expressions when clicked or carried."
+            } else if r.head {
+                "Head faces need the eyes painted into the head; separate eye layers would stay open on top of them."
+            } else {
+                "Head faces (blinking, pressed, being carried) need a separate head."
+            }),
             hint("Eyes and eyebrows not asked for separately stay painted into the face. Separate ones become still layers that move with the head. Eyes that follow the cursor need a background, pupil and mask per eye; set those up afterwards in Artwork → Eyes."),
             checkbox(r.held).label("Held pose (the whole character while carried)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceHeld(on))).into(),
         ]),
