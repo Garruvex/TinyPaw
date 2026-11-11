@@ -145,7 +145,11 @@ fn reference_panel<'a>(
         section(vec![
             h2("Moving parts and poses"),
             hint("Optional. A single complete picture already works, including click and beat Compress."),
+            checkbox(r.head).label("Separate head (it can tilt and nod; the body comes without it)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceHead(on))).into(),
             checkbox(r.tail).label("Moving tail (a separate tail, and a body without it)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceTail(on))).into(),
+            checkbox(r.eyes).label("Separate eyes (left and right eye images)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceEyes(on))).into(),
+            checkbox(r.brows).label("Separate eyebrows (left and right eyebrow images)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceBrows(on))).into(),
+            hint("Eyes and eyebrows not asked for separately stay painted into the face. Separate ones become still layers that move with the head. Eyes that follow the cursor need a background, pupil and mask per eye; set those up afterwards in Artwork → Eyes."),
             checkbox(r.held).label("Held pose (the whole character while carried)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceHeld(on))).into(),
         ]),
         section(vec![

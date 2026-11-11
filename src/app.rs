@@ -2479,6 +2479,21 @@ impl App {
                     r.tail = on;
                 }
             }
+            UiMsg::ReferenceHead(on) => {
+                if let Some(r) = &mut self.reference {
+                    r.head = on;
+                }
+            }
+            UiMsg::ReferenceEyes(on) => {
+                if let Some(r) = &mut self.reference {
+                    r.eyes = on;
+                }
+            }
+            UiMsg::ReferenceBrows(on) => {
+                if let Some(r) = &mut self.reference {
+                    r.brows = on;
+                }
+            }
             UiMsg::ReferenceHeld(on) => {
                 if let Some(r) = &mut self.reference {
                     r.held = on;
@@ -2526,8 +2541,15 @@ impl App {
                     self.notice = Some("Assign a file to Body first.".into());
                     return Task::none();
                 };
+                let head = r.file_for(Role::Head).map(PathBuf::from);
                 let tail = r.file_for(Role::Tail).map(PathBuf::from);
                 let held = r.file_for(Role::Held).map(PathBuf::from);
+                let faces: Vec<(Role, PathBuf)> = r
+                    .roles()
+                    .into_iter()
+                    .filter(|role| role.is_face())
+                    .filter_map(|role| r.file_for(role).map(|p| (role, PathBuf::from(p))))
+                    .collect();
                 self.reference = None;
                 self.reference_thumb = None;
                 let taken: Vec<_> = self.characters.iter().map(|c| c.id).collect();
@@ -2537,6 +2559,24 @@ impl App {
                 return character_work(id, move || {
                     let mut editor = Editor::from_body(&body, &taken)?;
                     let mut errors = Vec::new();
+                    // The head first, so eyes and eyebrows ride on it.
+                    if let Some(head) = head {
+                        errors.extend(editor.set_images(Target::NewPart, vec![head]));
+                        if let Some(p) = editor.parts.last_mut() {
+                            p.kind = crate::mascot::motion::PartType::Head;
+                            p.motion = crate::mascot::motion::MotionSpec::default_for(p.kind);
+                            p.name = "Head".into();
+                        }
+                    }
+                    for (role, path) in faces {
+                        let before = editor.parts.len();
+                        errors.extend(editor.set_images(Target::EyePart, vec![path]));
+                        if editor.parts.len() > before
+                            && let Some(p) = editor.parts.last_mut()
+                        {
+                            p.name = role.label().into();
+                        }
+                    }
                     if let Some(tail) = tail {
                         errors.extend(editor.set_images(Target::NewPart, vec![tail]));
                         if let Some(p) = editor.parts.last_mut() {

@@ -11,10 +11,18 @@ use std::path::{Path, PathBuf};
 /// A file the brief asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {
-    /// The complete character, or the body with a separate tail removed.
+    /// The complete character, or the body with separate parts removed.
     Body,
+    /// A separate head, so it can tilt and nod on its own.
+    Head,
     /// A separate tail, for Sway, Wag or Hang.
     Tail,
+    /// Complete eye and eyebrow images that ride on the head. Left and
+    /// right are as the viewer sees them.
+    LeftEye,
+    RightEye,
+    LeftBrow,
+    RightBrow,
     /// The whole character in a carried pose, for Pick up's held pose.
     Held,
 }
@@ -23,7 +31,12 @@ impl Role {
     pub fn file(self) -> &'static str {
         match self {
             Role::Body => "body.png",
+            Role::Head => "head.png",
             Role::Tail => "tail.png",
+            Role::LeftEye => "left_eye.png",
+            Role::RightEye => "right_eye.png",
+            Role::LeftBrow => "left_eyebrow.png",
+            Role::RightBrow => "right_eyebrow.png",
             Role::Held => "held.png",
         }
     }
@@ -31,18 +44,50 @@ impl Role {
     pub fn label(self) -> &'static str {
         match self {
             Role::Body => "Body",
+            Role::Head => "Head",
             Role::Tail => "Tail",
+            Role::LeftEye => "Left eye",
+            Role::RightEye => "Right eye",
+            Role::LeftBrow => "Left eyebrow",
+            Role::RightBrow => "Right eyebrow",
             Role::Held => "Held pose",
         }
     }
 
-    /// The role a returned file's name suggests.
+    /// Eyes and eyebrows: still layers that move with the head.
+    pub fn is_face(self) -> bool {
+        matches!(self, Role::LeftEye | Role::RightEye | Role::LeftBrow | Role::RightBrow)
+    }
+
+    /// The role a returned file's name suggests. Eyebrows are checked
+    /// before eyes, since "eyebrow" contains "eye".
     pub fn guess(path: &Path) -> Option<Role> {
         let name = path.file_stem()?.to_str()?.to_lowercase();
-        [(Role::Held, "held"), (Role::Held, "carried"), (Role::Tail, "tail"), (Role::Body, "body")]
-            .into_iter()
-            .find(|(_, word)| name.contains(word))
-            .map(|(r, _)| r)
+        let side = |left: Role, right: Role| {
+            if name.contains("left") || name.ends_with("_l") || name.ends_with("-l") {
+                Some(left)
+            } else if name.contains("right") || name.ends_with("_r") || name.ends_with("-r") {
+                Some(right)
+            } else {
+                None
+            }
+        };
+        if name.contains("brow") {
+            return side(Role::LeftBrow, Role::RightBrow);
+        }
+        if name.contains("eye") {
+            return side(Role::LeftEye, Role::RightEye);
+        }
+        [
+            (Role::Held, "held"),
+            (Role::Held, "carried"),
+            (Role::Tail, "tail"),
+            (Role::Head, "head"),
+            (Role::Body, "body"),
+        ]
+        .into_iter()
+        .find(|(_, word)| name.contains(word))
+        .map(|(r, _)| r)
     }
 }
 
@@ -64,7 +109,11 @@ pub struct Request {
     pub style: String,
     pub canvas: u32,
     /// Optional moving parts and poses, beyond the base picture.
+    pub head: bool,
     pub tail: bool,
+    /// Separate eye and eyebrow images instead of painted-in ones.
+    pub eyes: bool,
+    pub brows: bool,
     pub held: bool,
     /// Returned PNGs and the role each fills (`None`: not used).
     pub results: Vec<(PathBuf, Option<Role>)>,
@@ -76,7 +125,10 @@ impl Request {
             reference,
             style: String::new(),
             canvas: DEFAULT_CANVAS,
+            head: false,
             tail: false,
+            eyes: false,
+            brows: false,
             held: false,
             results: Vec::new(),
         }
@@ -85,11 +137,16 @@ impl Request {
     /// The files to request, in order. A base-only request is one picture.
     pub fn roles(&self) -> Vec<Role> {
         let mut out = vec![Role::Body];
-        if self.tail {
-            out.push(Role::Tail);
-        }
-        if self.held {
-            out.push(Role::Held);
+        for (on, roles) in [
+            (self.head, &[Role::Head][..]),
+            (self.tail, &[Role::Tail][..]),
+            (self.eyes, &[Role::LeftEye, Role::RightEye][..]),
+            (self.brows, &[Role::LeftBrow, Role::RightBrow][..]),
+            (self.held, &[Role::Held][..]),
+        ] {
+            if on {
+                out.extend_from_slice(roles);
+            }
         }
         out
     }
@@ -103,20 +160,58 @@ impl Request {
         }
     }
 
+    /// What the face carries painted in, given the separate layers asked
+    /// for.
+    fn painted_face(&self) -> &'static str {
+        match (self.eyes, self.brows) {
+            (false, false) => "with the eyes and eyebrows painted in",
+            (true, false) => "with the eyebrows painted in but the eyes left out: paint plain skin or fur where the eyes sit, since they come as separate files",
+            (false, true) => "with the eyes painted in but the eyebrows left out: paint plain skin or fur where they sit, since they come as separate files",
+            (true, true) => "with the eyes and eyebrows left out: paint plain skin or fur where they sit, since they come as separate files",
+        }
+    }
+
     /// What one file should show.
     fn describe(&self, role: Role) -> String {
+        let face = self.painted_face();
+        let mut removed = Vec::new();
+        if self.head {
+            removed.push("the head (keep the neck, with a little painted overlap where the head joins)");
+        }
+        if self.tail {
+            removed.push("the tail (keep a little painted overlap where it joins)");
+        }
+        let facial = |what: &str, side: &str| {
+            format!(
+                "only the {side} {what} as the viewer sees it, complete and opaque, drawn at its exact size and position on the face, with nothing else in the image"
+            )
+        };
         match role {
-            Role::Body if self.tail => "the whole character standing or sitting at rest, with the tail left out entirely, keeping a little painted overlap where the tail joins so there is no seam".into(),
-            Role::Body => "the whole character standing or sitting at rest, eyes and face painted in".into(),
+            Role::Body if removed.is_empty() => format!("the whole character standing or sitting at rest, {face}"),
+            Role::Body if self.head => format!(
+                "the character's body at rest with {} left out entirely, so nothing of the face is in this file",
+                removed.join(" and ")
+            ),
+            Role::Body => format!(
+                "the whole character standing or sitting at rest, {face}, with {} left out entirely",
+                removed.join(" and ")
+            ),
+            Role::Head => format!(
+                "only the head, at the exact position it has on the body, {face}, with a little extra painted at the neck so it overlaps the body"
+            ),
             Role::Tail => "only the tail, in the exact position where it attaches to the body file, with a little extra painted overlap at its base".into(),
-            Role::Held => "the whole character in a carried pose, as if lifted by the scruff and dangling, at the same scale as the body file".into(),
+            Role::LeftEye => facial("eye", "left"),
+            Role::RightEye => facial("eye", "right"),
+            Role::LeftBrow => facial("eyebrow", "left"),
+            Role::RightBrow => facial("eyebrow", "right"),
+            Role::Held => "the whole character in a carried pose, as if lifted by the scruff and dangling, at the same scale as the body file, with the eyes and eyebrows painted in".into(),
         }
     }
 
     /// The shared rules every file follows, so the results line up.
     fn rules(&self) -> String {
         format!(
-            "Use the attached picture as the character reference. Style: {}. Every file is a {c}×{c} PNG with a fully transparent background, the same camera angle, scale and position, so the files line up when stacked; keep markings, colours and proportions consistent with the reference. Keep the eyes and eyebrows painted into the face. Leave transparent space around the character and don't crop it.",
+            "Use the attached picture as the character reference. Style: {}. Every file is a {c}×{c} PNG with a fully transparent background, the same camera angle, scale and position, so the files line up when stacked; keep markings, colours and proportions consistent with the reference. Leave transparent space around the character and don't crop it.",
             self.style(),
             c = self.canvas,
         )
@@ -207,10 +302,45 @@ mod tests {
         r.canvas = 2048;
         assert_eq!(r.roles(), [Role::Body, Role::Tail, Role::Held]);
         let brief = r.brief();
-        for f in ["body.png", "tail.png", "held.png", "2048×2048", "tail left out"] {
+        for f in ["body.png", "tail.png", "held.png", "2048×2048", "the tail (keep", "left out entirely"] {
             assert!(brief.contains(f), "{f}");
         }
         assert!(r.prompt(Role::Tail).contains("named tail.png"));
+    }
+
+    #[test]
+    fn separate_head_eyes_and_eyebrows_are_requested_and_left_out_elsewhere() {
+        let mut r = Request::new("ref.png".into());
+        r.head = true;
+        r.eyes = true;
+        r.brows = true;
+        assert_eq!(
+            r.roles(),
+            [Role::Body, Role::Head, Role::LeftEye, Role::RightEye, Role::LeftBrow, Role::RightBrow]
+        );
+        let brief = r.brief();
+        for f in ["head.png", "left_eye.png", "right_eye.png", "left_eyebrow.png", "right_eyebrow.png"] {
+            assert!(brief.contains(f), "{f}");
+        }
+        assert!(brief.contains("eyes and eyebrows left out"), "the head leaves room for them");
+        assert!(!brief.contains("eyes and eyebrows painted in\n"));
+        // Without separate eyes, the face keeps them painted in.
+        let plain = Request::new("ref.png".into());
+        assert!(plain.brief().contains("eyes and eyebrows painted in"));
+    }
+
+    #[test]
+    fn face_files_match_by_side_and_eyebrows_before_eyes() {
+        for (name, role) in [
+            ("Left_Eye.png", Role::LeftEye),
+            ("eye-right.png", Role::RightEye),
+            ("left_eyebrow.png", Role::LeftBrow),
+            ("brow_r.png", Role::RightBrow),
+            ("cat-head.png", Role::Head),
+        ] {
+            assert_eq!(Role::guess(Path::new(name)), Some(role), "{name}");
+        }
+        assert_eq!(Role::guess(Path::new("eye.png")), None, "no side, no guess");
     }
 
     #[test]

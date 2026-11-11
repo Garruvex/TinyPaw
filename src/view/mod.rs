@@ -137,6 +137,9 @@ pub enum UiMsg {
     ReferenceStyle(String),
     ReferenceCanvas(u32),
     ReferenceTail(bool),
+    ReferenceHead(bool),
+    ReferenceEyes(bool),
+    ReferenceBrows(bool),
     ReferenceHeld(bool),
     /// Copy the whole brief (`None`) or one file's prompt.
     ReferenceCopy(Option<crate::mascot::reference::Role>),
