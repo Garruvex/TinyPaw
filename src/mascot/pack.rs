@@ -326,6 +326,9 @@ pub(super) struct Manifest {
     /// art drawn on that original lines up.
     pub(super) source: Option<Source>,
     pub(super) editor: Vec<super::placement::SourceRecord>,
+    /// Whether the resting point follows the body art, kept in the editor
+    /// metadata. Packs without it are manual, so their anchor is kept.
+    pub(super) rest: super::rest::RestMode,
     /// What the character says, and its bubble's look.
     pub(super) lines: Lines,
     /// How it bops to music, if not the default nod.
@@ -737,8 +740,11 @@ impl Manifest {
         if let Some(author) = &self.author {
             m["author"] = json!(author);
         }
-        if !self.editor.is_empty() {
+        if !self.editor.is_empty() || self.rest == super::rest::RestMode::Auto {
             m["editor"] = super::placement::to_json(&self.editor);
+            // An optional field: older builds read version-1 editor
+            // metadata and ignore it.
+            m["editor"]["rest_point"] = json!(self.rest.name());
         }
         if let Some(src) = &self.source {
             let (x, y, w, h) = src.visible;
@@ -960,6 +966,10 @@ fn parse_manifest(text: &str) -> Result<Manifest, String> {
         poses,
         source,
         editor: Vec::new(),
+        rest: m["editor"]["rest_point"]
+            .as_str()
+            .and_then(super::rest::RestMode::parse)
+            .unwrap_or_default(),
         lines: Lines::parse(&m["lines"], &m["bubble"], false)?,
         // A style this version doesn't know bops the default way.
         bop: m["music"]["bop"].as_str().and_then(Bop::parse),
@@ -1186,7 +1196,7 @@ pub fn draft_from_png(path: &Path) -> Result<Draft, String> {
         image: Handle::from_rgba(art.width(), art.height(), art.as_raw().clone()),
         width: art.width(),
         height: art.height(),
-        ground: guess_ground(&art),
+        ground: super::rest::estimate(&art).unwrap_or((0.5, 1.0)),
         art: Arc::new(art),
         source: Source { size, visible },
     })
@@ -1216,33 +1226,6 @@ fn trim(art: &RgbaImage) -> Option<(RgbaImage, (u32, u32, u32, u32))> {
         i64::from(MARGIN),
     );
     Some((out, (x0, y0, w, h)))
-}
-
-/// The middle of the lowest few rows of visible art: usually the feet.
-fn guess_ground(art: &RgbaImage) -> (f32, f32) {
-    let (w, h) = art.dimensions();
-    let Some(bottom) = (0..h)
-        .rev()
-        .find(|&y| (0..w).any(|x| art.get_pixel(x, y)[3] >= SOLID))
-    else {
-        return (0.5, 1.0);
-    };
-    let band = (h / 25).max(1);
-    let (mut sum, mut count) = (0.0f64, 0u32);
-    for y in bottom.saturating_sub(band)..=bottom {
-        for x in 0..w {
-            if art.get_pixel(x, y)[3] >= SOLID {
-                sum += f64::from(x) + 0.5;
-                count += 1;
-            }
-        }
-    }
-    let x = if count == 0 {
-        0.5
-    } else {
-        (sum / f64::from(count)) as f32 / w as f32
-    };
-    (x, (bottom + 1) as f32 / h as f32)
 }
 
 fn slug(name: &str) -> String {
@@ -1295,10 +1278,6 @@ fn install_into_guarded(
     if name.is_empty() {
         return Err("give the character a name".into());
     }
-    let (gx, gy) = draft.ground;
-    if !(0.0..=1.0).contains(&gx) || !(0.0..=1.0).contains(&gy) {
-        return Err("click where the character stands".into());
-    }
     let manifest = Manifest {
         id: unique_id(root, name, taken),
         name: name.chars().take(60).collect(),
@@ -1315,6 +1294,7 @@ fn install_into_guarded(
         }],
         source: Some(draft.source),
         editor: Vec::new(),
+        rest: super::rest::RestMode::Auto,
         lines: Lines::default(),
         bop: None,
     };
@@ -2357,6 +2337,22 @@ mod tests {
     }
 
     #[test]
+    fn a_pack_without_a_rest_mode_keeps_its_anchor_by_hand() {
+        use super::super::rest::RestMode;
+        let base = r#"{"schema_version":1,"id":"cat","name":"Cat","canvas":[64,64],
+            "default_pose":"sit","poses":{"sit":{"ground_anchor":[0.5,0.9],"body":"sit/body.png"}}"#;
+        let m = parse_manifest(&format!("{base}}}")).unwrap();
+        assert_eq!(m.rest, RestMode::Manual);
+        let auto = format!(r#"{base},"editor":{{"version":1,"layers":[],"rest_point":"auto"}}}}"#);
+        let m = parse_manifest(&auto).unwrap();
+        assert_eq!(m.rest, RestMode::Auto);
+        // Written back the same way, and read again.
+        let again = parse_manifest(&m.to_json().to_string()).unwrap();
+        assert_eq!(again.rest, RestMode::Auto);
+        assert_eq!(again.poses[0].ground, (0.5, 0.9));
+    }
+
+    #[test]
     fn one_png_round_trip() {
         let dir = scratch("png");
         let png = dir.join("My Cat.png");
@@ -2375,6 +2371,9 @@ mod tests {
         let c = install_into(&root, &draft, &["my-cat"]).unwrap();
         assert_eq!(c.id, "my-cat-2", "taken IDs are skipped");
         assert!(c.thumbnail().is_some());
+        // A new one-image character rests automatically, written explicitly.
+        let m = read_manifest(c.folder.as_ref().unwrap()).unwrap();
+        assert_eq!(m.rest, super::super::rest::RestMode::Auto);
         // A part drawn on the original 200 × 300 canvas lines up with the
         // trimmed body; other sizes are refused with both sizes named.
         let m = read_manifest(c.folder.as_ref().unwrap()).unwrap();

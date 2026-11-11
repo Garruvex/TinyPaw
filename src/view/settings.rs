@@ -1652,10 +1652,11 @@ fn character_page<'a>(
             return (page.push(detail).into(), side);
         }
     }
-    let eyes: Element<'a, Message> = if selected.is_some_and(|c| c.is_builtin()) {
+    let tracks = v.motion.is_some_and(|m| m.rig().eye_point().is_some());
+    let eyes: Element<'a, Message> = if tracks {
         check("Eyes follow the cursor", s.bool(mascot::EYES), mascot::EYES)
     } else {
-        hint("Eyes follow the cursor when a character has separate eye art.")
+        hint(format!("{name}'s eyes are part of its artwork, so they can't follow the cursor. Tracking eyes need a head with separate white, pupil and mask art (Edit art → Eyes)."))
     };
     page = page
         .push(section(vec![
@@ -1717,6 +1718,20 @@ fn motion_section<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'
     for (i, (label, spec)) in m.labels.iter().zip(&m.specs).enumerate() {
         let kind = m.kinds[i];
         let number = |value: f32| text(format!("{value:.2}")).size(12).color(theme::MUTED).width(34);
+        let speed: Element<'a, Message> = if spec.preset.uses_speed() {
+            row![
+                text("Speed").size(12).color(theme::MUTED).width(64),
+                slider(0.0..=2.0, spec.speed, move |x| Message::Ui(UiMsg::MotionSpeed(i, x)))
+                    .step(0.05_f32)
+                    .style(theme::range),
+                number(spec.speed),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center)
+            .into()
+        } else {
+            hint("No idle motion, so no speed: it moves only when dragged or with music.")
+        };
         rows = rows.push(
             column![
                 row![
@@ -1741,15 +1756,7 @@ fn motion_section<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'
                 ]
                 .spacing(10)
                 .align_y(Alignment::Center),
-                row![
-                    text("Speed").size(12).color(theme::MUTED).width(64),
-                    slider(0.0..=2.0, spec.speed, move |x| Message::Ui(UiMsg::MotionSpeed(i, x)))
-                        .step(0.05_f32)
-                        .style(theme::range),
-                    number(spec.speed),
-                ]
-                .spacing(10)
-                .align_y(Alignment::Center),
+                speed,
             ]
             .spacing(6),
         );
@@ -1770,7 +1777,7 @@ fn motion_section<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'
         .spacing(8)
         .align_y(Alignment::Center)
         .into(),
-        hint("Pick how each part moves. Strength and Speed run from 0 to 2; 1 is the preset as designed. Changes show in the preview straight away and on the desktop once saved."),
+        hint("Pick how each part moves. Strength scales idle, drag and music motion; Speed paces idle motion. Both run from 0 to 2; 1 is the preset as designed. Changes show in the preview straight away and on the desktop once saved."),
         rows.into(),
     ])
 }
@@ -1861,7 +1868,6 @@ fn lines_section<'a>(
         .spacing(6)
     };
     let b = m.lines.bubble;
-    let minutes = |x: f64| format!("{x:.0} min");
     section(vec![
         row![
             h2("Speech lines"),
@@ -1885,27 +1891,7 @@ fn lines_section<'a>(
             s.bool(mascot::QUIET_LINES),
             mascot::QUIET_LINES,
         ),
-        row![
-            text("Idle lines every").size(12).color(theme::MUTED).width(110),
-            slider(1.0..=30.0, s.float(mascot::IDLE_MIN), |x| Message::Set(
-                mascot::IDLE_MIN,
-                Value::Float(x)
-            ))
-            .step(1.0)
-            .style(theme::range),
-            text(minutes(s.float(mascot::IDLE_MIN))).size(12).width(48),
-            text("to").size(12).color(theme::MUTED),
-            slider(1.0..=30.0, s.float(mascot::IDLE_MAX), |x| Message::Set(
-                mascot::IDLE_MAX,
-                Value::Float(x)
-            ))
-            .step(1.0)
-            .style(theme::range),
-            text(minutes(s.float(mascot::IDLE_MAX))).size(12).width(48),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center)
-        .into(),
+        idle_interval(s),
         row![
             text("Character volume").size(12).color(theme::MUTED).width(110),
             slider(0.0..=1.0, s.float(mascot::VOICE_VOLUME), |x| Message::Set(
@@ -1963,6 +1949,36 @@ fn lines_section<'a>(
     ])
 }
 
+
+/// Idle lines' interval, shown only while idle lines can appear.
+fn idle_interval<'a>(s: &crate::registry::SettingValues) -> Element<'a, Message> {
+    if !s.bool(mascot::LINES) || s.bool(mascot::QUIET_LINES) {
+        return hint("Idle lines are off while speech lines are hidden or Quiet is on.");
+    }
+    let minutes = |x: f64| format!("{x:.0} min");
+    row![
+        text("Idle lines every").size(12).color(theme::MUTED).width(110),
+        slider(1.0..=30.0, s.float(mascot::IDLE_MIN), |x| Message::Set(
+            mascot::IDLE_MIN,
+            Value::Float(x)
+        ))
+        .step(1.0)
+        .style(theme::range),
+        text(minutes(s.float(mascot::IDLE_MIN))).size(12).width(48),
+        text("to").size(12).color(theme::MUTED),
+        slider(1.0..=30.0, s.float(mascot::IDLE_MAX), |x| Message::Set(
+            mascot::IDLE_MAX,
+            Value::Float(x)
+        ))
+        .step(1.0)
+        .style(theme::range),
+        text(minutes(s.float(mascot::IDLE_MAX))).size(12).width(48),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center)
+    .into()
+}
+
 /// The Music tab: react to playback, how strongly, and a live meter.
 /// A live meter `level` (0–1) full; `width` 0 fills the row.
 fn level_bar<'a>(level: f32, width: f32) -> Element<'a, Message> {
@@ -2017,10 +2033,18 @@ fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         Source::Input(_) => Some(v.music_source.clone()),
         _ => None,
     };
-    section(vec![
+    let intro = vec![
         h2("Music response"),
         check("React to playback", on, mascot::MUSIC),
         hint("Moves with the loudness of what's playing on this PC. TinyPaw's own sounds are left out, and nothing is recorded."),
+    ];
+    if !on {
+        // Nothing below has an effect, or a meter to read, while off.
+        return section(intro);
+    }
+    let follow = s.bool(mascot::BEAT);
+    let mut items = intro;
+    items.extend([
         text("Listen to").size(12).color(theme::MUTED).into(),
         rows.into(),
         row![
@@ -2076,8 +2100,11 @@ fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         .align_y(Alignment::Center)
         .into(),
         hint("Nod is relaxed. Groove dips on the beat and leans side to side. Rubber hose hops every beat, squashing and stretching like an old cartoon. Saved for this character, and carried when you export it."),
-        check("Follow beat (trial)", s.bool(mascot::BEAT), mascot::BEAT),
+        check("Follow beat (trial)", follow, mascot::BEAT),
         hint("Nods land on the beat instead of a steady bob. It listens to what's playing (TinyPaw's own sounds are held off while they play) and keeps nothing."),
+    ]);
+    if follow {
+        items.extend([
         row![
             text("Beat").size(12).color(theme::MUTED).width(110),
             text(v.beat.clone()).size(12).color(theme::MUTED).width(Length::Fill),
@@ -2107,8 +2134,10 @@ fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         .spacing(10)
         .align_y(Alignment::Center)
         .into(),
-        hint("Try it without music using Music in the preview."),
-    ])
+        ]);
+    }
+    items.push(hint("Try it without music using Music in the preview."));
+    section(items)
 }
 
 /// A setting value with its display label, for pick lists.
@@ -2258,18 +2287,11 @@ fn art_page<'a>(e: &'a crate::mascot::editor::Editor, busy: bool) -> Element<'a,
     };
 
     // What the preview's clicks move.
-    let mut targets = vec![
-        seg(
-            "Body",
-            e.selected == Selected::Body,
-            Message::Ui(UiMsg::ArtSelect(Selected::Body)),
-        ),
-        seg(
-            "Ground",
-            e.selected == Selected::Ground,
-            Message::Ui(UiMsg::ArtSelect(Selected::Ground)),
-        ),
-    ];
+    let mut targets = vec![seg(
+        "Body",
+        e.selected == Selected::Body,
+        Message::Ui(UiMsg::ArtSelect(Selected::Body)),
+    )];
     for (i, p) in e.parts.iter().enumerate() {
         targets.push(
             button(text(format!("{} {}", i + 1, p.kind)).size(12))
@@ -2484,7 +2506,7 @@ fn art_page<'a>(e: &'a crate::mascot::editor::Editor, busy: bool) -> Element<'a,
                 seg("Set attachment point",e.mode==crate::mascot::editor::Mode::Pivot,Message::Ui(UiMsg::ArtMode(crate::mascot::editor::Mode::Pivot)))].spacing(4).into(),
             targets.into(),
             placement_controls(e),
-            hint("Ground is where the feet stand. A part turns around its pivot: the neck for a head, the root for a tail or ear."),
+            hint("A part turns around its attachment point: the neck for a head, the root for a tail or ear."),
         ]),
         section(vec![
             h2("Moving parts"),
@@ -2498,11 +2520,48 @@ fn art_page<'a>(e: &'a crate::mascot::editor::Editor, busy: bool) -> Element<'a,
             hint("Ears and hair ride on the head. Back draws behind the body (or behind the head when on it)."),
         ]),
         eyes_section,
+        section(vec![
+            h2("Advanced"),
+            resting_point(e),
+        ]),
         hint(e.validation_error().unwrap_or_else(||"Drag to arrange; arrow keys nudge one pixel, Shift nudges ten. Artwork is resampled from its original source only when saved.".into())),
-        hint("Motion presets, strength and speed come in the Motion tab, next."),
     ]
     .spacing(22)
     .max_width(640)
+    .into()
+}
+
+/// Advanced → Resting point: Automatic, Adjust manually, Reset.
+fn resting_point<'a>(e: &'a crate::mascot::editor::Editor) -> Element<'a, Message> {
+    use crate::mascot::editor::RestAction;
+    use crate::mascot::rest::RestMode;
+    let state = match (e.adjusting_rest, e.rest) {
+        (true, _) => "Click the preview where the character rests; arrow keys nudge it.",
+        (false, RestMode::Auto) => "Automatic: estimated from the body's lowest visible art.",
+        (false, RestMode::Manual) => "Set by hand. Reset to estimate it from the body again.",
+    };
+    let action = |label: &'static str, a: RestAction| {
+        button(text(label).size(12))
+            .padding([5, 10])
+            .style(theme::secondary)
+            .on_press(Message::Ui(UiMsg::ArtRest(a)))
+    };
+    let mut buttons = row![].spacing(6);
+    buttons = if e.adjusting_rest {
+        buttons.push(action("Done", RestAction::Done))
+    } else {
+        buttons.push(action("Adjust manually", RestAction::Adjust))
+    };
+    if e.rest == RestMode::Manual {
+        buttons = buttons.push(action("Reset", RestAction::Reset));
+    }
+    column![
+        text("Resting point").size(13),
+        hint("Where the character rests when standing or bouncing."),
+        buttons,
+        hint(state),
+    ]
+    .spacing(6)
     .into()
 }
 
@@ -2571,7 +2630,7 @@ fn placement_controls<'a>(e: &'a crate::mascot::editor::Editor) -> Element<'a, M
 fn art_preview<'a>(e: &'a crate::mascot::editor::Editor, busy: bool) -> Element<'a, Message> {
     use crate::mascot::editor::Selected;
     let placing = match e.selected {
-        Selected::Ground => "Placing: ground".to_owned(),
+        _ if e.adjusting_rest => "Placing: resting point".to_owned(),
         Selected::Body => "Selected: body".to_owned(),
         Selected::Face(i, slot) => format!(
             "Selected: head {} {}",
@@ -2639,7 +2698,7 @@ impl canvas::Program<Message> for ArtPreview<'_> {
         bounds: iced::Rectangle,
         cursor: iced::mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
-        use crate::mascot::editor::{Mode, Selected};
+        use crate::mascot::editor::Mode;
         use iced::mouse::{Button, Event};
         if self.busy {
             state.drag = None;
@@ -2671,9 +2730,7 @@ impl canvas::Program<Message> for ArtPreview<'_> {
                     return Some(canvas::Action::capture());
                 }
                 let (x, y) = ((p.x - r.x) / r.width, (p.y - r.y) / r.height);
-                let msg = if self.editor.mode == Mode::Pivot
-                    || self.editor.selected == Selected::Ground
-                {
+                let msg = if self.editor.mode == Mode::Pivot || self.editor.adjusting_rest {
                     UiMsg::ArtClick(x, y)
                 } else {
                     let target = self.editor.hit_target(x, y)?;
@@ -2781,24 +2838,22 @@ impl canvas::Program<Message> for ArtPreview<'_> {
         }
         let at = |(x, y): (f32, f32)| iced::Point::new(r.x + x * r.width, r.y + y * r.height);
         let ring = Stroke::default().with_color(Color::WHITE).with_width(1.5);
-        let ground = at(e.ground);
-        let amber = Color::from_rgb8(0xF5, 0x9E, 0x0B);
-        frame.stroke(
-            &Path::line(
-                iced::Point::new(r.x, ground.y),
-                iced::Point::new(r.x + r.width, ground.y),
-            ),
-            Stroke::default()
-                .with_color(Color { a: 0.7, ..amber })
-                .with_width(1.0),
-        );
-        let ground_r = if e.selected == Selected::Ground {
-            7.0
-        } else {
-            5.0
-        };
-        frame.fill(&Path::circle(ground, ground_r), amber);
-        frame.stroke(&Path::circle(ground, ground_r), ring);
+        // The resting point's guide shows only while it is being corrected.
+        if e.adjusting_rest {
+            let ground = at(e.ground);
+            let amber = Color::from_rgb8(0xF5, 0x9E, 0x0B);
+            frame.stroke(
+                &Path::line(
+                    iced::Point::new(r.x, ground.y),
+                    iced::Point::new(r.x + r.width, ground.y),
+                ),
+                Stroke::default()
+                    .with_color(Color { a: 0.7, ..amber })
+                    .with_width(1.0),
+            );
+            frame.fill(&Path::circle(ground, 7.0), amber);
+            frame.stroke(&Path::circle(ground, 7.0), ring);
+        }
         for (i, p) in e.parts.iter().enumerate() {
             let on = e.selected == Selected::Part(i);
             let c = at(p.pivot);
@@ -2822,14 +2877,13 @@ impl canvas::Program<Message> for ArtPreview<'_> {
     }
 }
 
-/// "Add character": name it, check it on light and dark, click its feet.
+/// "Add character": name it, check it on light and dark, use it.
 fn new_character<'a>(draft: &'a crate::mascot::pack::Draft, busy: bool) -> Element<'a, Message> {
     column![
         h2("New character"),
-        canvas(GroundPicker { draft })
+        canvas(DraftPreview { draft })
             .width(Length::Fill)
             .height(260),
-        hint("Click where it stands. The marker is suggested from the bottom of the art."),
         iced::widget::text_input("Name", &draft.name)
             .on_input(|n| Message::Ui(UiMsg::CharacterName(n)))
             .size(14)
@@ -2878,13 +2932,12 @@ fn new_character<'a>(draft: &'a crate::mascot::pack::Draft, busy: bool) -> Eleme
     .into()
 }
 
-/// The draft's art on light and dark halves, with a ground marker that a
-/// click moves.
-struct GroundPicker<'a> {
+/// The draft's art on light and dark halves.
+struct DraftPreview<'a> {
     draft: &'a crate::mascot::pack::Draft,
 }
 
-impl GroundPicker<'_> {
+impl DraftPreview<'_> {
     fn image_rect(&self, bounds: iced::Size) -> iced::Rectangle {
         let pad = 16.0;
         let (w, h) = (self.draft.width as f32, self.draft.height as f32);
@@ -2900,28 +2953,8 @@ impl GroundPicker<'_> {
     }
 }
 
-impl canvas::Program<Message> for GroundPicker<'_> {
+impl canvas::Program<Message> for DraftPreview<'_> {
     type State = ();
-
-    fn update(
-        &self,
-        _state: &mut (),
-        event: &iced::Event,
-        bounds: iced::Rectangle,
-        cursor: iced::mouse::Cursor,
-    ) -> Option<canvas::Action<Message>> {
-        if let iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) =
-            event
-            && let Some(p) = cursor.position_in(bounds)
-        {
-            let r = self.image_rect(bounds.size());
-            if r.contains(p) {
-                let message = UiMsg::CharacterGround((p.x - r.x) / r.width, (p.y - r.y) / r.height);
-                return Some(canvas::Action::publish(Message::Ui(message)).and_capture());
-            }
-        }
-        None
-    }
 
     fn draw(
         &self,
@@ -2931,7 +2964,7 @@ impl canvas::Program<Message> for GroundPicker<'_> {
         bounds: iced::Rectangle,
         _cursor: iced::mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
-        use iced::widget::canvas::{Frame, Path, Stroke};
+        use iced::widget::canvas::{Frame, Path};
         let size = bounds.size();
         let mut frame = Frame::new(renderer, size);
         frame.fill(
@@ -2945,24 +2978,6 @@ impl canvas::Program<Message> for GroundPicker<'_> {
         );
         let r = self.image_rect(size);
         frame.draw_image(r, canvas::Image::new(self.draft.image.clone()));
-        let (gx, gy) = self.draft.ground;
-        let at = iced::Point::new(r.x + gx * r.width, r.y + gy * r.height);
-        // The ground line, then the feet marker.
-        let line = Stroke::default()
-            .with_color(Color::from_rgba8(0xF5, 0x9E, 0x0B, 0.7))
-            .with_width(1.0);
-        frame.stroke(
-            &Path::line(
-                iced::Point::new(r.x, at.y),
-                iced::Point::new(r.x + r.width, at.y),
-            ),
-            line,
-        );
-        frame.fill(&Path::circle(at, 6.0), Color::from_rgb8(0xF5, 0x9E, 0x0B));
-        frame.stroke(
-            &Path::circle(at, 6.0),
-            Stroke::default().with_color(Color::WHITE).with_width(1.5),
-        );
         vec![frame.into_geometry()]
     }
 }

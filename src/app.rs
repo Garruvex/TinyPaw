@@ -1645,11 +1645,6 @@ impl App {
                     d.name = name.chars().take(60).collect();
                 }
             }
-            UiMsg::CharacterGround(x, y) => {
-                if let Some(d) = &mut self.character_draft {
-                    d.ground = (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
-                }
-            }
             UiMsg::CancelCharacter => {
                 self.cancel_character_job();
                 self.character_draft = None;
@@ -2039,6 +2034,17 @@ impl App {
             UiMsg::ArtMode(mode) => {
                 if let Some(e) = &mut self.art {
                     e.mode = mode;
+                    e.finish_rest();
+                }
+            }
+            UiMsg::ArtRest(action) => {
+                if let Some(e) = &mut self.art {
+                    use crate::mascot::editor::RestAction;
+                    match action {
+                        RestAction::Adjust => e.adjust_rest(),
+                        RestAction::Done => e.finish_rest(),
+                        RestAction::Reset => e.reset_rest(),
+                    }
                 }
             }
             UiMsg::ArtField(i, text) => {

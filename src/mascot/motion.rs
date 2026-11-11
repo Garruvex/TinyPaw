@@ -142,6 +142,15 @@ impl Preset {
     fn springy(self) -> bool {
         matches!(self, Preset::Floppy | Preset::Spring | Preset::Hang)
     }
+
+    /// Whether the preset has idle motion, the only thing Speed paces.
+    /// Strength always applies: it also scales drag and music motion.
+    pub fn uses_speed(self) -> bool {
+        !matches!(
+            self,
+            Preset::Still | Preset::Hang | Preset::Fold | Preset::Floppy | Preset::Spring
+        )
+    }
 }
 
 /// How the whole character bops to music.
@@ -698,6 +707,14 @@ mod tests {
         assert!(pose.angles.iter().all(|a| *a == 0.0));
         assert_eq!((pose.lean, pose.squash), (0.0, 0.0));
         assert_eq!(pose.expression, Expression::Dragging);
+    }
+
+    #[test]
+    fn speed_is_offered_only_where_it_paces_idle_motion() {
+        for preset in Preset::ALL {
+            let still = (0..20).all(|i| idle_angle(preset, i as f32 * 0.37, false) == 0.0);
+            assert_eq!(preset.uses_speed(), !still, "{preset}");
+        }
     }
 
     #[test]

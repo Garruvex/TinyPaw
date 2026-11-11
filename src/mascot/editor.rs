@@ -11,6 +11,7 @@ use iced::advanced::image::Handle;
 use image::RgbaImage;
 
 use super::motion::{MotionSpec, PartType};
+use super::rest::RestMode;
 use super::pack::{
     self, Character, EyeDef, Manifest, PartDef, Pose, Source, fit_png, installed_folder,
     read_manifest, read_png, stage_and_install,
@@ -99,7 +100,6 @@ pub enum EyeSlot {
 /// What the preview's clicks move.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Selected {
-    Ground,
     Body,
     Face(usize, usize),
     Part(usize),
@@ -113,6 +113,14 @@ pub enum Target {
     /// A head face: part index and face slot (blink, pressed, dragging).
     Face(usize, usize),
     Eye(usize, EyeSlot),
+}
+
+/// Advanced → Resting point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestAction {
+    Adjust,
+    Done,
+    Reset,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,6 +140,7 @@ struct Snapshot {
     parts: Vec<EditPart>,
     eyes: Vec<EditEye>,
     ground: (f32, f32),
+    rest: RestMode,
     selected: Selected,
     canvas: (u32, u32),
 }
@@ -145,6 +154,11 @@ pub struct Editor {
     pub name: String,
     pub canvas: (u32, u32),
     pub ground: (f32, f32),
+    /// Whether `ground` follows the body art or was set by hand.
+    pub rest: RestMode,
+    /// The temporary Adjust manually tool: preview clicks move the
+    /// resting point until Done.
+    pub adjusting_rest: bool,
     pub body: Layer,
     pub parts: Vec<EditPart>,
     pub eyes: Vec<EditEye>,
@@ -215,16 +229,18 @@ impl Editor {
                 travel: e.max_offset.0,
             });
         }
-        Ok(Self {
+        let mut editor = Self {
             id,
             name: m.name.clone(),
             canvas: m.canvas,
             ground: pose.ground,
+            rest: m.rest,
+            adjusting_rest: false,
             body: png(&pose.body)?,
             parts,
             eyes,
-            selected: Selected::Ground,
-            mode: Mode::Pivot,
+            selected: Selected::Body,
+            mode: Mode::Arrange,
             zoom: 1.0,
             background: Background::Checker,
             fields: Default::default(),
@@ -249,7 +265,10 @@ impl Editor {
                 .cloned()
                 .collect(),
             pose: m.default_pose.clone(),
-        })
+        };
+        // The body starts selected, so its fields show its placement.
+        editor.sync_fields();
+        Ok(editor)
     }
 
     pub fn canvas_hint(&self) -> String {
@@ -376,6 +395,7 @@ impl Editor {
             Target::Body => {
                 self.body = layer;
                 self.select(Selected::Body);
+                self.settle_rest();
             }
             Target::NewPart => {
                 if self.parts.len() >= 16 {
@@ -459,21 +479,59 @@ impl Editor {
                 p.on_head = false;
             }
         }
-        self.selected = Selected::Ground;
+        self.select(Selected::Body);
     }
 
-    /// A click on the preview, as canvas fractions.
+    /// A click on the preview, as canvas fractions: the resting point while
+    /// adjusting it, otherwise the selected part's joint.
     pub fn click(&mut self, x: f32, y: f32) {
         let at = (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
-        match self.selected {
-            Selected::Ground => self.ground = at,
-            Selected::Part(i) | Selected::Face(i, _) => {
-                if let Some(p) = self.parts.get_mut(i) {
-                    p.pivot = at;
-                }
-            }
-            Selected::Body => self.ground = at,
+        if self.adjusting_rest {
+            self.ground = at;
+            self.rest = RestMode::Manual;
+            return;
         }
+        if let Selected::Part(i) | Selected::Face(i, _) = self.selected
+            && let Some(p) = self.parts.get_mut(i)
+        {
+            p.pivot = at;
+        }
+    }
+
+    /// The automatic resting point for the body as arranged, as canvas
+    /// fractions.
+    pub fn auto_rest(&self) -> Option<(f32, f32)> {
+        let baked = placement::bake(&self.body.image, self.body.placement, self.canvas);
+        super::rest::estimate(&baked)
+    }
+
+    /// Re-estimates an automatic resting point once the body has settled
+    /// (replaced, or a save); a manual one is left alone.
+    pub fn settle_rest(&mut self) {
+        if self.rest == RestMode::Auto
+            && let Some(at) = self.auto_rest()
+        {
+            self.ground = at;
+        }
+    }
+
+    /// Advanced → Resting point → Adjust manually: starts from the current
+    /// point; clicks move it until Done.
+    pub fn adjust_rest(&mut self) {
+        self.settle_rest();
+        self.adjusting_rest = true;
+    }
+
+    pub fn finish_rest(&mut self) {
+        self.adjusting_rest = false;
+    }
+
+    /// Back to the automatic estimate.
+    pub fn reset_rest(&mut self) {
+        self.checkpoint();
+        self.rest = RestMode::Auto;
+        self.adjusting_rest = false;
+        self.settle_rest();
     }
 
     pub fn add_eye(&mut self) {
@@ -563,11 +621,15 @@ impl Editor {
             }
             eyes.push(eye);
         }
+        let ground = match self.rest {
+            RestMode::Auto => self.auto_rest().unwrap_or(self.ground),
+            RestMode::Manual => self.ground,
+        };
         let mut poses = vec![Pose {
             // Layered poses give each part its own motion.
             whole: None,
             name: self.pose.clone(),
-            ground: self.ground,
+            ground,
             body: format!("{dir}/body.png"),
             parts,
             eyes,
@@ -583,6 +645,7 @@ impl Editor {
             default_pose: self.pose.clone(),
             poses,
             source: self.source,
+            rest: self.rest,
             editor: files
                 .iter()
                 .enumerate()
@@ -704,6 +767,8 @@ impl Editor {
             name,
             canvas,
             ground: (0.5, 0.9),
+            rest: RestMode::Auto,
+            adjusting_rest: false,
             body: Layer::new(RgbaImage::new(1, 1)),
             parts: Vec::new(),
             eyes: Vec::new(),
@@ -725,9 +790,6 @@ impl Editor {
             other_sources: Vec::new(),
         };
         editor.set_image(Target::Body, path)?;
-        if let Some((x, _, bottom)) = editor.body.visible_centre(canvas) {
-            editor.ground = (x, bottom);
-        }
         editor.undo.clear();
         Ok(editor)
     }
@@ -738,6 +800,7 @@ impl Editor {
             parts: self.parts.clone(),
             eyes: self.eyes.clone(),
             ground: self.ground,
+            rest: self.rest,
             selected: self.selected,
             canvas: self.canvas,
         }
@@ -747,6 +810,7 @@ impl Editor {
         self.parts = s.parts;
         self.eyes = s.eyes;
         self.ground = s.ground;
+        self.rest = s.rest;
         self.canvas = s.canvas;
         self.canvas_fields = [s.canvas.0.to_string(), s.canvas.1.to_string()];
         self.select(s.selected);
@@ -802,7 +866,6 @@ impl Editor {
                 .get(i)
                 .and_then(|p| p.faces.get(s))
                 .and_then(Option::as_ref),
-            Selected::Ground => None,
         }
     }
     fn selected_layer_mut(&mut self) -> Option<&mut Layer> {
@@ -814,7 +877,6 @@ impl Editor {
                 .get_mut(i)
                 .and_then(|p| p.faces.get_mut(s))
                 .and_then(Option::as_mut),
-            Selected::Ground => None,
         }
     }
     pub fn select(&mut self, selected: Selected) {
@@ -1014,7 +1076,7 @@ impl Editor {
             .chain(self.parts.iter().map(|p| p.pivot))
             .any(|p| !(0.0..=1.0).contains(&p.0) || !(0.0..=1.0).contains(&p.1))
         {
-            return Some("Ground and attachment points must stay inside the stage. Enlarge the stage or adjust the joint.".into());
+            return Some("The resting point and attachment points must stay inside the stage. Enlarge the stage or adjust the joint.".into());
         }
         None
     }
@@ -1051,14 +1113,16 @@ impl Editor {
         self.canvas_fields[axis] = text;
     }
     pub fn nudge(&mut self, dx: f32, dy: f32) {
-        if self.mode == Mode::Arrange && self.selected != Selected::Ground {
+        if self.mode == Mode::Arrange && !self.adjusting_rest {
             self.translate(dx, dy);
         } else {
             let at = match self.selected {
+                _ if self.adjusting_rest => self.ground,
                 Selected::Part(i) | Selected::Face(i, _) => {
-                    self.parts.get(i).map(|p| p.pivot).unwrap_or(self.ground)
+                    let Some(p) = self.parts.get(i) else { return };
+                    p.pivot
                 }
-                _ => self.ground,
+                Selected::Body => return,
             };
             self.click(
                 at.0 + dx / self.canvas.0 as f32,
@@ -1376,6 +1440,39 @@ mod tests {
             reopened.parts[0].layer.image.dimensions(),
             e.parts[0].layer.image.dimensions()
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_resting_point_follows_the_body_until_set_by_hand() {
+        let dir = std::env::temp_dir().join(format!("tinypaw-rest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (root, c) = test_install_folder(&dir, OnDuplicate::Ask);
+        let mut e = Editor::open_in(&root, &c).unwrap();
+        // An installed pack opens in Arrange with the body selected and no
+        // joint tool or resting-point guide active.
+        assert_eq!((e.mode, e.selected, e.adjusting_rest), (Mode::Arrange, Selected::Body, false));
+        // The fixture has no editor metadata: its anchor is kept by hand.
+        assert_eq!(e.rest, RestMode::Manual);
+        e.reset_rest();
+        assert_eq!(e.rest, RestMode::Auto);
+        let auto = e.auto_rest().unwrap();
+        assert_eq!(e.ground, auto);
+        // Moving the body moves the automatic point with it on save.
+        e.translate(0.0, -10.0);
+        let saved = e.save_into(&root).unwrap();
+        let reopened = Editor::open_in(&root, &saved).unwrap();
+        assert_eq!(reopened.rest, RestMode::Auto);
+        assert!((reopened.ground.1 - (auto.1 - 0.1)).abs() < 0.02, "{:?} {auto:?}", reopened.ground);
+        // Adjust manually: clicks place it and it stays set by hand.
+        let mut e = reopened;
+        e.adjust_rest();
+        e.click(0.3, 0.7);
+        e.finish_rest();
+        assert_eq!((e.rest, e.ground), (RestMode::Manual, (0.3, 0.7)));
+        let saved = e.save_into(&root).unwrap();
+        let reopened = Editor::open_in(&root, &saved).unwrap();
+        assert_eq!((reopened.rest, reopened.ground), (RestMode::Manual, (0.3, 0.7)));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

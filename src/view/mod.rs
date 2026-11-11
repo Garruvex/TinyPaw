@@ -100,7 +100,6 @@ pub enum UiMsg {
     ExportCharacter,
     RemoveCharacter,
     CharacterName(String),
-    CharacterGround(f32, f32),
     SaveCharacter,
     CancelCharacter,
     /// A folder import's ID is taken: `true` keeps both, `false` replaces.
@@ -110,6 +109,7 @@ pub enum UiMsg {
     EditArt,
     ArtFromParts,
     ArtMode(crate::mascot::editor::Mode),
+    ArtRest(crate::mascot::editor::RestAction),
     ArtField(usize, String),
     ArtCanvas(usize, String),
     ArtDragStart(crate::mascot::editor::Selected),
