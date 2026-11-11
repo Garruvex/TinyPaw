@@ -62,6 +62,10 @@ pub struct Pictures {
 
 /// Most a carried character leans, in radians, before the window cap.
 const CARRY_LEAN: f32 = 0.15;
+/// Most a held pose swings from its scruff.
+const HANG_SWING: f32 = 0.6;
+/// Gravity for a swinging held pose, logical pixels per second squared.
+const HANG_GRAVITY: f32 = 1800.0;
 /// Gaze reaches its limit this far from the eyes, as a share of the
 /// character's height (Yohta: about 420 rig pixels).
 const GAZE_REACH: f32 = 0.49;
@@ -257,6 +261,10 @@ struct Press {
     protected: Vec<bool>,
     /// The current carry lean, eased toward the drag's.
     lean: f32,
+    /// A swinging held pose: angular speed, and the last drag velocity
+    /// for the acceleration that swings it.
+    swing: f32,
+    last_vx: f32,
 }
 
 /// Where the window goes so window point `grab` sits under `cursor`, both
@@ -400,10 +408,11 @@ impl Desktop {
     /// Room above the character for a bubble, when it has lines, and
     /// always a little for a music hop and stretch.
     fn band(&self) -> f32 {
+        let swing = (self.size * 0.3).ceil();
         if self.lines.is_empty() {
-            (self.size * 0.08).ceil()
+            swing
         } else {
-            BUBBLE_BAND
+            BUBBLE_BAND.max(swing)
         }
     }
 
@@ -557,6 +566,8 @@ impl Desktop {
                         pivot,
                         protected,
                         lean: 0.0,
+                        swing: 0.0,
+                        last_vx: 0.0,
                     });
                 }
                 (Task::none(), None)
@@ -609,6 +620,16 @@ impl Desktop {
                     press.dragging = true;
                     self.menu = None;
                     picked_up = true;
+                    if self.pictures.held.is_some() {
+                        let l = &self.layout;
+                        let top = self.rig.visible_rows().0;
+                        let grab = Point::new(
+                            l.character.x + l.character.width / 2.0,
+                            l.character.y + top * l.scale,
+                        );
+                        press.grab = grab;
+                        press.pivot = Point::new((grab.x - l.character.x) / l.scale, top);
+                    }
                 }
                 if press.dragging {
                     let origin = carried_origin(cursor, press.grab, k);
@@ -719,12 +740,35 @@ impl Desktop {
                         *angle = live.angles.get(i).copied().unwrap_or(*angle);
                     }
                 }
-                let want = (-velocity.x * 0.0004).clamp(-CARRY_LEAN, CARRY_LEAN);
-                let lean = press.lean + (want - press.lean) * (1.0 - (-dt.min(0.1) * 10.0).exp());
-                let lean = self.fit_carry(press.grab, lean);
+                let dt = dt.clamp(0.0, 0.05);
+                let (lean, swing) = if let Some(held) = &self.pictures.held {
+                    // A held pose hangs from its scruff: a damped pendulum
+                    // the drag's acceleration swings, so shaking it shows.
+                    let length = (held.hold_in(self.rig.size()).distance(Point::new(
+                        self.rig.size().width / 2.0,
+                        self.rig.visible_middle(),
+                    )) * self.layout.scale)
+                        .max(20.0);
+                    let accel = if dt > 0.0 { (velocity.x - press.last_vx) / dt } else { 0.0 };
+                    let a = press.lean;
+                    let alpha = (accel.clamp(-20_000.0, 20_000.0) * a.cos() - HANG_GRAVITY * a.sin()) / length
+                        - 4.0 * press.swing;
+                    let swing = press.swing + alpha * dt;
+                    ((a + swing * dt).clamp(-HANG_SWING, HANG_SWING), swing)
+                } else {
+                    // Upright: it trails the drag. Held above its middle,
+                    // the feet swing behind; held below, the head does.
+                    let hanging = press.pivot.y < self.rig.visible_middle();
+                    let sign = if hanging { 1.0 } else { -1.0 };
+                    let want = (sign * velocity.x * 0.0005).clamp(-CARRY_LEAN, CARRY_LEAN);
+                    (press.lean + (want - press.lean) * (1.0 - (-dt * 10.0).exp()), 0.0)
+                };
+                let lean = self.fit_carry(press.grab, press.pivot, lean);
                 pose.carry = Some((press.pivot, lean));
                 if let Some(p) = &mut self.press {
                     p.lean = lean;
+                    p.swing = if lean == 0.0 && swing != 0.0 { 0.0 } else { swing };
+                    p.last_vx = velocity.x;
                 }
             }
             pose.gaze = self.head_gaze(&pose);
@@ -782,15 +826,38 @@ impl Desktop {
     /// The largest lean toward `lean` that keeps the turned character
     /// inside its window: around a grab near the head the feet swing out,
     /// and anything past the window edge would be cut off.
-    fn fit_carry(&self, grab: Point, lean: f32) -> f32 {
+    fn fit_carry(&self, grab: Point, pivot: Point, lean: f32) -> f32 {
         let l = &self.layout;
         let c = l.character;
-        let corners = [
-            Point::new(c.x, c.y),
-            Point::new(c.x + c.width, c.y),
-            Point::new(c.x, c.y + c.height),
-            Point::new(c.x + c.width, c.y + c.height),
-        ];
+        // The visible art's box in window pixels: the hanging held pose,
+        // or the character's columns between its top and bottom art rows.
+        let corners = match &self.pictures.held {
+            Some(held) => {
+                let stage = self.rig.size();
+                let shift = pivot - held.hold_in(stage);
+                let a = held.art;
+                [
+                    Point::new(a.x, a.y),
+                    Point::new(a.x + a.width, a.y),
+                    Point::new(a.x, a.y + a.height),
+                    Point::new(a.x + a.width, a.y + a.height),
+                ]
+                .map(|p| {
+                    let f = held.in_stage(stage, p) + shift;
+                    Point::new(c.x + f.x * l.scale, c.y + f.y * l.scale)
+                })
+            }
+            None => {
+                let (top, bottom) = self.rig.visible_rows();
+                let (top, bottom) = (c.y + top * l.scale, c.y + bottom * l.scale);
+                [
+                    Point::new(c.x, top),
+                    Point::new(c.x + c.width, top),
+                    Point::new(c.x, bottom),
+                    Point::new(c.x + c.width, bottom),
+                ]
+            }
+        };
         let fits = |a: f32| {
             let (s, co) = a.sin_cos();
             corners.iter().all(|p| {
@@ -1175,6 +1242,14 @@ impl canvas::Program<Message> for Stage<'_> {
         let mut frame = Frame::new(renderer, bounds.size());
         frame.translate(Vector::new(l.character.x, l.character.y));
         frame.scale(l.scale);
+        // Carried with a held pose: it hangs from its scruff at the cursor.
+        if let Some(press) = d.press.as_ref().filter(|p| p.dragging)
+            && let Some(held) = &d.pictures.held
+        {
+            let angle = pose.carry.map_or(0.0, |(_, a)| a);
+            d.rig.draw_hanging(&mut frame, held, press.pivot, angle);
+            return vec![frame.into_geometry()];
+        }
         super::motion::place(&mut frame, pose, d.rig.anchor(), d.rig.size().height);
         match d.picture() {
             Some(picture) => d.rig.draw_picture(&mut frame, picture),
@@ -1423,7 +1498,7 @@ mod tests {
         assert!(protected.iter().any(|p| *p), "the head is protected");
         assert!(!protected.iter().all(|p| *p), "the tail may trail");
         let held = d.pose.clone();
-        d.press = Some(Press { cursor: (0, 0), grab, pose: held.clone(), dragging: true, pivot, protected: protected.clone(), lean: 0.0 });
+        d.press = Some(Press { cursor: (0, 0), grab, pose: held.clone(), dragging: true, pivot, protected: protected.clone(), lean: 0.0, swing: 0.0, last_vx: 0.0 });
         let local = super::super::motion::unplaced(&held, d.rig.anchor(), d.rig.size().height, pivot);
         let mut leaned = 0.0f32;
         for _ in 0..40 {
@@ -1443,6 +1518,8 @@ mod tests {
             }
         }
         assert!(leaned > 0.01, "it leans while carried");
+        let trailing = d.pose.carry.map_or(0.0, |(_, a)| a);
+        assert!(trailing > 0.0, "carried right by the head, the feet swing back to the left: {trailing}");
         // The lean never pushes the character out of its window.
         assert!(leaned <= CARRY_LEAN + 1e-4);
         // Release eases the lean out around the same point.
@@ -1486,6 +1563,54 @@ mod tests {
     }
 
     #[test]
+    fn a_held_pose_swings_from_its_scruff_when_shaken_and_settles() {
+        let (mut d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 500.0), 5, false);
+        let o = Options {
+            eyes: false,
+            idle: false,
+            reduced: false,
+            lines: false,
+            quiet: true,
+            idle_every: (60.0, 300.0),
+            music: 0.0,
+            beat: None,
+        };
+        // A tall figure hanging down the middle of the stage.
+        let size = d.rig.size();
+        let mut img = image::RgbaImage::new(size.width as u32, size.height as u32);
+        for y in 100..700 {
+            for x in 280..340 {
+                img.put_pixel(x, y, image::Rgba([90, 120, 200, 255]));
+            }
+        }
+        d.set_pictures(Pictures { held: Some(super::super::rig::Picture::new(&img, [0.0, 0.0, 1.0])), ..Pictures::default() });
+        d.step_motion(&o, 1.0);
+        let l = d.layout;
+        let pivot = Point::new(size.width / 2.0, d.rig.visible_rows().0);
+        let grab = Point::new(l.character.x + pivot.x * l.scale, l.character.y + pivot.y * l.scale);
+        d.press = Some(Press { cursor: (0, 0), grab, pose: d.pose.clone(), dragging: true, pivot, protected: vec![true; 2], lean: 0.0, swing: 0.0, last_vx: 0.0 });
+        let (mut most, mut least) = (0.0f32, 0.0f32);
+        // Shake side to side, then hold still.
+        for n in 0..120 {
+            d.now += 0.016;
+            let dx = if n < 60 { if (n / 8) % 2 == 0 { 14.0 } else { -14.0 } } else { 0.0 };
+            d.last_anchor.0 = d.anchor.0 - dx;
+            d.step_motion(&o, 1.0);
+            let a = d.pose.carry.map_or(0.0, |(_, a)| a);
+            most = most.max(a);
+            least = least.min(a);
+            assert!(a.abs() <= HANG_SWING + 1e-4);
+        }
+        assert!(most > 0.05 && least < -0.05, "it swings both ways: {least}..{most}");
+        for _ in 0..300 {
+            d.now += 0.016;
+            d.last_anchor = d.anchor;
+            d.step_motion(&o, 1.0);
+        }
+        assert!(d.pose.carry.map_or(0.0, |(_, a)| a).abs() < 0.02, "and settles hanging straight");
+    }
+
+    #[test]
     fn gestures_emit_each_event_once_and_cancellation_none() {
         let (mut d, _) = Desktop::open("yohta", Rig::load(), 160.0, (500.0, 500.0), 5, false);
         let o = Options {
@@ -1506,6 +1631,8 @@ mod tests {
             pivot: Point::ORIGIN,
             protected: Vec::new(),
             lean: 0.0,
+            swing: 0.0,
+            last_vx: 0.0,
         };
         // A short press is one Click.
         d.press = Some(press(false));
@@ -1553,6 +1680,8 @@ mod tests {
             pivot: Point::ORIGIN,
             protected: vec![true; held.angles.len()],
             lean: 0.0,
+            swing: 0.0,
+            last_vx: 0.0,
         });
         for (dragging, o) in [(false, o), (true, reduced)] {
             d.press.as_mut().unwrap().dragging = dragging;

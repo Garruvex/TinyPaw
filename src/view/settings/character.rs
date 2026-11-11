@@ -1323,6 +1323,10 @@ impl canvas::Program<Message> for MotionStage<'_> {
         }
         frame.translate(origin);
         frame.scale(k);
+        if let Some((held, grip, angle)) = self.preview.hanging() {
+            rig.draw_hanging(&mut frame, &held, grip, angle);
+            return vec![frame.into_geometry()];
+        }
         crate::mascot::motion::place(&mut frame, &pose, feet, canvas_size.height);
         match self.preview.picture() {
             Some(picture) => rig.draw_picture(&mut frame, &picture),

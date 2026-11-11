@@ -688,7 +688,7 @@ impl App {
                             let art = Art::new(file.clone());
                             let c = self.characters.iter().find(|c| c.id == p.id);
                             if let Some(img) = c.and_then(|c| c.reaction_image(&art)) {
-                                p.add_picture(file, image::Handle::from_rgba(img.width(), img.height(), img.into_raw()));
+                                p.add_picture(file, &img);
                             }
                             if e == Event::Pickup {
                                 p.set_held(Some(art));
@@ -1382,7 +1382,7 @@ impl App {
                     for file in p.picture_files() {
                         let art = crate::mascot::reactions::Art::new(file.clone());
                         if let Some(img) = c.reaction_image(&art) {
-                            p.add_picture(file, image::Handle::from_rgba(img.width(), img.height(), img.into_raw()));
+                            p.add_picture(file, &img);
                         }
                     }
                 }
@@ -3560,10 +3560,7 @@ fn character_pictures(c: &Character) -> crate::mascot::desktop::Pictures {
     let picture = |art: Option<reactions::Art>| {
         let art = art?;
         let img = c.reaction_image(&art)?;
-        Some(crate::mascot::rig::Picture {
-            image: image::Handle::from_rgba(img.width(), img.height(), img.into_raw()),
-            place: art.place,
-        })
+        Some(crate::mascot::rig::Picture::new(&img, art.place))
     };
     crate::mascot::desktop::Pictures {
         held: picture(reactions::held(&pack, &user)),

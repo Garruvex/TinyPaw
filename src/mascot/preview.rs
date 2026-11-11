@@ -61,7 +61,7 @@ pub struct MotionPreview {
     reactions_pack: Config,
     /// Decoded reaction pictures by file, for the draft's held pose and
     /// artwork reactions.
-    pictures: Vec<(super::lines::SoundRef, iced::advanced::image::Handle)>,
+    pictures: Vec<(super::lines::SoundRef, super::rig::Picture)>,
     /// A Click or Drop picture showing until this time.
     showing: Option<(f32, Event)>,
     picker: Picker,
@@ -235,9 +235,9 @@ impl MotionPreview {
     }
 
     /// Makes a decoded reaction picture available to the preview.
-    pub fn add_picture(&mut self, file: super::lines::SoundRef, image: iced::advanced::image::Handle) {
+    pub fn add_picture(&mut self, file: super::lines::SoundRef, pixels: &image::RgbaImage) {
         self.pictures.retain(|(f, _)| *f != file);
-        self.pictures.push((file, image));
+        self.pictures.push((file, super::rig::Picture::new(pixels, [0.0, 0.0, 1.0])));
     }
 
     /// Every picture the draft's reactions name, for loading.
@@ -253,8 +253,9 @@ impl MotionPreview {
 
     fn picture_for(&self, art: Option<super::reactions::Art>) -> Option<super::rig::Picture> {
         let art = art?;
-        let image = self.pictures.iter().find(|(f, _)| *f == art.image)?.1.clone();
-        Some(super::rig::Picture { image, place: art.place })
+        let mut picture = self.pictures.iter().find(|(f, _)| *f == art.image)?.1.clone();
+        picture.place = art.place;
+        Some(picture)
     }
 
     pub fn held(&self) -> Option<super::reactions::Art> {
@@ -301,10 +302,20 @@ impl MotionPreview {
         }
     }
 
+    /// While a test drag carries a held pose: the picture, the grip and
+    /// the swing to hang it from.
+    pub fn hanging(&self) -> Option<(super::rig::Picture, iced::Point, f32)> {
+        let Some((Test::DragLeft | Test::DragRight, _)) = self.test else {
+            return None;
+        };
+        let (grip, angle) = self.pose.carry?;
+        Some((self.picture_for(self.held())?, grip, angle))
+    }
+
     /// The picture the preview draws instead of the character now.
     pub fn picture(&self) -> Option<super::rig::Picture> {
         if let Some((Test::DragLeft | Test::DragRight, _)) = self.test {
-            return self.picture_for(self.held());
+            return None;
         }
         match self.showing {
             Some((until, e)) if self.now < until => self.picture_for(self.art(e)),
@@ -497,7 +508,10 @@ impl MotionPreview {
         if inputs.dragging {
             let anchor = self.rig.anchor();
             let grip = iced::Point::new(anchor.x, anchor.y - self.rig.visible_height() * 0.85);
-            self.pose.carry = Some((grip, self.pose.lean));
+            // Held near the top, the feet trail the drag: the turn is the
+            // opposite of a lean around the feet. A held pose swings more.
+            let swing = if self.held().is_some() { 2.5 } else { 1.0 };
+            self.pose.carry = Some((grip, -self.pose.lean * swing));
             self.pose.lean = 0.0;
         }
     }
@@ -590,7 +604,7 @@ mod tests {
         use super::super::reactions::Art;
         let mut p = yohta();
         let file = super::super::lines::SoundRef::User("art-1.png".into());
-        p.add_picture(file.clone(), iced::advanced::image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]));
+        p.add_picture(file.clone(), &image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 255])));
         p.set_held(Some(Art::new(file.clone())));
         p.set_art(Event::Drop, Some(Art::new(file.clone())));
         p.set_place(Event::Pickup, true, 0, 0.05);
@@ -598,7 +612,7 @@ mod tests {
         assert!(p.picture().is_none(), "at rest the normal art shows");
         p.test(Test::DragRight);
         p.tick(0.05, false, false, 0.0, None);
-        assert!(p.picture().is_some(), "carried: the held pose");
+        assert!(p.hanging().is_some(), "carried: the held pose hangs");
         for _ in 0..30 {
             p.tick(0.05, false, false, 0.0, None);
         }
@@ -643,9 +657,9 @@ mod tests {
         for _ in 0..20 {
             p.tick(0.033, true, false, 0.0, None);
             dragged |= p.pose().expression == Expression::Dragging;
-            leaned = leaned.min(p.pose().carry.map_or(0.0, |(_, a)| a));
+            leaned = leaned.max(p.pose().carry.map_or(0.0, |(_, a)| a));
         }
-        assert!(dragged && leaned < -0.01, "a rightward drag leans the character left");
+        assert!(dragged && leaned.abs() > 0.01, "a drag turns the carried character");
         // Let it settle, then click.
         for _ in 0..40 {
             p.tick(0.033, true, false, 0.0, None);

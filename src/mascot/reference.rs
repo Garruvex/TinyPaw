@@ -255,7 +255,7 @@ impl Request {
             Role::HeadBlink => "only the head, identical to head.png in position, size and outline, with the eyes gently closed as in a blink".into(),
             Role::HeadPressed => "only the head, identical to head.png in position, size and outline, with a surprised or delighted expression, as when poked".into(),
             Role::HeadCarried => "only the head, identical to head.png in position, size and outline, with a startled or excited expression, as when being picked up".into(),
-            Role::Held => "the whole character in a carried pose, as if lifted by the scruff and dangling, at the same scale as the body file, with the eyes and eyebrows painted in".into(),
+            Role::Held => "the whole character held up by the scruff of the neck, the way a cat is picked up: the scruff is the highest point, at the top centre of the character, with the head just below it and the body, legs and tail hanging straight down, relaxed and limp, so it can swing from that point like a pendulum. Same scale as the body file, eyes and eyebrows painted in, and plenty of transparent space on every side so swinging never crops it".into(),
         }
     }
 
@@ -353,7 +353,7 @@ mod tests {
         r.canvas = 2048;
         assert_eq!(r.roles(), [Role::Body, Role::Tail, Role::Held]);
         let brief = r.brief();
-        for f in ["body.png", "tail.png", "held.png", "2048×2048", "the tail (keep", "left out entirely"] {
+        for f in ["body.png", "tail.png", "held.png", "2048×2048", "the tail (keep", "left out entirely", "scruff of the neck", "hanging straight down"] {
             assert!(brief.contains(f), "{f}");
         }
         assert!(r.prompt(Role::Tail).contains("named tail.png"));

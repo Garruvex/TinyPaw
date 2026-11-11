@@ -591,9 +591,92 @@ impl Rig {
 pub struct Picture {
     pub image: Handle,
     pub place: [f32; 3],
+    /// Where a held pose hangs from, in the picture's pixels: the top
+    /// centre of its art, the scruff.
+    pub hold: Point,
+    /// The opaque art's box in the picture's pixels, for keeping a swing
+    /// inside the window.
+    pub art: Rectangle,
+}
+
+impl Picture {
+    pub fn new(pixels: &RgbaImage, place: [f32; 3]) -> Self {
+        let art = visible(pixels).map_or(
+            Rectangle::new(Point::ORIGIN, Size::new(pixels.width() as f32, pixels.height() as f32)),
+            |(x, y, w, h)| Rectangle::new(Point::new(x as f32, y as f32), Size::new(w as f32, h as f32)),
+        );
+        Self {
+            image: handle(pixels.clone()),
+            place,
+            hold: hold_point(pixels),
+            art,
+        }
+    }
+
+    /// `p`, in the picture's pixels, in the stage frame as placed.
+    pub fn in_stage(&self, stage: Size, p: Point) -> Point {
+        let [x, y, k] = self.place;
+        let (pw, ph) = image_size(&self.image).unwrap_or((stage.width, stage.height));
+        Point::new(x * stage.width + p.x * stage.width * k / pw, y * stage.height + p.y * stage.height * k / ph)
+    }
+
+    /// The hold point in the stage frame, with the picture placed.
+    pub fn hold_in(&self, stage: Size) -> Point {
+        self.in_stage(stage, self.hold)
+    }
+}
+
+fn image_size(h: &Handle) -> Option<(f32, f32)> {
+    match h {
+        Handle::Rgba { width, height, .. } => Some((*width as f32, *height as f32)),
+        _ => None,
+    }
+}
+
+/// The scruff of a held pose: the centre of the top 4 % of its opaque art.
+pub fn hold_point(pixels: &RgbaImage) -> Point {
+    let (w, h) = pixels.dimensions();
+    let Some(top) = (0..h).find(|&y| (0..w).any(|x| pixels.get_pixel(x, y)[3] >= 32)) else {
+        return Point::new(w as f32 / 2.0, 0.0);
+    };
+    let band = ((h as f32 * 0.04).ceil() as u32).max(1);
+    let (mut sum, mut n) = (0.0f64, 0u64);
+    for y in top..(top + band).min(h) {
+        for x in 0..w {
+            if pixels.get_pixel(x, y)[3] >= 32 {
+                sum += f64::from(x) + 0.5;
+                n += 1;
+            }
+        }
+    }
+    Point::new((sum / n.max(1) as f64) as f32, top as f32 + band as f32 / 2.0)
 }
 
 impl Rig {
+    /// Draws a held pose hanging from `pivot` (the grabbed point, in the
+    /// stage frame), turned `angle` around it. Whatever was grabbed, the
+    /// character hangs from its scruff under the cursor.
+    pub fn draw_hanging(&self, frame: &mut Frame, picture: &Picture, pivot: Point, angle: f32) {
+        let hold = picture.hold_in(self.size);
+        frame.with_save(|f| {
+            f.translate(Vector::new(pivot.x, pivot.y));
+            f.rotate(angle);
+            f.translate(Vector::new(-hold.x, -hold.y));
+            self.draw_picture(f, picture);
+        });
+    }
+
+    /// The middle of the visible art at rest, in rig pixels: above it a
+    /// grabbed character hangs, below it it stands.
+    pub fn visible_middle(&self) -> f32 {
+        (self.visible.0 + self.visible.1) / 2.0
+    }
+
+    /// Top and bottom of the visible art at rest, in rig pixels.
+    pub fn visible_rows(&self) -> (f32, f32) {
+        self.visible
+    }
+
     /// Draws `picture` in place of the character, on the same stage.
     pub fn draw_picture(&self, frame: &mut Frame, picture: &Picture) {
         let [x, y, k] = picture.place;
@@ -759,6 +842,22 @@ mod tests {
         // The head counts for clicks, the empty corners don't.
         assert!(rig.opaque(Point::new(50.0, 20.0)));
         assert!(!rig.opaque(Point::new(3.0, 3.0)));
+    }
+
+    #[test]
+    fn a_held_pose_hangs_from_the_top_of_its_art() {
+        let mut img = RgbaImage::new(100, 200);
+        for y in 20..180 {
+            for x in 40..60 {
+                img.put_pixel(x, y, Rgba([90, 120, 200, 255]));
+            }
+        }
+        let p = hold_point(&img);
+        assert!((p.x - 50.0).abs() < 0.5 && (p.y - 24.0).abs() < 1.0, "{p:?}");
+        // Placed at half size and shifted, the hold point follows.
+        let pic = Picture::new(&img, [0.1, 0.0, 0.5]);
+        let at = pic.hold_in(Size::new(100.0, 200.0));
+        assert!((at.x - 35.0).abs() < 0.5 && (at.y - 12.0).abs() < 1.0, "{at:?}");
     }
 
     #[test]
