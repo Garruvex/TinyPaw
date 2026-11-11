@@ -10,6 +10,12 @@ Two decisions here change the earlier scope: speech lines are now in scope
 (the scope deferred dialogue), and a left click reacts and speaks while a
 right click opens the menu (agreed). See [Decisions](#decisions).
 
+## UI and interaction revision
+
+The [character creator UI and flow plan](character-creator-ui-flow-plan.md) supersedes the earlier layout, mandatory ground picker and global pivot-edit workflow below. It specifies automatic resting points, cursor-anchored carrying, contextual animation joints, guided eyes, a control-effect audit and a unified draft/save flow. It is proposed work; earlier implementation notes remain historical evidence.
+
+New behaviors that came up in that work (compression reactions, held poses, Head bob, falling, window landing, pickup areas) are in the [character behaviors plan](character-behaviors-plan.md). Several contradict [Out of scope](#out-of-scope) below, so each waits on a decision recorded here.
+
 ## What BUG Clicker does, and what we take
 
 From the developer's [release notes](https://github.com/BUG-INVADE/Bug-Clicker-download/releases)
@@ -250,12 +256,16 @@ code path.
 - **Reduced motion** stops sway, bounce and spring motion. Expressions, lines and gaze snapping remain.
 - **Rendering** stays in the existing Iced canvas rig. Transforms are world, then body, then part pivot, then child parts. The hit-test silhouette is rebuilt only when the artwork or expression changes.
 
+## Reaction sounds
+
+Character reaction audio is a separate, independently deliverable feature. See [Character reaction sounds](character-reaction-sounds.md) for its editor, gesture triggers, playback/mute policy, asset storage and acceptance criteria. Speech text and bubbles are not prerequisites. This feature remains unimplemented.
+
 ## Speech lines
 
 - **Triggers:** Click, Drag (pickup), Drop, Idle (random, every 1–5 minutes by default), Music starts, Annotation ends. More triggers can come later.
 - **Picking a line:** a random line from the trigger's list, never the same one twice in a row. `//` splits a line into parts shown one after another.
 - **Bubble:** drawn in the character's own window, in a new slot above the head. It flips below or to the side near screen edges. It stays for its reading time, or until its sound ends.
-- **Sound:** an optional WAV played through the existing tap-sound output at the tap volume. Mute tap sound mutes lines too.
+- **Sound:** an optional WAV uses the shared audio engine in the character voice category. Character volume and Mute all sounds apply; pointer tap mute/volume remain pointer-only. See the [reaction sound mute policy](character-reaction-sounds.md#mute-and-volume-decisions). The Lines implementation must define arbitration with reaction clips so a trigger does not play both at once.
 - **Quiet rules:**
   - **Mute lines** turns off idle and music lines but keeps click lines.
   - Lines don't show while annotation owns input.
@@ -301,9 +311,15 @@ Steps 3 and 4 depend only on step 2's reaction plumbing and can be built in eith
 3. **Audio dependency — agreed.** Add the `windows` crate with only its audio features, alongside `windows-sys`, for per-session peak meters that leave out TinyPaw's own sounds. Stage B's loopback analysis still uses `cpal`.
 4. **Petting — deferred.** Revisit once click and drag reactions feel right, with a rub gesture that can't fire during a drag.
 5. **Scope change — done.** [The character scope](mascot-feature.md) now includes speech lines and the right-click menu; reminders and alarms stay out.
+6. **New behaviors — agreed 11 November 2026.** From the [character behaviors plan](character-behaviors-plan.md): click and beat Compress, a held pose PNG while carried, one alternate PNG for a reaction, the Head bob beat style, and an opt-in straight fall to the screen edge after release are in scope. Head bob ships only once Follow beat is no longer a trial. PNG frame sequences, landing on window tops and restricted pickup areas are deferred.
 
 ## Out of scope
 
 Keyframe timelines, mesh deformation, a skeleton editor, walking or roaming,
 GIF/APNG parts, props and dolls, reminders/alarms/to-do lines, multiple
 characters at once, and parsing other apps' character files.
+
+One exception, from decision 6: a single whole-character PNG may replace the
+drawing while carried or for one reaction. Frame sequences stay out.
+A released character may also fall straight to the screen edge when the
+creator turns that on; it still never walks or roams.

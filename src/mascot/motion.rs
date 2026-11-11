@@ -418,7 +418,7 @@ impl Animator {
         let body = if i.reduced || i.music <= 0.0 {
             Body::default()
         } else {
-            let b = bop_body(i.bop, beat, i.beat.is_some());
+            let b = bop_body(i.bop, beat);
             Body {
                 bounce: b.bounce * level,
                 lean: b.lean * level,
@@ -506,8 +506,7 @@ fn bop_angle(bop: Bop, kind: PartType, b: Beat) -> f32 {
     use std::f32::consts::{PI, TAU};
     let beat = b.p * TAU;
     let pair = b.two * PI;
-    // Sharp on the beat, easing out before the next.
-    let hit = (1.0 - b.p).powi(3);
+    let hit = hit(b.p, 3);
     match bop {
         Bop::Nod => match kind {
             PartType::Head => beat.sin() * 0.05,
@@ -537,25 +536,28 @@ fn bop_angle(bop: Bop, kind: PartType, b: Beat) -> f32 {
     }
 }
 
+/// A beat accent: rises in the first moment after the beat (fast, but
+/// not a jump) and eases out with `power` before the next.
+fn hit(p: f32, power: i32) -> f32 {
+    (p / 0.06).min(1.0) * (1.0 - p).powi(power)
+}
+
 /// How the whole character moves with the music at full level.
-fn bop_body(bop: Bop, b: Beat, followed: bool) -> Body {
-    use std::f32::consts::{PI, TAU};
+fn bop_body(bop: Bop, b: Beat) -> Body {
+    use std::f32::consts::PI;
     let pair = b.two * PI;
     match bop {
+        // A quick hop just after each beat, settling before the next; it
+        // starts and ends on the ground, so it never jumps.
         Bop::Nod => Body {
-            bounce: if followed {
-                // A quick hop on each beat, settling before the next.
-                (1.0 - b.p).powi(4) * 0.014
-            } else {
-                (b.p * TAU).sin().abs() * 0.012
-            },
+            bounce: (b.p.powf(0.6) * PI).sin() * 0.013,
             ..Body::default()
         },
         // A dip on the beat, leaning to one side, then the other.
         Bop::Groove => Body {
             bounce: 0.0,
             lean: pair.cos() * 0.05,
-            squash: (1.0 - b.p).powi(3) * 0.5,
+            squash: hit(b.p, 3) * 0.5,
         },
         // Lands on the beat squashed, stretches at the top of the hop.
         Bop::RubberHose => {
@@ -563,7 +565,7 @@ fn bop_body(bop: Bop, b: Beat, followed: bool) -> Body {
             Body {
                 bounce: air * 0.035,
                 lean: pair.sin() * 0.06,
-                squash: (1.0 - b.p).powi(6) * 0.9 - air * 0.6,
+                squash: hit(b.p, 6) * 1.1 - air * 0.6,
             }
         }
     }
@@ -763,9 +765,11 @@ mod tests {
             )
             .bounce
         };
+        // Up just after the beat, down again before the next.
+        let after = at(&mut a, 0.3);
+        let before = at(&mut a, 0.97);
         let on = at(&mut a, 0.0);
-        let between = at(&mut a, 0.6);
-        assert!(on > 0.01 && between < on * 0.1, "{on} {between}");
+        assert!(after > 0.01 && before < after * 0.2 && on == 0.0, "{after} {before} {on}");
     }
 
     /// Two seconds of a bop at full music: the extremes of bounce, lean and

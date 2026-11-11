@@ -27,6 +27,15 @@ pub enum Page {
     Sound,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CharacterTab {
+    #[default]
+    Desktop,
+    Motion,
+    Speech,
+    Music,
+}
+
 /// The merged Windows header: sizes shared with the native hit test, and the
 /// caption buttons TinyPaw draws in place of the system title bar.
 pub mod caption {
@@ -57,6 +66,7 @@ pub struct SettingsView<'a> {
     pub registry: &'a Registry,
     pub session: &'a Session,
     pub page: Page,
+    pub character_tab: CharacterTab,
     pub displays: &'a [crate::platform::displays::Display],
     #[cfg(windows)]
     pub sources: &'a [crate::platform::windows::WindowSource],
@@ -89,7 +99,10 @@ pub struct SettingsView<'a> {
     pub music: (String, f32),
     /// What music response listens to, and the choices for the picker.
     pub music_source: crate::mascot::music::Source,
-    pub music_sources: Vec<crate::mascot::music::Source>,
+    /// Sources to pick from with their live meters (0–1, decibel scale)
+    /// and whether each is playing; then the input devices.
+    pub music_rows: Vec<(crate::mascot::music::Source, f32, bool)>,
+    pub music_inputs: Vec<crate::mascot::music::Source>,
     /// The Follow beat trial's status line.
     pub beat: String,
 }
@@ -105,8 +118,8 @@ fn h1<'a>(label: &'a str) -> Element<'a, Message> {
 fn h2<'a>(label: &'a str) -> Element<'a, Message> {
     text(label)
         .font(theme::MEDIUM)
-        .size(13)
-        .color(theme::MUTED)
+        .size(15)
+        .color(theme::TEXT_SOFT)
         .into()
 }
 
@@ -137,7 +150,10 @@ fn later<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
 }
 
 pub fn view(v: SettingsView<'_>) -> Element<'_, Message> {
-    let body = row![nav(v.page), main(&v)].height(Length::Fill);
+    let panel = iced::widget::keyed_column([(v.page, main(&v))])
+        .width(Length::Fill)
+        .height(Length::Fill);
+    let body = row![nav(v.page), panel].height(Length::Fill);
     container(column![header(&v), body])
         .width(Length::Fill)
         .height(Length::Fill)
@@ -273,12 +289,15 @@ fn nav<'a>(page: Page) -> Element<'a, Message> {
     };
     container(
         column![
+            hint("Annotation"),
             item(Page::Pointer, Glyph::Pointer, "Pointer"),
-            item(Page::Character, Glyph::Head, "Character"),
-            item(Page::Annotation, Glyph::Pen, "Annotation"),
-            item(Page::Controls, Glyph::Controls, "Controls"),
-            item(Page::Display, Glyph::Display, "Display"),
+            item(Page::Annotation, Glyph::Pen, "Drawing tools"),
             item(Page::Sound, Glyph::Sound, "Tap sounds"),
+            space().height(10),
+            hint("Desktop & input"),
+            item(Page::Character, Glyph::Head, "Character"),
+            item(Page::Display, Glyph::Display, "Display & motion"),
+            item(Page::Controls, Glyph::Controls, "Drawing shortcuts"),
         ]
         .spacing(4),
     )
@@ -407,7 +426,7 @@ fn pointer_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Eleme
                 theme::LINE_STRONG,
             ))
             .into(),
-        "Add yours".into(),
+        "Add pointer".into(),
         false,
         Message::Ui(UiMsg::AddPointer),
     ));
@@ -481,46 +500,61 @@ fn pointer_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Eleme
         hint("Positive angles reach from the lower right."),
     ]);
     let width = s.float(system::INK_WIDTH);
-    let left = column![
+    let mut left = column![
         h1("Pointer"),
-        section(vec![h2("Pointer"), pointers.into()]),
-        row![
-            button("Import folder").style(theme::secondary).on_press(Message::Ui(UiMsg::ImportPack)),
-            button("Re-aim pointer").style(theme::secondary).on_press_maybe(v.pack.filter(|p| p.folder.is_some()).map(|_| Message::Ui(UiMsg::EditPack))),
-            button("Remove pointer").style(theme::secondary).on_press_maybe(v.pack.filter(|p| p.folder.is_some()).map(|_| Message::Ui(UiMsg::RemovePack))),
-        ].spacing(8),
-        section(vec![
-            h2("Create your own artwork"),
-            hint("Attach your character reference in your image tool or send it with the prompt to an artist."),
-            row![
-                button(text("Copy pointer prompt").size(13))
-                    .padding([7, 12])
-                    .style(theme::secondary)
-                    .on_press(Message::Ui(UiMsg::CopyPointerPrompt)),
-                button(text("Copy forearm prompt").size(13))
-                    .padding([7, 12])
-                    .style(theme::secondary)
-                    .on_press(Message::Ui(UiMsg::CopyForearmPrompt)),
-            ].spacing(8).wrap().into(),
-            hint("Use Add yours to import the paw, then optionally attach a matching forearm and align the wrist."),
-        ]),
-        section(vec![h2("Presentation"), presentation.into(), hint(pres_hint)]),
-        if !laser && pres == "stretch" && v.pack.is_none_or(|p| p.forearm.is_none()) {
-            forearm_colors(s, v.pack.and_then(|p| p.accent))
-        } else {
-            space().into()
-        },
-        section(vec![
-            h2("Tap stamp"),
-            stamps.into(),
-            hint("Leave a little paw print when you tap with a paw pointer. Uses your ink colour and fade setting; drag to draw as usual."),
-        ]),
-        section(vec![size_row.into(), size_slider.into()]),
-        if !laser && pres == "furry" { angle_control } else { space().into() },
-        hint("Ink, labels, Spotlight and Lens are under Annotation."),
+        section(vec![h2("Choose a pointer"), pointers.into()]),
     ]
     .spacing(22)
     .width(Length::Fill);
+
+    if !laser {
+        let mut appearance = column![
+            h2("Paw appearance"),
+            presentation,
+            hint(pres_hint),
+            size_row,
+            size_slider
+        ]
+        .spacing(10);
+        if pres == "furry" {
+            appearance = appearance.push(angle_control);
+        }
+        if pres == "stretch" && v.pack.is_none_or(|p| p.forearm.is_none()) {
+            appearance = appearance.push(forearm_colors(s, v.pack.and_then(|p| p.accent)));
+        }
+        left = left.push(appearance).push(section(vec![
+            h2("Tap stamp"), stamps.into(),
+            hint("Each tap leaves a paw print in your ink colour. Set its fade time in Drawing tools."),
+        ]));
+    }
+    let mut actions = row![
+        button("Import folder")
+            .style(theme::secondary)
+            .on_press(Message::Ui(UiMsg::ImportPack))
+    ]
+    .spacing(8);
+    if !laser && v.pack.is_some_and(|p| p.folder.is_some()) {
+        actions = actions
+            .push(
+                button("Re-aim pointer")
+                    .style(theme::secondary)
+                    .on_press(Message::Ui(UiMsg::EditPack)),
+            )
+            .push(
+                button("Remove pointer")
+                    .style(theme::secondary)
+                    .on_press(Message::Ui(UiMsg::RemovePack)),
+            );
+    }
+    left = left.push(section(vec![
+        h2("Custom pointers"),
+        actions.wrap().into(),
+        hint("To create matching artwork, share a prompt and your character reference with an artist or image tool."),
+        row![
+            button("Copy pointer prompt").style(theme::secondary).on_press(Message::Ui(UiMsg::CopyPointerPrompt)),
+            button("Copy forearm prompt").style(theme::secondary).on_press(Message::Ui(UiMsg::CopyForearmPrompt)),
+        ].spacing(8).wrap().into(),
+    ]));
 
     let ink = theme::rgba(current_ink);
     let tile = |bg: Color| {
@@ -547,7 +581,7 @@ fn pointer_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Eleme
         tile(Color::from_rgb8(0xF4, 0xF4, 0xF5)),
         tile(Color::from_rgb8(0x1B, 0x26, 0x21)),
         button(
-            text("Try a tap")
+            text("Preview tap sound")
                 .font(theme::MEDIUM)
                 .size(13)
                 .width(Length::Fill)
@@ -750,7 +784,7 @@ fn annotation_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     }))
     .spacing(8);
     column![
-        h1("Annotation"),
+        h1("Drawing tools"),
         section(vec![
             h2("Ink"),
             ink_row.into(),
@@ -819,7 +853,6 @@ fn annotation_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
             .step(10.0)
             .style(theme::range)
             .into(),
-            h2("Advanced"),
             source_picker,
         ]),
     ]
@@ -1360,21 +1393,20 @@ fn controls<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
 
     let mut rows = column![].spacing(0);
     for (context, scope) in [
-        (ShortcutContext::Global, "Global"),
+        (ShortcutContext::Global, "Available everywhere"),
         (ShortcutContext::Overlay, "While drawing"),
     ] {
+        rows = rows.push(container(hint(scope)).padding([8, 4]));
         for (shortcut, def) in v.registry.shortcuts(context) {
             rows = rows.push(
                 container(
                     row![
                         text(def.label).size(14).width(Length::Fill),
-                        if v.taken.contains(&def.id) {
-                            text("In use by another app")
+                        v.taken
+                            .contains(&def.id)
+                            .then(|| text("In use by another app")
                                 .size(12)
-                                .color(theme::AMBER_TEXT)
-                        } else {
-                            text(scope).size(12).color(theme::FAINT)
-                        },
+                                .color(theme::AMBER_TEXT)),
                         container(keycap(shortcut.label()))
                             .width(120)
                             .align_x(Alignment::End),
@@ -1407,16 +1439,8 @@ fn controls<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     }
 
     column![
-        h1("Controls"),
-        h2("Motion"),
-        pick_list(
-            [Motion("system"), Motion("full"), Motion("reduced")],
-            Some(Motion(v.session.settings().choice(system::MOTION))),
-            |m| Message::Set(system::MOTION, Value::Choice(m.0))
-        )
-        .padding([8, 12])
-        .style(theme::select),
-        section(vec![h2("When switched On"), styles.into()]),
+        h1("Drawing shortcuts"),
+        section(vec![h2("How drawing starts"), styles.into()]),
         section(vec![
             h2("Shortcuts"),
             rows.into(),
@@ -1551,12 +1575,13 @@ fn character_page<'a>(
             .style(theme::secondary)
             .on_press_maybe(custom.map(|_| Message::Ui(UiMsg::RemoveCharacter))),
     ]
-    .spacing(8);
+    .spacing(8)
+    .wrap();
 
     let mut page = column![
         h1("Character"),
         section(vec![
-            h2("Characters"),
+            h2("Character library"),
             cards.wrap().vertical_spacing(8).into(),
             manage.into(),
             hint("Add character takes one transparent PNG. Import folder takes a character.json folder with a body and optional moving parts, like one made with Export."),
@@ -1592,6 +1617,41 @@ fn character_page<'a>(
         );
     }
 
+    let side = match (v.character_draft, v.motion) {
+        (Some(d), _) => Some(new_character(d, v.character_busy)),
+        (None, Some(m)) => Some(motion_preview(m)),
+        (None, None) => None,
+    };
+    if let Some(m) = v.motion {
+        let mut tabs = row![].spacing(4);
+        for (tab, label) in [
+            (CharacterTab::Desktop, "Desktop"),
+            (CharacterTab::Motion, "Motion"),
+            (CharacterTab::Speech, "Speech"),
+            (CharacterTab::Music, "Music"),
+        ] {
+            tabs = tabs.push(
+                button(text(label).size(13))
+                    .padding([7, 10])
+                    .style(theme::segment(v.character_tab == tab))
+                    .on_press(Message::Ui(UiMsg::CharacterTab(tab))),
+            );
+        }
+        page = page.push(
+            container(tabs.wrap())
+                .padding(4)
+                .style(theme::fill(theme::WELL, 10.0)),
+        );
+        let detail = match v.character_tab {
+            CharacterTab::Motion => Some(motion_section(m)),
+            CharacterTab::Speech => Some(lines_section(v, m)),
+            CharacterTab::Music => Some(music_section(v)),
+            CharacterTab::Desktop => None,
+        };
+        if let Some(detail) = detail {
+            return (page.push(detail).into(), side);
+        }
+    }
     let eyes: Element<'a, Message> = if selected.is_some_and(|c| c.is_builtin()) {
         check("Eyes follow the cursor", s.bool(mascot::EYES), mascot::EYES)
     } else {
@@ -1634,7 +1694,7 @@ fn character_page<'a>(
                 button(text("Motion settings").size(12).color(theme::CYAN_TEXT))
                     .padding([2, 4])
                     .style(theme::tool_button(theme::Tone::Plain))
-                    .on_press(Message::Ui(UiMsg::Nav(Page::Controls))),
+                    .on_press(Message::Ui(UiMsg::Nav(Page::Display))),
             ]
             .spacing(6)
             .align_y(Alignment::Center),
@@ -1648,18 +1708,6 @@ fn character_page<'a>(
                         .then_some(Message::Ui(UiMsg::ResetMascotPosition)),
                 ),
         );
-    if let Some(m) = v.motion {
-        page = page
-            .push(motion_section(m))
-            .push(lines_section(v, m))
-            .push(music_section(v));
-    }
-
-    let side = match (v.character_draft, v.motion) {
-        (Some(d), _) => Some(new_character(d, v.character_busy)),
-        (None, Some(m)) => Some(motion_preview(m)),
-        (None, None) => None,
-    };
     (page.into(), side)
 }
 
@@ -1816,7 +1864,7 @@ fn lines_section<'a>(
     let minutes = |x: f64| format!("{x:.0} min");
     section(vec![
         row![
-            h2("Lines"),
+            h2("Speech lines"),
             space().width(Length::Fill),
             button(text("Reset to pack").size(12))
                 .padding([5, 10])
@@ -1916,53 +1964,90 @@ fn lines_section<'a>(
 }
 
 /// The Music tab: react to playback, how strongly, and a live meter.
-fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
-    let s = v.session.settings();
-    let (status, level) = (v.music.0.clone(), v.music.1);
-    let on = s.bool(mascot::MUSIC);
-    let meter = container(
-        container(space())
-            .width(Length::FillPortion((level.clamp(0.0, 1.0) * 1000.0) as u16 + 1))
-            .height(8)
-            .style(theme::fill(theme::CYAN_TEXT, 4.0)),
-    )
-    .width(Length::Fill)
+/// A live meter `level` (0–1) full; `width` 0 fills the row.
+fn level_bar<'a>(level: f32, width: f32) -> Element<'a, Message> {
+    let level = level.clamp(0.0, 1.0);
+    let fill = container(space())
+        .width(Length::FillPortion((level * 1000.0) as u16 + 1))
+        .height(8)
+        .style(theme::fill(theme::CYAN_TEXT, 4.0));
+    let bar = container(row![
+        fill,
+        space().width(Length::FillPortion(((1.0 - level) * 1000.0) as u16 + 1)),
+    ])
     .height(8)
     .style(theme::fill(theme::WELL, 4.0));
-    let meter = row![
-        meter,
-        space().width(Length::FillPortion(((1.0 - level.clamp(0.0, 1.0)) * 1000.0) as u16 + 1)),
-    ];
+    if width > 0.0 { bar.width(width).into() } else { bar.width(Length::Fill).into() }
+}
+
+fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
+    let s = v.session.settings();
+    use crate::mascot::music::Source;
+    let (status, level) = (v.music.0.clone(), v.music.1);
+    let on = s.bool(mascot::MUSIC);
+    let pick = |source: &Source| {
+        Message::Set(mascot::MUSIC_SOURCE, Value::Choice(crate::platform::intern(&source.id())))
+    };
+    // One row per app source, each with its own live meter, so it's clear
+    // which one is making sound.
+    let mut rows = column![].spacing(4);
+    for (source, shown, playing) in &v.music_rows {
+        let selected = *source == v.music_source;
+        let note = match source {
+            Source::App(_) if !playing => "not playing",
+            _ => "",
+        };
+        rows = rows.push(
+            button(
+                row![
+                    text(source.to_string()).size(13).width(Length::Fill),
+                    text(note).size(11).color(theme::MUTED),
+                    level_bar(*shown, 120.0),
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center),
+            )
+            .width(Length::Fill)
+            .padding([7, 10])
+            .style(theme::card(selected))
+            .on_press(pick(source)),
+        );
+    }
+    let chosen_input = match &v.music_source {
+        Source::Input(_) => Some(v.music_source.clone()),
+        _ => None,
+    };
     section(vec![
-        h2("Music"),
+        h2("Music response"),
         check("React to playback", on, mascot::MUSIC),
         hint("Moves with the loudness of what's playing on this PC. TinyPaw's own sounds are left out, and nothing is recorded."),
+        text("Listen to").size(12).color(theme::MUTED).into(),
+        rows.into(),
         row![
-            text("Listen to").size(12).color(theme::MUTED).width(110),
-            pick_list(v.music_sources.clone(), Some(v.music_source.clone()), |s| Message::Set(
-                mascot::MUSIC_SOURCE,
-                Value::Choice(crate::platform::intern(&s.id()))
-            ))
-            .text_size(13)
-            .padding([6, 10])
-            .style(theme::select),
+            text("Or an input").size(12).color(theme::MUTED).width(110),
+            pick_list(v.music_inputs.clone(), chosen_input, move |s| pick(&s))
+                .placeholder("Microphone or line-in…")
+                .text_size(13)
+                .padding([6, 10])
+                .style(theme::select),
         ]
         .spacing(10)
         .align_y(Alignment::Center)
         .into(),
         hint(match v.music_source {
-            crate::mascot::music::Source::All => "All apps together. Pick one app so a game or a call doesn't count; the list shows apps that are playing.",
-            crate::mascot::music::Source::App(_) => "Only this app counts, and Follow beat hears only its sound.",
-            crate::mascot::music::Source::Input(_) => "For music that doesn't play on this PC. This uses the input device (Windows shows the microphone in use) while listening; nothing is recorded.",
+            Source::All => "All apps together. Pick one app so a game or a call doesn't count; apps show up here while they make sound.",
+            Source::App(_) => "Only this app counts, and Follow beat hears only its sound.",
+            Source::Input(_) => "For music that doesn't play on this PC. This uses the input device (Windows shows the microphone in use) while listening; nothing is recorded.",
         }),
         row![
-            text("Playback").size(12).color(theme::MUTED).width(110),
-            container(meter).width(Length::Fill),
+            text("Hearing").size(12).color(theme::MUTED).width(110),
+            level_bar(level, 0.0),
             text(status).size(12).color(theme::MUTED),
         ]
         .spacing(10)
         .align_y(Alignment::Center)
         .into(),
+        hint("Quiet sources are turned up automatically, so the character moves fully even with low volume or a microphone."),
         row![
             text("Music strength").size(12).color(theme::MUTED).width(110),
             slider(0.0..=2.0, s.float(mascot::MUSIC_STRENGTH), |x| Message::Set(
@@ -2911,9 +2996,9 @@ fn display_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     .padding(12)
     .style(theme::fill(theme::RAISED, 10.0));
     column![
-        h1("Display"),
+        h1("Display & motion"),
         section(vec![
-            h2("Draw on"),
+            h2("Annotation display"),
             button("Primary display")
                 .padding(12)
                 .style(theme::card(s.choice(display::TARGET) == "primary"))
@@ -2939,6 +3024,18 @@ fn display_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
             missing,
         ]),
         section(vec![
+            h2("Animation preference"),
+            pick_list(
+                [Motion("system"), Motion("full"), Motion("reduced")],
+                Some(Motion(v.session.settings().choice(system::MOTION))),
+                |m| Message::Set(system::MOTION, Value::Choice(m.0))
+            )
+            .padding([8, 12])
+            .style(theme::select)
+            .into(),
+        ]),
+        section(vec![
+            h2("Streaming"),
             check(
                 "Hide the quick bar while streaming",
                 s.bool(display::HIDE_BAR),
@@ -2980,7 +3077,7 @@ fn sound_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     column![
         h1("Tap sounds"),
         section(vec![
-            h2("Tap sound"),
+            h2("Sound selection"),
             row![
                 picker,
                 button(text("Play").font(theme::MEDIUM).size(13))
@@ -3017,13 +3114,13 @@ fn sound_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
             .step(0.05)
             .style(theme::range)
             .into(),
+            check("Mute tap sounds", s.bool(sound::MUTE), sound::MUTE),
+            check(
+                "Play a sound when tapping with the laser",
+                s.bool(sound::LASER),
+                sound::LASER
+            ),
         ]),
-        check("Mute tap sound", s.bool(sound::MUTE), sound::MUTE),
-        check(
-            "Play a sound when tapping with the laser",
-            s.bool(sound::LASER),
-            sound::LASER
-        ),
     ]
     .spacing(22)
     .max_width(560)

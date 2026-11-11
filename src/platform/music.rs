@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::mascot::music::{Envelope, Source};
+use crate::mascot::music::{Envelope, Source, fall, meter};
 
 /// How often the meters are read.
 const TICK: Duration = Duration::from_millis(50);
@@ -31,9 +31,11 @@ pub enum State {
 }
 
 /// An app with an active audio session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct App {
     pub exe: String,
+    /// How full its meter is (0–1, decibel scale), for the picker.
+    pub shown: f32,
     /// The loudest session's process.
     pub pid: u32,
     /// Every process with a session for this app.
@@ -43,6 +45,9 @@ pub struct App {
 #[derive(Default)]
 struct Shared {
     level: AtomicU32,
+    /// Meter readings (0–1, decibel scale): the chosen source, and all apps.
+    heard: AtomicU32,
+    all: AtomicU32,
     state: AtomicU8,
     started: AtomicBool,
     stop: AtomicBool,
@@ -82,6 +87,17 @@ impl Meter {
         if *s != *source {
             *s = source.clone();
         }
+    }
+
+    /// How full the chosen source's meter is (0–1, decibel scale): what's
+    /// heard right now, before any gain or "playing" decision.
+    pub fn heard(&self) -> f32 {
+        f32::from_bits(self.shared.heard.load(Ordering::Relaxed))
+    }
+
+    /// The meter for all apps together.
+    pub fn all_apps(&self) -> f32 {
+        f32::from_bits(self.shared.all.load(Ordering::Relaxed))
     }
 
     /// The smoothed level, 0–1 (0 while silent).
@@ -146,6 +162,10 @@ fn run(shared: &Shared) {
     let mut envelope = Envelope::default();
     let mut sessions = None;
     let mut input: Option<(String, InputPeak)> = None;
+    // Falling meter readings per app (by lower-case name), all apps and
+    // the chosen source.
+    let mut shown: HashMap<String, f32> = HashMap::new();
+    let (mut shown_all, mut shown_heard) = (0.0f32, 0.0f32);
     let mut refreshed = Instant::now() - REFRESH;
     let mut last = Instant::now();
     shared.state.store(State::Starting as u8, Ordering::Relaxed);
@@ -172,11 +192,26 @@ fn run(shared: &Shared) {
         let now = Instant::now();
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
-        let apps = sessions.as_ref().and_then(|m| peaks(m, own, &mut names));
+        let mut apps = sessions.as_ref().and_then(|m| peaks(m, own, &mut names));
+        if let Some(list) = &mut apps {
+            let mut next = HashMap::new();
+            for (a, p) in list.iter_mut() {
+                let key = a.exe.to_lowercase();
+                let s = fall(shown.get(&key).copied().unwrap_or(0.0), *p, dt);
+                a.shown = meter(s);
+                next.insert(key, s);
+            }
+            shown = next;
+        }
         *lock(&shared.apps) = apps
             .as_ref()
             .map(|list| list.iter().map(|(a, _)| a.clone()).collect())
             .unwrap_or_default();
+        let all = apps
+            .as_ref()
+            .map_or(0.0, |list| list.iter().fold(0.0f32, |m, (_, p)| m.max(*p)));
+        shown_all = fall(shown_all, all, dt);
+        shared.all.store(meter(shown_all).to_bits(), Ordering::Relaxed);
         let peak = match &source {
             Source::All => apps.map(|list| list.iter().fold(0.0f32, |m, (_, p)| m.max(*p))),
             Source::App(_) => apps.map(|list| {
@@ -186,6 +221,8 @@ fn run(shared: &Shared) {
             }),
             Source::Input(_) => input.as_ref().map(|(_, p)| p.take()),
         };
+        shown_heard = fall(shown_heard, peak.unwrap_or(0.0), dt);
+        shared.heard.store(meter(shown_heard).to_bits(), Ordering::Relaxed);
         match peak {
             Some(p) => {
                 if envelope.step(p, dt) {
@@ -206,6 +243,7 @@ fn run(shared: &Shared) {
         std::thread::sleep(TICK);
     }
     shared.level.store(0f32.to_bits(), Ordering::Relaxed);
+    shared.heard.store(0f32.to_bits(), Ordering::Relaxed);
     drop(input);
     drop(sessions);
     if com {
@@ -275,7 +313,15 @@ fn peaks(
                         *p = peak;
                     }
                 }
-                None => out.push((App { exe, pid, pids: vec![pid] }, peak)),
+                None => out.push((
+                    App {
+                        exe,
+                        shown: 0.0,
+                        pid,
+                        pids: vec![pid],
+                    },
+                    peak,
+                )),
             }
         }
     }

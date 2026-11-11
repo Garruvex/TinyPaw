@@ -117,6 +117,7 @@ fn settings_view<'a>(
         registry,
         session,
         page,
+        character_tab: Default::default(),
         displays: &[],
         #[cfg(windows)]
         sources: &[],
@@ -137,7 +138,8 @@ fn settings_view<'a>(
         motion: None,
         music: ("Off".into(), 0.0),
         music_source: crate::mascot::music::Source::All,
-        music_sources: vec![crate::mascot::music::Source::All],
+        music_rows: vec![(crate::mascot::music::Source::All, 0.0, false)],
+        music_inputs: Vec::new(),
         beat: "Off".into(),
     }
 }
@@ -197,6 +199,61 @@ fn settings_navigation_and_page_actions_receive_clicks() {
                     .iter()
                     .any(|m| matches!(m, Message::Ui(UiMsg::Nav(p)) if *p == target)),
                 "navigation to {target:?} failed on {page:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn character_tabs_show_the_selected_controls_and_keep_the_preview_interactive() {
+    use crate::features::mascot;
+    use crate::mascot::{preview::MotionPreview, rig::Rig};
+    use settings::CharacterTab;
+
+    let registry = Registry::build(crate::features::BUILTINS).unwrap();
+    let session = pointing(&registry);
+    let rig = Rig::load();
+    let defaults = rig.motion().to_vec();
+    let preview = MotionPreview::new(
+        "yohta",
+        rig,
+        defaults,
+        Default::default(),
+        Default::default(),
+    );
+    let tabs = [
+        CharacterTab::Desktop,
+        CharacterTab::Motion,
+        CharacterTab::Speech,
+        CharacterTab::Music,
+    ];
+    for tab in tabs {
+        let mut view = settings_view(&registry, &session, &[], settings::Page::Character);
+        view.motion = Some(&preview);
+        view.character_tab = tab;
+        let messages = click_layout(settings::view(view), Size::new(1040.0, 1200.0));
+        for target in tabs {
+            assert!(
+                messages
+                    .iter()
+                    .any(|m| matches!(m, Message::Ui(UiMsg::CharacterTab(t)) if *t == target))
+            );
+        }
+        assert!(
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::Ui(UiMsg::MotionTest(_))))
+        );
+        for (id, owner) in [
+            (mascot::ENABLED, CharacterTab::Desktop),
+            (mascot::LINES, CharacterTab::Speech),
+            (mascot::MUSIC, CharacterTab::Music),
+        ] {
+            assert_eq!(
+                messages
+                    .iter()
+                    .any(|m| matches!(m, Message::Set(key, _) if *key == id)),
+                tab == owner
             );
         }
     }

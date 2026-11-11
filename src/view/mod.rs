@@ -65,6 +65,7 @@ pub enum UiMsg {
     ToggleInkMenu,
     ToggleMoreMenu,
     Nav(settings::Page),
+    CharacterTab(settings::CharacterTab),
     ImportWav,
     PreviewSound,
     TurnOn,

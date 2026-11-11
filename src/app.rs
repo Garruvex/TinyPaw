@@ -101,6 +101,7 @@ pub struct App {
     helper_hwnds: std::collections::BTreeMap<window::Id, isize>,
     first_run_window: Option<window::Id>,
     page: Page,
+    character_tab: view::settings::CharacterTab,
     notice: Option<String>,
     ui: OverlayUi,
     previous_focus: Option<isize>,
@@ -140,6 +141,9 @@ pub struct App {
     /// The Follow beat trial's loopback analysis, while it's on.
     #[cfg(windows)]
     beat: Option<platform::beat::Follower>,
+    /// Eases between followed tempos and the steady pace, so the music
+    /// motion never jumps. Stepped by wall time wherever the phase is read.
+    beat_clock: std::cell::Cell<(crate::mascot::music::BeatClock, Option<Instant>)>,
     editing_pack: Option<&'static str>,
     rebinding: Option<&'static str>,
     alt_down: bool,
@@ -245,6 +249,7 @@ impl App {
             helper_hwnds: std::collections::BTreeMap::new(),
             first_run_window: None,
             page: Page::default(),
+            character_tab: Default::default(),
             notice: None,
             ui: OverlayUi::default(),
             previous_focus: None,
@@ -272,6 +277,7 @@ impl App {
             music: None,
             #[cfg(windows)]
             beat: None,
+            beat_clock: Default::default(),
             pointer_draft: None,
             editing_pack: None,
             rebinding: None,
@@ -1013,15 +1019,24 @@ impl App {
     /// The followed beat's phase, shifted by Beat timing, while music plays.
     fn beat_phase(&self) -> Option<f32> {
         #[cfg(windows)]
-        if let Some(b) = &self.beat
-            && self.music_level() > 0.0
-        {
+        if self.music_level() > 0.0 {
             let offset = match self.session.settings().choice(character::BEAT_TIMING) {
                 "earlier" => 0.06,
                 "later" => -0.06,
                 _ => 0.0,
             };
-            return b.phase(offset);
+            // The followed beat when there is one; the clock eases to it,
+            // and back to the steady pace when it's lost.
+            let target = self
+                .beat
+                .as_ref()
+                .and_then(|b| b.phase(offset).zip(b.bpm()));
+            let (mut clock, last) = self.beat_clock.get();
+            let now = Instant::now();
+            let dt = last.map_or(0.0, |l| now.duration_since(l).as_secs_f32());
+            let phase = clock.step(dt, target);
+            self.beat_clock.set((clock, Some(now)));
+            return Some(phase);
         }
         None
     }
@@ -1040,7 +1055,8 @@ impl App {
         if let Some(b) = &self.beat {
             return match (b.available(), b.bpm()) {
                 (false, _) => "Can't listen to the output".into(),
-                (true, Some(bpm)) => format!("Following · {bpm:.0} BPM"),
+                // The eased tempo the character is moving at.
+                (true, Some(_)) => format!("Following · {:.0} BPM", self.beat_clock.get().0.bpm()),
                 (true, None) => "Looking for a beat".into(),
             };
         }
@@ -1077,9 +1093,8 @@ impl App {
                 (State::Silent, Source::App(exe)) if m.app_pids(exe).is_empty() => {
                     (format!("{source} isn't playing"), 0.0)
                 }
-                (State::Silent, _) => ("Silent".into(), 0.0),
-                (State::Playing, Source::Input(_)) => ("Hearing sound".into(), m.level()),
-                (State::Playing, _) => ("Hearing playback".into(), m.level()),
+                (State::Silent, _) => ("Too quiet to move to".into(), m.heard()),
+                (State::Playing, _) => ("Moving to it".into(), m.heard()),
                 (State::Unavailable, Source::Input(name)) => (format!("Can't open {name}"), 0.0),
                 (State::Unavailable, _) => {
                     ("Unavailable: no playback device to listen to".into(), 0.0)
@@ -1098,18 +1113,34 @@ impl App {
         crate::mascot::music::Source::parse(self.session.settings().choice(character::MUSIC_SOURCE))
     }
 
-    /// The picker's choices: all apps, the apps playing now and the input
-    /// devices, keeping the saved choice even while it isn't there.
-    fn music_sources(&self) -> Vec<crate::mascot::music::Source> {
+    /// The app sources to pick from: all apps, then each app playing now,
+    /// with live meters; the saved app stays listed while it's quiet.
+    fn music_rows(&self) -> Vec<(crate::mascot::music::Source, f32, bool)> {
         use crate::mascot::music::Source;
-        let mut list = vec![Source::All];
+        let mut rows = vec![(Source::All, 0.0, true)];
         #[cfg(windows)]
         if let Some(m) = &self.music {
-            list.extend(m.apps().into_iter().map(|a| Source::App(a.exe)));
+            rows[0].1 = m.all_apps();
+            rows.extend(m.apps().into_iter().map(|a| (Source::App(a.exe), a.shown, true)));
+        }
+        let current = self.music_source();
+        if matches!(current, Source::App(_)) && !rows.iter().any(|(s, _, _)| *s == current) {
+            rows.push((current, 0.0, false));
+        }
+        rows
+    }
+
+    /// The input devices, keeping the saved one while it's unplugged.
+    fn music_inputs(&self) -> Vec<crate::mascot::music::Source> {
+        use crate::mascot::music::Source;
+        #[cfg_attr(not(windows), allow(unused_mut))]
+        let mut list: Vec<Source> = Vec::new();
+        #[cfg(windows)]
+        if let Some(m) = &self.music {
             list.extend(m.inputs().iter().map(|n| Source::input(n)));
         }
         let current = self.music_source();
-        if !list.contains(&current) {
+        if matches!(current, Source::Input(_)) && !list.contains(&current) {
             list.push(current);
         }
         list
@@ -1549,6 +1580,7 @@ impl App {
                 self.ui.more_menu = false;
                 self.ui.ink_menu = !self.ui.ink_menu;
             }
+            UiMsg::CharacterTab(tab) => self.character_tab = tab,
             UiMsg::Nav(page) => {
                 if page != Page::Character {
                     self.cancel_character_job();
@@ -2699,6 +2731,7 @@ impl App {
                 #[cfg(windows)]
                 sources: &self.sources,
                 page: self.page,
+                character_tab: self.character_tab,
                 has_custom_sound: self.audio.has_custom(),
                 taken: self.hotkeys.as_ref().map_or(&[], |h| h.taken.as_slice()),
                 packs: &self.packs,
@@ -2716,7 +2749,8 @@ impl App {
                 motion: self.motion_preview.as_ref(),
                 music: self.music_status(),
                 music_source: self.music_source(),
-                music_sources: self.music_sources(),
+                music_rows: self.music_rows(),
+                music_inputs: self.music_inputs(),
                 beat: self.beat_status(),
             });
         }
