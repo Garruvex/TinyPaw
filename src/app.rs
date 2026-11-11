@@ -1029,6 +1029,14 @@ impl App {
     /// The Follow beat trial's status line.
     fn beat_status(&self) -> String {
         #[cfg(windows)]
+        if self.beat.is_none()
+            && self.music.is_some()
+            && self.session.settings().bool(character::BEAT)
+            && let source @ crate::mascot::music::Source::App(_) = self.music_source()
+        {
+            return format!("Starts when {source} plays");
+        }
+        #[cfg(windows)]
         if let Some(b) = &self.beat {
             return match (b.available(), b.bpm()) {
                 (false, _) => "Can't listen to the output".into(),
@@ -1046,8 +1054,11 @@ impl App {
     /// TinyPaw is playing a sound: Follow beat's loopback hears it too, so
     /// onsets are held off meanwhile.
     fn own_sound(&self, seconds: f32) {
+        // A single app's capture never hears TinyPaw.
         #[cfg(windows)]
-        if let Some(b) = &self.beat {
+        if let Some(b) = &self.beat
+            && !matches!(b.target(), platform::beat::Target::Process(_))
+        {
             b.hold_off(seconds);
         }
         let _ = seconds;
@@ -1055,22 +1066,53 @@ impl App {
 
     /// What the Music section shows: off, starting, silent, playing or
     /// unavailable, with the raw level for the meter.
-    fn music_status(&self) -> (&'static str, f32) {
+    fn music_status(&self) -> (String, f32) {
         #[cfg(windows)]
         if let Some(m) = &self.music {
+            use crate::mascot::music::Source;
             use platform::music::State;
-            return match m.state() {
-                State::Starting => ("Listening…", 0.0),
-                State::Silent => ("Silent", 0.0),
-                State::Playing => ("Hearing playback", m.level()),
-                State::Unavailable => ("Unavailable: no playback device to listen to", 0.0),
+            let source = self.music_source();
+            return match (m.state(), &source) {
+                (State::Starting, _) => ("Listening…".into(), 0.0),
+                (State::Silent, Source::App(exe)) if m.app_pids(exe).is_empty() => {
+                    (format!("{source} isn't playing"), 0.0)
+                }
+                (State::Silent, _) => ("Silent".into(), 0.0),
+                (State::Playing, Source::Input(_)) => ("Hearing sound".into(), m.level()),
+                (State::Playing, _) => ("Hearing playback".into(), m.level()),
+                (State::Unavailable, Source::Input(name)) => (format!("Can't open {name}"), 0.0),
+                (State::Unavailable, _) => {
+                    ("Unavailable: no playback device to listen to".into(), 0.0)
+                }
             };
         }
         if self.session.settings().bool(character::MUSIC) {
-            ("Starts while the character or this page is showing", 0.0)
+            ("Starts while the character or this page is showing".into(), 0.0)
         } else {
-            ("Off", 0.0)
+            ("Off".into(), 0.0)
         }
+    }
+
+    /// What music response listens to.
+    fn music_source(&self) -> crate::mascot::music::Source {
+        crate::mascot::music::Source::parse(self.session.settings().choice(character::MUSIC_SOURCE))
+    }
+
+    /// The picker's choices: all apps, the apps playing now and the input
+    /// devices, keeping the saved choice even while it isn't there.
+    fn music_sources(&self) -> Vec<crate::mascot::music::Source> {
+        use crate::mascot::music::Source;
+        let mut list = vec![Source::All];
+        #[cfg(windows)]
+        if let Some(m) = &self.music {
+            list.extend(m.apps().into_iter().map(|a| Source::App(a.exe)));
+            list.extend(m.inputs().iter().map(|n| Source::input(n)));
+        }
+        let current = self.music_source();
+        if !list.contains(&current) {
+            list.push(current);
+        }
+        list
     }
 
     /// Runs the playback meter only while music response is on and the
@@ -1083,19 +1125,36 @@ impl App {
             let on = self.session.settings().bool(character::MUSIC);
             let showing = self.mascot.as_ref().is_some_and(|m| !m.is_hidden());
             let wanted = on && (showing || self.motion_preview.is_some());
-            match (wanted, self.music.is_some()) {
-                (true, false) => self.music = Some(platform::music::Meter::start()),
-                (false, true) => self.music = None,
-                _ => {}
+            use crate::mascot::music::Source;
+            use platform::beat::Target;
+            let source = self.music_source();
+            match (wanted, &self.music) {
+                (true, None) => self.music = Some(platform::music::Meter::start(source.clone())),
+                (true, Some(m)) => m.set_source(&source),
+                (false, Some(_)) => self.music = None,
+                (false, None) => {}
             }
-            // Follow beat runs only alongside music response.
+            // Follow beat runs only alongside music response, on the same
+            // source: one app's own audio while it's playing.
+            let target = match &source {
+                Source::All => Some(Target::Output),
+                Source::Input(name) => Some(Target::Input(name.clone())),
+                Source::App(exe) => {
+                    let pids = self.music.as_ref().map(|m| m.app_pids(exe)).unwrap_or_default();
+                    match self.beat.as_ref().map(|b| b.target()) {
+                        // Keep a capture still on one of the app's processes.
+                        Some(Target::Process(pid)) if pids.contains(pid) => Some(Target::Process(*pid)),
+                        _ => pids.first().map(|pid| Target::Process(*pid)),
+                    }
+                }
+            };
             let follow = wanted && self.session.settings().bool(character::BEAT);
             let sensitivity = self.beat_sensitivity();
-            match (follow, &self.beat) {
-                (true, None) => self.beat = Some(platform::beat::Follower::start(sensitivity)),
-                (true, Some(b)) => b.set_sensitivity(sensitivity),
-                (false, Some(_)) => self.beat = None,
-                (false, None) => {}
+            match (follow.then_some(target).flatten(), &self.beat) {
+                (Some(t), Some(b)) if *b.target() == t => b.set_sensitivity(sensitivity),
+                (Some(t), _) => self.beat = Some(platform::beat::Follower::start(sensitivity, t)),
+                (None, Some(_)) => self.beat = None,
+                (None, None) => {}
             }
             if self.music.as_ref().is_some_and(|m| m.take_started()) {
                 let options = self.mascot_options();
@@ -2656,6 +2715,8 @@ impl App {
                 art: self.art.as_ref(),
                 motion: self.motion_preview.as_ref(),
                 music: self.music_status(),
+                music_source: self.music_source(),
+                music_sources: self.music_sources(),
                 beat: self.beat_status(),
             });
         }

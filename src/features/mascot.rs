@@ -19,6 +19,8 @@ pub const MUSIC: &str = "mascot.music";
 pub const MUSIC_STRENGTH: &str = "mascot.music_strength";
 /// The Follow beat trial: on/off, how readily it commits, and a timing nudge.
 pub const BEAT: &str = "mascot.follow_beat";
+/// What music response listens to: `all`, `app:<exe>` or `in:<device>`.
+pub const MUSIC_SOURCE: &str = "mascot.music_source";
 pub const BEAT_SENSITIVITY: &str = "mascot.beat_sensitivity";
 pub const BEAT_TIMING: &str = "mascot.beat_timing";
 /// Idle lines come at a random time within this many minutes.
@@ -158,6 +160,14 @@ pub fn register(r: &mut Registrar) {
         order: 13,
         default: Value::Choice("default"),
         constraint: Constraint::Choices(&["earlier", "default", "later"]),
+    });
+    r.setting(SettingDef {
+        id: MUSIC_SOURCE,
+        label: "Listen to",
+        group: "Character",
+        order: 14,
+        default: Value::Choice("all"),
+        constraint: Constraint::None,
     });
     for (id, order) in [(X, 90), (Y, 91)] {
         r.setting(SettingDef {

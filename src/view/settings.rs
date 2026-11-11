@@ -86,7 +86,10 @@ pub struct SettingsView<'a> {
     /// The Motion tab's live preview, on the Character page.
     pub motion: Option<&'a crate::mascot::preview::MotionPreview>,
     /// Music response status and live level, for the meter.
-    pub music: (&'static str, f32),
+    pub music: (String, f32),
+    /// What music response listens to, and the choices for the picker.
+    pub music_source: crate::mascot::music::Source,
+    pub music_sources: Vec<crate::mascot::music::Source>,
     /// The Follow beat trial's status line.
     pub beat: String,
 }
@@ -1915,7 +1918,7 @@ fn lines_section<'a>(
 /// The Music tab: react to playback, how strongly, and a live meter.
 fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     let s = v.session.settings();
-    let (status, level) = v.music;
+    let (status, level) = (v.music.0.clone(), v.music.1);
     let on = s.bool(mascot::MUSIC);
     let meter = container(
         container(space())
@@ -1934,6 +1937,24 @@ fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         h2("Music"),
         check("React to playback", on, mascot::MUSIC),
         hint("Moves with the loudness of what's playing on this PC. TinyPaw's own sounds are left out, and nothing is recorded."),
+        row![
+            text("Listen to").size(12).color(theme::MUTED).width(110),
+            pick_list(v.music_sources.clone(), Some(v.music_source.clone()), |s| Message::Set(
+                mascot::MUSIC_SOURCE,
+                Value::Choice(crate::platform::intern(&s.id()))
+            ))
+            .text_size(13)
+            .padding([6, 10])
+            .style(theme::select),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center)
+        .into(),
+        hint(match v.music_source {
+            crate::mascot::music::Source::All => "All apps together. Pick one app so a game or a call doesn't count; the list shows apps that are playing.",
+            crate::mascot::music::Source::App(_) => "Only this app counts, and Follow beat hears only its sound.",
+            crate::mascot::music::Source::Input(_) => "For music that doesn't play on this PC. This uses the input device (Windows shows the microphone in use) while listening; nothing is recorded.",
+        }),
         row![
             text("Playback").size(12).color(theme::MUTED).width(110),
             container(meter).width(Length::Fill),

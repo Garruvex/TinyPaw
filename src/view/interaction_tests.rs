@@ -135,7 +135,9 @@ fn settings_view<'a>(
         character_conflict: None,
         art: None,
         motion: None,
-        music: ("Off", 0.0),
+        music: ("Off".into(), 0.0),
+        music_source: crate::mascot::music::Source::All,
+        music_sources: vec![crate::mascot::music::Source::All],
         beat: "Off".into(),
     }
 }

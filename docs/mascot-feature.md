@@ -585,3 +585,26 @@ A pack sets its own style with `"music": { "bop": "groove" }` (`nod`,
 `groove` or `rubber_hose`; an unknown style bops the default way). The
 user's choice is kept in the character's overrides as `"bop"`, removed again
 when it matches the pack's, and baked into exports.
+
+### Listen to: choosing the sound source
+
+Music → **Listen to** picks what music response hears:
+
+| Choice | Playback level | Follow beat |
+| --- | --- | --- |
+| **All apps** (default) | Every other app's session peak on the default output | Loopback of the whole default output |
+| **One app** (listed while it plays) | Only that app's session peaks | Windows process loopback of that app's process tree, so no other app is heard; TinyPaw never is, so no hold-off is needed |
+| **Input: a device** (microphone, line-in, Voicemeeter bus) | The device's own peak | The device's stream |
+
+An app is saved by its program file name (`app:Spotify.exe`) and matched
+without regard to case, so it survives restarts; while it isn't playing the
+status says so and Follow beat waits for it. Its sessions are merged, and a
+running capture is kept while it's still on one of the app's processes. An
+input is saved by name (`in:<name>`, cut to 60 characters and found by the
+start of its name). An input device is open only while it's chosen and music
+response is running; Windows shows the microphone in use then, and only its
+peak (and, for Follow beat, the in-memory analysis) is kept.
+
+Checked live on the development PC: the app list and 11 input devices are
+read, and process loopback opens and delivers 10 ms chunks at 48 kHz.
+Playback from a real app hasn't been tried through it yet.
