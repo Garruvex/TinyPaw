@@ -35,6 +35,8 @@ const GAP: f32 = 8.0;
 const DRAG_START: f32 = 5.0;
 /// Seconds to ease from the pose held during a press back to live motion.
 const SETTLE: f32 = 0.25;
+/// Most a carried character leans, in radians, before the window cap.
+const CARRY_LEAN: f32 = 0.15;
 /// Gaze reaches its limit this far from the eyes, as a share of the
 /// character's height (Yohta: about 420 rig pixels).
 const GAZE_REACH: f32 = 0.49;
@@ -221,6 +223,15 @@ struct Press {
     /// change.
     pose: Pose,
     dragging: bool,
+    /// The grabbed point in the stage frame's rig coordinates: the pivot
+    /// a carried character leans around.
+    pivot: Point,
+    /// Parts that keep their pressed angle while carried: the grabbed part
+    /// and every part it rides on, so moving them can't move the contact.
+    /// Other parts trail freely.
+    protected: Vec<bool>,
+    /// The current carry lean, eased toward the drag's.
+    lean: f32,
 }
 
 /// Where the window goes so window point `grab` sits under `cursor`, both
@@ -471,14 +482,19 @@ impl Desktop {
                     (native::cursor_pos(), native::window_rect(self.hwnd))
                 {
                     let k = self.k(rect);
+                    let grab = Point::new(
+                        (cursor.0 - rect.0) as f32 / k,
+                        (cursor.1 - rect.1) as f32 / k,
+                    );
+                    let (pivot, protected) = self.grab_chain(grab);
                     self.press = Some(Press {
                         cursor,
-                        grab: Point::new(
-                            (cursor.0 - rect.0) as f32 / k,
-                            (cursor.1 - rect.1) as f32 / k,
-                        ),
+                        grab,
                         pose: self.pose.clone(),
                         dragging: false,
+                        pivot,
+                        protected,
+                        lean: 0.0,
                     });
                 }
                 (Task::none(), None)
@@ -611,7 +627,9 @@ impl Desktop {
         } else {
             Vector::ZERO
         };
-        // Held: keep the pressed pose's geometry; only the face changes.
+        // Pressed: keep the pressed pose's geometry; only the face changes.
+        // Carried: lean around the grabbed point and let unprotected parts
+        // trail, both of which leave that point under the cursor.
         if let Some(press) = &self.press {
             let mut pose = press.pose.clone();
             pose.expression = if press.dragging {
@@ -619,6 +637,31 @@ impl Desktop {
             } else {
                 Expression::Pressed
             };
+            if press.dragging && !o.reduced {
+                let live = self.animator.step(
+                    &self.parts,
+                    &Inputs {
+                        now: self.now,
+                        dt,
+                        dragging: true,
+                        velocity,
+                        bop: self.rig.bop(),
+                        ..Inputs::default()
+                    },
+                );
+                for (i, angle) in pose.angles.iter_mut().enumerate() {
+                    if !press.protected.get(i).copied().unwrap_or(true) {
+                        *angle = live.angles.get(i).copied().unwrap_or(*angle);
+                    }
+                }
+                let want = (-velocity.x * 0.0004).clamp(-CARRY_LEAN, CARRY_LEAN);
+                let lean = press.lean + (want - press.lean) * (1.0 - (-dt.min(0.1) * 10.0).exp());
+                let lean = self.fit_carry(press.grab, lean);
+                pose.carry = Some((press.pivot, lean));
+                if let Some(p) = &mut self.press {
+                    p.lean = lean;
+                }
+            }
             pose.gaze = self.head_gaze(&pose);
             self.pose = pose;
             return;
@@ -648,6 +691,57 @@ impl Desktop {
         }
         pose.gaze = self.head_gaze(&pose);
         self.pose = pose;
+    }
+
+    /// Where window point `grab` is in the stage frame, and which parts
+    /// it hangs from.
+    fn grab_chain(&self, grab: Point) -> (Point, Vec<bool>) {
+        let l = &self.layout;
+        let pivot = Point::new((grab.x - l.character.x) / l.scale, (grab.y - l.character.y) / l.scale);
+        let local = super::motion::unplaced(&self.pose, self.rig.anchor(), self.rig.size().height, pivot);
+        let mut protected = vec![false; self.parts.len()];
+        if let Some(super::rig::Layer::Part(mut i)) = self.rig.hit(local, &self.pose) {
+            loop {
+                if let Some(p) = protected.get_mut(i) {
+                    *p = true;
+                }
+                match self.parts.get(i).and_then(|p| p.parent) {
+                    Some(parent) if !protected.get(parent).copied().unwrap_or(true) => i = parent,
+                    _ => break,
+                }
+            }
+        }
+        (pivot, protected)
+    }
+
+    /// The largest lean toward `lean` that keeps the turned character
+    /// inside its window: around a grab near the head the feet swing out,
+    /// and anything past the window edge would be cut off.
+    fn fit_carry(&self, grab: Point, lean: f32) -> f32 {
+        let l = &self.layout;
+        let c = l.character;
+        let corners = [
+            Point::new(c.x, c.y),
+            Point::new(c.x + c.width, c.y),
+            Point::new(c.x, c.y + c.height),
+            Point::new(c.x + c.width, c.y + c.height),
+        ];
+        let fits = |a: f32| {
+            let (s, co) = a.sin_cos();
+            corners.iter().all(|p| {
+                let (x, y) = (p.x - grab.x, p.y - grab.y);
+                let q = Point::new(grab.x + x * co - y * s, grab.y + x * s + y * co);
+                q.x >= -0.5 && q.y >= -0.5 && q.x <= l.window.width + 0.5 && q.y <= l.window.height + 0.5
+            })
+        };
+        let mut a = lean;
+        for _ in 0..12 {
+            if fits(a) {
+                return a;
+            }
+            a *= 0.7;
+        }
+        0.0
     }
 
     /// The gaze counter-rotated into the head's space, so it stays
@@ -838,15 +932,16 @@ impl Desktop {
         let mut items = Some(items);
         let _ = o;
         let stage = canvas_widget(Stage { desktop: self })
-        .width(l.character.width)
-        .height(Length::Fill);
-        let body = row![
+            .width(Length::Fill)
+            .height(Length::Fill);
+        let menus = row![
             slot(Side::Left, &mut items),
-            stage,
+            space().width(l.character.width),
             slot(Side::Right, &mut items)
         ]
         .width(Length::Fill)
         .height(Length::Fill);
+        let body = iced::widget::stack![stage, menus];
         let Some(speech) = self.speech.as_ref().filter(|_| o.lines) else {
             return body.into();
         };
@@ -916,9 +1011,9 @@ struct Stage<'a> {
 }
 
 impl Stage<'_> {
-    /// Canvas-local point to window coordinates.
+    /// Canvas-local point to window coordinates: the stage fills the window.
     fn window_point(&self, p: Point) -> Point {
-        Point::new(p.x + self.desktop.layout.character.x, p.y)
+        p
     }
 }
 
@@ -965,7 +1060,7 @@ impl canvas::Program<Message> for Stage<'_> {
         let l = &d.layout;
         let pose = &d.pose;
         let mut frame = Frame::new(renderer, bounds.size());
-        frame.translate(Vector::new(0.0, l.character.y));
+        frame.translate(Vector::new(l.character.x, l.character.y));
         frame.scale(l.scale);
         super::motion::place(&mut frame, pose, d.rig.anchor(), d.rig.size().height);
         d.rig.draw_pose(&mut frame, pose);
@@ -1191,6 +1286,57 @@ mod tests {
     }
 
     #[test]
+    fn a_carried_character_leans_around_the_grab_and_trails_unprotected_parts() {
+        let (mut d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 500.0), 5, false);
+        let o = Options {
+            eyes: false,
+            idle: true,
+            reduced: false,
+            lines: false,
+            quiet: true,
+            idle_every: (60.0, 300.0),
+            music: 0.0,
+            beat: None,
+        };
+        d.step_motion(&o, 1.0);
+        let l = d.layout;
+        // Grab the head, about where the face is.
+        let face = Point::new(232.0, 360.0);
+        let grab = Point::new(l.character.x + face.x * l.scale, l.character.y + face.y * l.scale);
+        let (pivot, protected) = d.grab_chain(grab);
+        assert!(protected.iter().any(|p| *p), "the head is protected");
+        assert!(!protected.iter().all(|p| *p), "the tail may trail");
+        let held = d.pose.clone();
+        d.press = Some(Press { cursor: (0, 0), grab, pose: held.clone(), dragging: true, pivot, protected: protected.clone(), lean: 0.0 });
+        let local = super::super::motion::unplaced(&held, d.rig.anchor(), d.rig.size().height, pivot);
+        let mut leaned = 0.0f32;
+        for _ in 0..40 {
+            d.now += 0.016;
+            d.last_anchor.0 -= 12.0; // carried to the right
+            d.step_motion(&o, 1.0);
+            let pose = &d.pose;
+            leaned = leaned.max(pose.carry.map_or(0.0, |(_, a)| a.abs()));
+            // The grabbed point is where it was, within a hundredth of a
+            // rig pixel, and the protected chain hasn't turned.
+            let drawn = super::super::motion::placed(pose, d.rig.anchor(), d.rig.size().height, local);
+            assert!(drawn.distance(pivot) < 0.01, "{drawn:?} vs {pivot:?}");
+            for (i, p) in protected.iter().enumerate() {
+                if *p {
+                    assert_eq!(pose.angles[i], held.angles[i]);
+                }
+            }
+        }
+        assert!(leaned > 0.01, "it leans while carried");
+        // The lean never pushes the character out of its window.
+        assert!(leaned <= CARRY_LEAN + 1e-4);
+        // Release eases the lean out around the same point.
+        d.release(&o);
+        d.now += 0.001;
+        d.step_motion(&o, 1.0);
+        assert!(d.pose.carry.is_some_and(|(at, a)| at == pivot && a.abs() <= leaned + 1e-4));
+    }
+
+    #[test]
     fn gestures_emit_each_event_once_and_cancellation_none() {
         let (mut d, _) = Desktop::open("yohta", Rig::load(), 160.0, (500.0, 500.0), 5, false);
         let o = Options {
@@ -1203,7 +1349,15 @@ mod tests {
             music: 0.0,
             beat: None,
         };
-        let press = |dragging| Press { cursor: (0, 0), grab: Point::ORIGIN, pose: Pose::default(), dragging };
+        let press = |dragging| Press {
+            cursor: (0, 0),
+            grab: Point::ORIGIN,
+            pose: Pose::default(),
+            dragging,
+            pivot: Point::ORIGIN,
+            protected: Vec::new(),
+            lean: 0.0,
+        };
         // A short press is one Click.
         d.press = Some(press(false));
         d.release(&o);
@@ -1240,8 +1394,18 @@ mod tests {
             d.step_motion(&o, 1.0);
         }
         let held = d.pose.clone();
-        d.press = Some(Press { cursor: (0, 0), grab: Point::ORIGIN, pose: held.clone(), dragging: false });
-        for dragging in [false, true] {
+        // Reduced motion holds the whole pose, pressed or carried.
+        let reduced = Options { reduced: true, ..o };
+        d.press = Some(Press {
+            cursor: (0, 0),
+            grab: Point::ORIGIN,
+            pose: held.clone(),
+            dragging: false,
+            pivot: Point::ORIGIN,
+            protected: vec![true; held.angles.len()],
+            lean: 0.0,
+        });
+        for (dragging, o) in [(false, o), (true, reduced)] {
             d.press.as_mut().unwrap().dragging = dragging;
             for i in 0..30 {
                 d.now += 0.033;
@@ -1250,6 +1414,7 @@ mod tests {
                 // No squash, lean, bounce or part motion while held.
                 assert_eq!((d.pose.angles.clone(), d.pose.lean, d.pose.squash, d.pose.bounce),
                     (held.angles.clone(), held.lean, held.squash, held.bounce));
+                assert!(d.pose.carry.is_none_or(|(_, a)| a == 0.0));
             }
             let face = if dragging { Expression::Dragging } else { Expression::Pressed };
             assert_eq!(d.pose.expression, face);

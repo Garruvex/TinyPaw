@@ -287,6 +287,10 @@ pub struct Pose {
     pub expression: Expression,
     /// Where the eyes look, each axis -1 to 1, in head space.
     pub gaze: Vector,
+    /// While carried: the whole character turns by this angle around the
+    /// grabbed point (in the frame's rig coordinates), so that point stays
+    /// under the cursor however it leans.
+    pub carry: Option<(iced::Point, f32)>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -470,6 +474,7 @@ impl Animator {
             bounce: body.bounce,
             expression,
             gaze: Vector::ZERO,
+            carry: None,
         }
     }
 }
@@ -626,6 +631,13 @@ const COMPRESS_TIME: f32 = 0.28;
 /// squash turn and scale it around its feet so they stay on the ground.
 /// Shared by the desktop and the Settings preview.
 pub fn place(frame: &mut iced::widget::canvas::Frame, pose: &Pose, feet: iced::Point, height: f32) {
+    if let Some((at, angle)) = pose.carry
+        && angle.abs() > 0.0005
+    {
+        frame.translate(Vector::new(at.x, at.y));
+        frame.rotate(angle);
+        frame.translate(Vector::new(-at.x, -at.y));
+    }
     frame.translate(Vector::new(0.0, -pose.bounce * height));
     if deforms(pose) {
         let (sx, sy) = squash_scale(pose);
@@ -648,18 +660,35 @@ fn squash_scale(pose: &Pose) -> (f32, f32) {
 /// Where `place` draws a rig point: the forward whole-character transform.
 #[cfg(test)]
 pub fn placed(pose: &Pose, feet: iced::Point, height: f32, p: iced::Point) -> iced::Point {
+    let turn = |q: iced::Point, at: iced::Point, angle: f32| {
+        let (s, c) = angle.sin_cos();
+        let (x, y) = (q.x - at.x, q.y - at.y);
+        iced::Point::new(at.x + x * c - y * s, at.y + x * s + y * c)
+    };
     let lift = Vector::new(0.0, -pose.bounce * height);
-    if !deforms(pose) {
-        return p + lift;
+    let q = if !deforms(pose) {
+        p + lift
+    } else {
+        let (sx, sy) = squash_scale(pose);
+        let q = iced::Point::new(feet.x + (p.x - feet.x) * sx, feet.y + (p.y - feet.y) * sy);
+        turn(q, feet, pose.lean) + lift
+    };
+    match pose.carry {
+        Some((at, angle)) if angle.abs() > 0.0005 => turn(q, at, angle),
+        _ => q,
     }
-    let (sx, sy) = squash_scale(pose);
-    let (x, y) = ((p.x - feet.x) * sx, (p.y - feet.y) * sy);
-    let (s, c) = pose.lean.sin_cos();
-    iced::Point::new(feet.x + x * c - y * s, feet.y + x * s + y * c) + lift
 }
 
 /// The rig point `place` draws at `q`: the inverse of `placed`.
 pub fn unplaced(pose: &Pose, feet: iced::Point, height: f32, q: iced::Point) -> iced::Point {
+    let q = match pose.carry {
+        Some((at, angle)) if angle.abs() > 0.0005 => {
+            let (s, c) = angle.sin_cos();
+            let (x, y) = (q.x - at.x, q.y - at.y);
+            iced::Point::new(at.x + x * c + y * s, at.y - x * s + y * c)
+        }
+        _ => q,
+    };
     let q = q - Vector::new(0.0, -pose.bounce * height);
     if !deforms(pose) {
         return q;
@@ -687,6 +716,7 @@ pub fn blend(from: &Pose, to: Pose, t: f32) -> Pose {
         lean: mix(from.lean, to.lean),
         squash: mix(from.squash, to.squash),
         bounce: mix(from.bounce, to.bounce),
+        carry: from.carry.map(|(at, angle)| (at, mix(angle, 0.0))),
         ..to
     }
 }
@@ -814,6 +844,16 @@ mod tests {
         // The feet stay put through lean and squash; bounce lifts them.
         let pose = Pose { lean: 0.15, squash: 1.0, ..Pose::default() };
         assert!(placed(&pose, feet, 860.0, feet).distance(feet) < 1e-3);
+        // A carry turn keeps its own point fixed and inverts cleanly.
+        let grab = iced::Point::new(250.0, 200.0);
+        let carried = Pose { carry: Some((grab, 0.2)), lean: 0.05, ..Pose::default() };
+        let on_grab = unplaced(&carried, feet, 860.0, grab);
+        assert!(placed(&carried, feet, 860.0, on_grab).distance(grab) < 1e-3);
+        for p in [(0.0, 0.0), (620.0, 860.0)] {
+            let p = iced::Point::new(p.0, p.1);
+            let back = unplaced(&carried, feet, 860.0, placed(&carried, feet, 860.0, p));
+            assert!(p.distance(back) < 1e-3);
+        }
     }
 
     #[test]

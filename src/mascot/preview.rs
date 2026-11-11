@@ -400,6 +400,14 @@ impl MotionPreview {
             }
         }
         self.pose = self.animator.step(&self.rig.motion_parts(), &inputs);
+        // A test drag carries like the desktop: held near the top of the
+        // head, leaning around that point rather than around the feet.
+        if inputs.dragging {
+            let anchor = self.rig.anchor();
+            let grip = iced::Point::new(anchor.x, anchor.y - self.rig.visible_height() * 0.85);
+            self.pose.carry = Some((grip, self.pose.lean));
+            self.pose.lean = 0.0;
+        }
     }
 
 }
@@ -515,7 +523,7 @@ mod tests {
         for _ in 0..20 {
             p.tick(0.033, true, false, 0.0, None);
             dragged |= p.pose().expression == Expression::Dragging;
-            leaned = leaned.min(p.pose().lean);
+            leaned = leaned.min(p.pose().carry.map_or(0.0, |(_, a)| a));
         }
         assert!(dragged && leaned < -0.01, "a rightward drag leans the character left");
         // Let it settle, then click.
