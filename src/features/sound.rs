@@ -8,6 +8,8 @@ use crate::registry::{
 pub const TAP: &str = "sound.tap";
 pub const VOLUME: &str = "sound.volume";
 pub const MUTE: &str = "sound.mute";
+/// Pointer taps, character reactions and line sounds.
+pub const MUTE_ALL: &str = "sound.mute_all";
 pub const LASER: &str = "sound.laser";
 pub const TOGGLE_MUTE: &str = "sound.toggle_mute";
 
@@ -54,6 +56,14 @@ pub fn register(r: &mut Registrar) {
         label: "Mute tap sound",
         group: "Sound",
         order: 2,
+        default: Value::Bool(false),
+        constraint: Constraint::None,
+    });
+    r.setting(SettingDef {
+        id: MUTE_ALL,
+        label: "Mute all sounds",
+        group: "Sound",
+        order: 4,
         default: Value::Bool(false),
         constraint: Constraint::None,
     });

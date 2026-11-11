@@ -143,6 +143,12 @@ pub struct App {
     /// on every update.
     motion_failed: Option<&'static str>,
     motion_ticked: Option<Instant>,
+    /// The character voice: cooldowns, idle deadline, what's playing.
+    voice: crate::mascot::reactions::Voice,
+    /// The desktop character's reaction sounds.
+    reaction_sounds: crate::mascot::reactions::Sounds,
+    /// The voice's monotonic clock.
+    voice_clock: Instant,
     /// The playback meter, while music response is on and needed.
     #[cfg(windows)]
     music: Option<platform::music::Meter>,
@@ -284,6 +290,9 @@ impl App {
             after_save: None,
             motion_failed: None,
             motion_ticked: None,
+            voice: Default::default(),
+            reaction_sounds: Default::default(),
+            voice_clock: Instant::now(),
             #[cfg(windows)]
             music: None,
             #[cfg(windows)]
@@ -1365,6 +1374,7 @@ impl App {
             if want && (self.mascot.is_none() || stale) {
                 let rig = self.character_rig(selected);
                 let lines = self.character_lines(selected);
+                self.stop_character_voice();
                 match &mut self.mascot {
                     Some(m) => {
                         m.set_rig(selected, rig);
@@ -1383,6 +1393,7 @@ impl App {
             match (&mut self.mascot, want) {
                 (None, true) => {}
                 (Some(_), false) => {
+                    self.stop_character_voice();
                     let m = self.mascot.take().expect("mascot window");
                     return window::close(m.id);
                 }
@@ -1390,6 +1401,14 @@ impl App {
                     m.resize(size, rows);
                     let was_hidden = m.is_hidden();
                     let task = m.set_hidden(hidden);
+                    if hidden && !was_hidden {
+                        // Annotation owns input: character audio stops.
+                        self.voice.stop();
+                        self.audio.stop_voice();
+                    }
+                    let Some(m) = &mut self.mascot else {
+                        return task;
+                    };
                     // Back from annotation: the character can say so.
                     if was_hidden && !hidden {
                         m.say(crate::mascot::lines::Trigger::AnnotationEnd, &options);
@@ -1412,25 +1431,91 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Plays the line sound the desktop character asked for, if any, at
-    /// Character volume.
+    /// Routes the desktop character's gesture events through the one
+    /// character voice, then its line sound. A trigger plays one sound:
+    /// an accepted reaction sound wins over that trigger's line sound.
     fn play_mascot_sound(&mut self) {
         #[cfg(windows)]
-        if let Some(sound) = self.mascot.as_mut().and_then(|m| m.take_sound())
-            && let Some(seconds) = self.play_line_sound(&sound)
-            && let Some(m) = &mut self.mascot
         {
-            m.hold_speech(seconds);
+            use crate::mascot::reactions::{Event, Quiet};
+            let now = self.voice_clock.elapsed().as_secs_f64();
+            let Some(m) = &mut self.mascot else {
+                return;
+            };
+            let mut events = m.take_events();
+            let (free, hidden) = (m.idle_free(), m.is_hidden());
+            let line = m.take_sound();
+            let pick = || (self.voice_clock.elapsed().subsec_nanos() % 1000) as f32 / 1000.0;
+            if self.voice.idle_due(&self.reaction_sounds, free, now, pick)
+                && !platform::windows::foreground_fullscreen()
+            {
+                events.push(Event::Idle);
+            }
+            let quiet = Quiet {
+                mute_all: self.session.settings().bool(sound::MUTE_ALL),
+                annotating: hidden,
+                hidden,
+            };
+            let mut reacted = false;
+            for e in events {
+                if let Ok(play) = self.voice.accept(e, &self.reaction_sounds, quiet, now)
+                    && let Some(seconds) = self.play_reaction(&play)
+                {
+                    self.voice.started(now, seconds);
+                    reacted = true;
+                }
+            }
+            if !reacted
+                && let Some(sound) = line
+                && let Some(seconds) = self.play_line_sound(&sound)
+                && let Some(m) = &mut self.mascot
+            {
+                m.hold_speech(seconds);
+            }
+            self.audio.release_idle(self.session.is_enabled());
         }
     }
 
-    /// Plays a line sound at Character volume; returns how long it runs.
+    /// Plays an accepted reaction as the character voice; how long it runs.
+    fn play_reaction(&mut self, play: &crate::mascot::reactions::Play) -> Option<f32> {
+        use crate::mascot::reactions::Sound;
+        let clip = match &play.sound {
+            Sound::Builtin(id) => self.audio.bundled(id)?,
+            Sound::File(r) => {
+                let path = self.current_character().sound_path(r)?;
+                crate::audio::decode_wav(&path)
+                    .inspect_err(|e| eprintln!("tinypaw: reaction sound {}: {e}", path.display()))
+                    .ok()?
+            }
+        };
+        if !self.audio.play_voice(&clip, play.volume) {
+            self.notice = Some("No audio output for character sounds right now.".into());
+            return None;
+        }
+        self.own_sound(clip.seconds());
+        Some(clip.seconds())
+    }
+
+    /// Hiding, switching or removing the character stops its voice and its
+    /// pending idle work.
+    fn stop_character_voice(&mut self) {
+        self.voice.stop();
+        self.audio.stop_voice();
+    }
+
+    /// Plays a line sound as the character voice at Character volume;
+    /// returns how long it runs.
     fn play_line_sound(&mut self, sound: &crate::mascot::lines::SoundRef) -> Option<f32> {
+        if self.session.settings().bool(sound::MUTE_ALL) {
+            return None;
+        }
         let volume = self.session.settings().float(character::VOICE_VOLUME) as f32;
         let path = self.current_character().sound_path(sound)?;
         match crate::audio::decode_wav(&path) {
             Ok(clip) => {
-                self.audio.play_clip(&clip, volume);
+                if !self.audio.play_voice(&clip, volume) {
+                    return None;
+                }
                 self.own_sound(clip.seconds());
                 Some(clip.seconds())
             }
@@ -2314,6 +2399,9 @@ impl App {
             }
             UiMsg::PreviewSound => {
                 let s = self.session.settings();
+                if s.bool(sound::MUTE_ALL) {
+                    return Task::none();
+                }
                 let (tap, volume) = (s.choice(sound::TAP), s.float(sound::VOLUME) as f32);
                 self.audio
                     .set_pack(self.current_pack().and_then(|p| p.tap.clone()));
@@ -2462,7 +2550,7 @@ impl App {
     fn play_tap(&mut self) {
         let s = self.session.settings();
         let laser = s.choice(point::STYLE) == "laser";
-        if s.bool(sound::MUTE) || (laser && !s.bool(sound::LASER)) {
+        if s.bool(sound::MUTE) || s.bool(sound::MUTE_ALL) || (laser && !s.bool(sound::LASER)) {
             return;
         }
         let (tap, volume) = (s.choice(sound::TAP), s.float(sound::VOLUME) as f32);

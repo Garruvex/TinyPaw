@@ -1,7 +1,9 @@
-//! Tap playback. The output device opens when TinyPaw switches On and closes
-//! on Off, so the idle process holds no audio stream. Starter sounds are
-//! synthesized once; an imported WAV is decoded up front. If audio is
-//! unavailable, pointing keeps working.
+//! Playback in two categories. Pointer taps mix freely; the character voice
+//! is one stoppable player, so a new reaction replaces the last instead of
+//! piling up. The output device opens on demand and is released when
+//! neither category needs it, so an idle process holds no audio stream.
+//! Starter sounds are synthesized once; an imported WAV is decoded up
+//! front. If audio is unavailable, pointing and the character keep working.
 
 use std::fs::File;
 use std::io::BufReader;
@@ -9,7 +11,7 @@ use std::num::NonZero;
 use std::path::{Path, PathBuf};
 
 use rodio::buffer::SamplesBuffer;
-use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Source};
+use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
 
 const RATE: u32 = 44_100;
 
@@ -161,6 +163,8 @@ fn bonk() -> Clip {
 
 pub struct Audio {
     sink: Option<MixerDeviceSink>,
+    /// The character voice: at most one clip at a time.
+    voice: Option<Player>,
     knock: Clip,
     pop: Clip,
     bonk: Clip,
@@ -176,6 +180,7 @@ impl Audio {
             .and_then(|p| decode_wav(&p).ok());
         Self {
             sink: None,
+            voice: None,
             knock: knock(),
             pop: pop(),
             bonk: bonk(),
@@ -224,8 +229,57 @@ impl Audio {
         }
     }
 
+    /// Tap playback is done (TinyPaw switched Off). A character voice that
+    /// is still playing keeps the device until it ends.
     pub fn close(&mut self) {
-        self.sink = None;
+        if !self.voice_playing() {
+            self.voice = None;
+            self.sink = None;
+        }
+    }
+
+    /// Releases the device once the voice has finished, unless taps still
+    /// need it (`taps`: TinyPaw is On).
+    pub fn release_idle(&mut self, taps: bool) {
+        if self.voice.as_ref().is_some_and(Player::empty) {
+            self.voice = None;
+        }
+        if !taps && self.voice.is_none() {
+            self.sink = None;
+        }
+    }
+
+    /// A bundled clip by its exact ID; the pointer's `pack` and `custom`
+    /// aliases and the synthesized taps are not character sounds.
+    pub fn bundled(&self, id: &str) -> Option<Clip> {
+        self.bundled
+            .iter()
+            .find(|(key, _)| *key == id)
+            .map(|(_, clip)| clip.clone())
+    }
+
+    /// Plays `clip` as the character voice, stopping any voice already
+    /// playing first. Returns whether an output device was available.
+    pub fn play_voice(&mut self, clip: &Clip, volume: f32) -> bool {
+        self.stop_voice();
+        self.open();
+        let Some(sink) = &self.sink else {
+            return false;
+        };
+        let player = Player::connect_new(sink.mixer());
+        player.append(clip.source(volume.clamp(0.0, 1.0)));
+        self.voice = Some(player);
+        true
+    }
+
+    pub fn stop_voice(&mut self) {
+        if let Some(v) = self.voice.take() {
+            v.stop();
+        }
+    }
+
+    pub fn voice_playing(&self) -> bool {
+        self.voice.as_ref().is_some_and(|v| !v.empty())
     }
 
     fn clip(&self, id: &str) -> &Clip {
@@ -240,14 +294,6 @@ impl Audio {
                 .find(|(key, _)| *key == id)
                 .map(|(_, clip)| clip)
                 .unwrap_or(&self.knock),
-        }
-    }
-
-    /// Plays a clip that isn't one of the tap sounds, such as a line sound.
-    pub fn play_clip(&mut self, clip: &Clip, volume: f32) {
-        self.open();
-        if let Some(sink) = &self.sink {
-            sink.mixer().add(clip.source(volume.clamp(0.0, 1.0)));
         }
     }
 

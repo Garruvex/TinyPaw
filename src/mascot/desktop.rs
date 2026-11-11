@@ -20,6 +20,7 @@ use iced::{
 use super::Msg;
 use super::lines::{Lines, Picker, SoundRef, Speech, Trigger};
 use super::motion::{Animator, Expression, Inputs, PartMotion, Pose};
+use super::reactions::Event;
 use super::rig::Rig;
 use crate::app::Message;
 use crate::features::mascot as feature;
@@ -248,6 +249,8 @@ pub struct Desktop {
     next_idle: f32,
     /// A line sound for the app to play.
     sound: Option<SoundRef>,
+    /// Gesture events since the app last took them, each exactly once.
+    events: Vec<Event>,
     /// When motion last stepped, and where the feet were then.
     stepped: f32,
     last_anchor: (f32, f32),
@@ -320,6 +323,7 @@ impl Desktop {
             speech: None,
             next_idle: f32::INFINITY,
             sound: None,
+            events: Vec::new(),
             stepped: 0.0,
             last_anchor: (anchor.0 as f32, anchor.1 as f32),
             size,
@@ -391,6 +395,16 @@ impl Desktop {
     /// The line sound to play now, once.
     pub fn take_sound(&mut self) -> Option<SoundRef> {
         self.sound.take()
+    }
+
+    /// Gesture events (Click, Pickup, Drop) since the last call.
+    pub fn take_events(&mut self) -> Vec<Event> {
+        std::mem::take(&mut self.events)
+    }
+
+    /// Visible and not busy with a press or its menu: idle may react.
+    pub fn idle_free(&self) -> bool {
+        !self.hidden && self.shown && self.press.is_none() && self.menu.is_none()
     }
 
     pub fn is_hidden(&self) -> bool {
@@ -550,6 +564,7 @@ impl Desktop {
         };
         self.step_motion(o, k);
         if picked_up {
+            self.events.push(Event::Pickup);
             self.say(Trigger::Pickup, o);
         }
         self.step_speech(o);
@@ -640,11 +655,13 @@ impl Desktop {
         if press.dragging {
             // Left where it was put, unless that leaves it out of reach.
             self.place();
+            self.events.push(Event::Drop);
             self.say(Trigger::Drop, o);
             return Some((self.anchor.0 as f64, self.anchor.1 as f64));
         }
         self.menu = None;
         self.animator.clicked(self.now);
+        self.events.push(Event::Click);
         self.say(Trigger::Click, o);
         None
     }
@@ -731,9 +748,11 @@ impl Desktop {
         }
         self.hidden = hidden;
         if hidden {
+            // A cancelled gesture: no Drop is invented.
             self.speech = None;
             self.menu = None;
             self.press = None;
+            self.events.clear();
         }
         if self.hwnd == 0 {
             return Task::none();
@@ -1138,6 +1157,38 @@ mod tests {
         assert!(over(&l, &rig, &leaning, to_window(&leaning)));
         // A corner of the window is never the character.
         assert!(!over(&l, &rig, &leaning, Point::new(1.0, 1.0)));
+    }
+
+    #[test]
+    fn gestures_emit_each_event_once_and_cancellation_none() {
+        let (mut d, _) = Desktop::open("yohta", Rig::load(), 160.0, (500.0, 500.0), 5, false);
+        let o = Options {
+            eyes: false,
+            idle: false,
+            reduced: false,
+            lines: false,
+            quiet: true,
+            idle_every: (60.0, 300.0),
+            music: 0.0,
+            beat: None,
+        };
+        let press = |dragging| Press { cursor: (0, 0), grab: Point::ORIGIN, pose: Pose::default(), dragging };
+        // A short press is one Click.
+        d.press = Some(press(false));
+        d.release(&o);
+        assert_eq!(d.take_events(), [Event::Click]);
+        assert!(d.take_events().is_empty(), "taken once");
+        // A drag's release is one Drop and no Click (Pickup comes from the
+        // poll that crosses the threshold).
+        d.press = Some(press(true));
+        d.release(&o);
+        assert_eq!(d.take_events(), [Event::Drop]);
+        // Releasing with no press, or hiding mid-drag, invents nothing.
+        assert_eq!(d.release(&o), None);
+        d.press = Some(press(true));
+        let _ = d.set_hidden(true);
+        assert_eq!(d.release(&o), None);
+        assert!(d.take_events().is_empty());
     }
 
     #[test]

@@ -11,6 +11,7 @@ pub mod music;
 pub mod pack;
 pub mod placement;
 pub mod preview;
+pub mod reactions;
 pub mod rest;
 pub mod rig;
 mod yohta_pack;

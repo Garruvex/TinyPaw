@@ -1989,7 +1989,8 @@ fn lines_section<'a>(
         .spacing(8)
         .align_y(Alignment::Center)
         .into(),
-        hint("Line sounds play at Character volume, separate from the pointer's tap sound."),
+        hint("Line sounds play at Character volume, separate from the pointer's tap sound. One character sound plays at a time; a new reaction replaces the last."),
+        check("Mute all sounds", s.bool(crate::features::sound::MUTE_ALL), crate::features::sound::MUTE_ALL),
         groups.into(),
         row![
             text("Bubble").size(12).color(theme::MUTED).width(110),
@@ -3212,6 +3213,8 @@ fn sound_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
             .style(theme::range)
             .into(),
             check("Mute tap sounds", s.bool(sound::MUTE), sound::MUTE),
+            check("Mute all sounds", s.bool(sound::MUTE_ALL), sound::MUTE_ALL),
+            hint("Mute all sounds also silences the desktop character's reactions and line sounds; Mute tap sounds is pointer-only."),
             check(
                 "Play a sound when tapping with the laser",
                 s.bool(sound::LASER),

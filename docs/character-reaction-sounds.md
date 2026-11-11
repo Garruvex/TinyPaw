@@ -1,6 +1,8 @@
 # Character reaction sounds
 
-Feature scope, 11 November 2026. **Proposed; not implemented.**
+Feature scope, 11 November 2026. **Increment 1 implemented, not yet checked by ear; increments 2–4 not implemented.**
+
+Increment 1 status: `src/mascot/reactions.rs` holds typed `Event`s (Click, Pickup, Drop, Idle, named as in the shared `reactions` object) and the one `Voice`, with its cooldowns, idle deadline and quiet rules. `src/audio.rs` gains a separate stoppable character-voice player, so a new reaction replaces the last one and nothing queues. The device opens on demand and is released once neither taps nor the voice need it. `sound.mute_all` (Mute all sounds) appears on Tap sounds and on the Speech tab. Line sounds now play through the character voice, and a trigger's accepted reaction sound wins over its line sound. Until increment 2 adds the editor, no reaction sounds are assigned, so the character stays silent apart from its line sounds.
 
 This is an independently shippable part of the [character creation plan](character-creation-plan.md). A character can make a sound when clicked, picked up or dropped without speech text, speech bubbles, music detection or a layered rig. A single-PNG character supports the entire feature.
 
