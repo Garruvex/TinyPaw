@@ -8,3 +8,6 @@
 
 # Local build and review output
 /output/
+
+# Source archives duplicating the extracted yohta folders
+/assets/mascot/yohta/*.zip
