@@ -6,6 +6,7 @@ use iced::Vector;
 
 use super::lines::{Lines, Picker, SoundRef, Speech, Trigger};
 use super::motion::{Animator, Bop, Inputs, MotionSpec, PartType, Pose};
+use super::reactions::{Config, Entry, Event, Settings, Sound, Sounds, effective};
 use super::rig::Rig;
 
 /// A reaction the preview can play on demand.
@@ -53,6 +54,11 @@ pub struct MotionPreview {
     /// The bop style saved, and the pack's own.
     bop_saved: Bop,
     bop_default: Bop,
+    /// The user's reaction layer being edited, what's saved, and the
+    /// pack's layer under it.
+    pub reactions: Config,
+    reactions_saved: Config,
+    reactions_pack: Config,
     picker: Picker,
     speech: Option<Speech>,
     sound: Option<SoundRef>,
@@ -61,6 +67,7 @@ pub struct MotionPreview {
 impl MotionPreview {
     /// `rig` carries the saved motion and bop; `defaults` and `pack_bop`
     /// are the pack's own.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: &'static str,
         rig: Rig,
@@ -68,9 +75,14 @@ impl MotionPreview {
         lines: Lines,
         pack_lines: Lines,
         pack_bop: Bop,
+        reactions: Config,
+        pack_reactions: Config,
     ) -> Self {
         let specs = rig.motion().to_vec();
         Self {
+            reactions_saved: reactions.clone(),
+            reactions,
+            reactions_pack: pack_reactions,
             bop_saved: rig.bop(),
             bop_default: pack_bop,
             lines_saved: lines.clone(),
@@ -150,9 +162,69 @@ impl MotionPreview {
         self.rig.bop() != self.bop_saved
     }
 
-    /// Any unsaved behavior change: motion, lines or bop.
+    /// Any unsaved behavior change: motion, lines, bop or reactions.
     pub fn unsaved(&self) -> bool {
-        self.dirty() || self.lines_dirty() || self.bop_dirty()
+        self.dirty() || self.lines_dirty() || self.bop_dirty() || self.reactions != self.reactions_saved
+    }
+
+    /// The reaction sounds as the draft would play them.
+    pub fn sounds(&self) -> Sounds {
+        effective(&self.reactions_pack, &self.reactions)
+    }
+
+    /// The user's entry for `e`, starting from what plays now.
+    fn entry_mut(&mut self, e: Event) -> &mut Entry {
+        if self.reactions.entry(e).is_none() {
+            let start = self.reactions_pack.entry(e).cloned().unwrap_or_default();
+            self.reactions.set_entry(e, Some(start));
+        }
+        self.reactions.entry_mut(e).expect("just set")
+    }
+
+    /// Assigns a sound to `e`; `None` turns the row off but keeps its
+    /// other settings.
+    pub fn set_reaction_sound(&mut self, e: Event, sound: Option<Sound>) {
+        let entry = self.entry_mut(e);
+        entry.sound.enabled = sound.is_some();
+        entry.sound.sound = sound;
+    }
+
+    pub fn set_cooldown(&mut self, e: Event, ms: u32) {
+        self.entry_mut(e).sound.cooldown_ms = ms.min(super::reactions::MAX_COOLDOWN_MS);
+    }
+
+    /// Character-wide sound settings, starting from what plays now.
+    pub fn sound_settings_mut(&mut self) -> &mut Settings {
+        let now = self.sounds();
+        self.reactions.settings.get_or_insert(Settings {
+            enabled: now.enabled,
+            volume: now.volume,
+            idle_enabled: now.idle_enabled,
+            idle_interval: now.idle_interval,
+        })
+    }
+
+    /// How many distinct WAV files would play if `e` used `file`.
+    pub fn files_if(&self, e: Event, file: &super::lines::SoundRef) -> usize {
+        let s = self.sounds();
+        let mut files: Vec<&super::lines::SoundRef> = vec![file];
+        for other in Event::ALL.into_iter().filter(|o| *o != e) {
+            if let Some(Sound::File(r)) = &s.get(other).sound
+                && !files.contains(&r)
+            {
+                files.push(r);
+            }
+        }
+        files.len()
+    }
+
+    /// Back to the pack's reaction sounds (unsaved until Save).
+    pub fn reset_reactions(&mut self) {
+        self.reactions = Config::default();
+    }
+
+    pub fn reactions_customised(&self) -> bool {
+        !self.reactions.is_empty()
     }
 
     /// The draft as overrides on top of `base`: a value matching the pack's
@@ -166,6 +238,7 @@ impl MotionPreview {
         base.motion = self.customised().then(|| self.specs.clone());
         base.lines = (lines != self.lines_defaults).then_some(lines);
         base.bop = (self.rig.bop() != self.bop_default).then(|| self.rig.bop());
+        base.reactions = (!self.reactions.is_empty()).then(|| self.reactions.clone());
         base
     }
 
@@ -177,6 +250,17 @@ impl MotionPreview {
         self.saved = self.specs.clone();
         self.lines_saved = self.lines.clone();
         self.bop_saved = self.rig.bop();
+        self.reactions_saved = self.reactions.clone();
+    }
+
+    /// The saved reaction layer, for pruning sounds a discarded draft
+    /// imported.
+    pub fn saved_reactions(&self) -> &Config {
+        &self.reactions_saved
+    }
+
+    pub fn saved_lines(&self) -> &Lines {
+        &self.lines_saved
     }
 
     /// Back to what's saved, dropping every unsaved change.
@@ -185,6 +269,7 @@ impl MotionPreview {
         self.rig.set_motion(&self.specs);
         self.lines = self.lines_saved.clone();
         self.rig.set_bop(self.bop_saved);
+        self.reactions = self.reactions_saved.clone();
     }
 
     pub fn test(&mut self, test: Test) {
@@ -315,7 +400,7 @@ mod tests {
     fn yohta() -> MotionPreview {
         let rig = Rig::load();
         let defaults = rig.motion().to_vec();
-        MotionPreview::new("yohta", rig, defaults, Lines::default(), Lines::default(), Bop::default())
+        MotionPreview::new("yohta", rig, defaults, Lines::default(), Lines::default(), Bop::default(), Config::default(), Config::default())
     }
 
     #[test]
@@ -366,6 +451,26 @@ mod tests {
         assert!(!p.unsaved());
         p.set_bop(Bop::default());
         assert_eq!(p.overrides(Default::default()).bop, None);
+    }
+
+    #[test]
+    fn reaction_sounds_are_part_of_the_one_draft() {
+        let mut p = yohta();
+        assert!(!p.sounds().get(Event::Click).enabled);
+        p.set_reaction_sound(Event::Click, Some(Sound::Builtin("duck-toy")));
+        p.set_cooldown(Event::Click, 600);
+        p.sound_settings_mut().volume = 0.4;
+        assert!(p.unsaved());
+        let s = p.sounds();
+        assert_eq!((s.get(Event::Click).enabled, s.get(Event::Click).cooldown_ms, s.volume), (true, 600, 0.4));
+        let o = p.overrides(Default::default());
+        assert!(o.reactions.is_some());
+        // Clearing keeps the row's settings but turns it off.
+        p.set_reaction_sound(Event::Click, None);
+        assert!(!p.sounds().get(Event::Click).enabled);
+        assert_eq!(p.sounds().get(Event::Click).cooldown_ms, 600);
+        p.discard();
+        assert!(!p.unsaved() && p.overrides(Default::default()).reactions.is_none());
     }
 
     #[test]

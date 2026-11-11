@@ -52,6 +52,7 @@ pub enum Message {
     CharacterPicked(Option<PathBuf>),
     CharacterFolderPicked(Option<PathBuf>),
     CharacterWorked(u64, Result<CharacterWork, String>),
+    ReactionWavPicked(crate::mascot::reactions::Event, Option<PathBuf>),
     /// The artwork draft built as a rig for Test character, by request.
     DraftRig(u64, Box<crate::mascot::rig::Rig>),
     CharacterExportPicked(Option<PathBuf>),
@@ -649,6 +650,25 @@ impl App {
                     }
                 }
             }
+            Message::ReactionWavPicked(e, Some(path)) => {
+                if let Some(p) = &mut self.motion_preview {
+                    match characters::import_reaction_sound(p.id, &path) {
+                        Ok(r) => {
+                            use crate::mascot::reactions::{MAX_FILES, Sound};
+                            // The limit counts what would play, pack and user.
+                            if p.files_if(e, &r) > MAX_FILES {
+                                self.notice = Some(format!("A character can use at most {MAX_FILES} sound files; clear one first."));
+                            } else {
+                                p.set_reaction_sound(e, Some(Sound::File(r)));
+                                self.notice = None;
+                            }
+                        }
+                        // The row keeps its previous, valid sound.
+                        Err(err) => self.notice = Some(format!("Could not use that sound: {err}")),
+                    }
+                }
+            }
+            Message::ReactionWavPicked(_, None) => {}
             Message::DraftRig(request, rig) => {
                 if request == self.draft_rig_request
                     && let Some(e) = &self.art
@@ -1298,6 +1318,8 @@ impl App {
                     c.lines(),
                     c.pack_lines(),
                     c.pack_bop(),
+                    characters::load_overrides(c.id).reactions.unwrap_or_default(),
+                    c.pack_reactions(),
                 ));
                 self.motion_failed = None;
                 self.motion_ticked = None;
@@ -1394,6 +1416,12 @@ impl App {
                 let rig = self.character_rig(selected);
                 let lines = self.character_lines(selected);
                 self.stop_character_voice();
+                self.reaction_sounds = self
+                    .characters
+                    .iter()
+                    .find(|c| c.id == selected)
+                    .map(|c| c.reaction_sounds())
+                    .unwrap_or_default();
                 match &mut self.mascot {
                     Some(m) => {
                         m.set_rig(selected, rig);
@@ -1578,10 +1606,12 @@ impl App {
         let o = p.overrides(characters::load_overrides(id));
         characters::save_overrides(id, &o)?;
         p.mark_all_saved();
-        characters::prune_line_sounds(id, &p.lines);
+        characters::prune_line_sounds(id, &p.lines, Some(&p.reactions));
+        let saved_sounds = p.sounds();
         self.notice = None;
         #[cfg(windows)]
         if self.mascot.as_ref().is_some_and(|m| m.character() == id) {
+            self.reaction_sounds = saved_sounds;
             let lines = p.lines.clone();
             let rig = self.character_rig(id);
             let options = self.mascot_options();
@@ -1601,6 +1631,8 @@ impl App {
         self.art_saving = None;
         if let Some(p) = &mut self.motion_preview {
             p.discard();
+            // Sounds the discarded draft imported are no longer needed.
+            characters::prune_line_sounds(p.id, p.saved_lines(), Some(p.saved_reactions()));
         }
     }
 
@@ -2248,6 +2280,78 @@ impl App {
                 if let Some(e) = &mut self.art {
                     e.mode = mode;
                     e.finish_rest();
+                }
+            }
+            UiMsg::ReactionSound(e, sound) => {
+                if let Some(p) = &mut self.motion_preview {
+                    p.set_reaction_sound(e, sound);
+                }
+            }
+            UiMsg::ReactionImport(e) => {
+                return Task::perform(
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Choose a WAV for this reaction (five seconds or shorter)")
+                        .add_filter("WAV sound", &["wav"])
+                        .pick_file(),
+                    move |f| Message::ReactionWavPicked(e, f.map(|f| f.path().to_path_buf())),
+                );
+            }
+            UiMsg::ReactionCooldown(e, ms) => {
+                if let Some(p) = &mut self.motion_preview {
+                    p.set_cooldown(e, ms.round().max(0.0) as u32);
+                }
+            }
+            UiMsg::ReactionSoundsOn(on) => {
+                if let Some(p) = &mut self.motion_preview {
+                    p.sound_settings_mut().enabled = on;
+                }
+            }
+            UiMsg::ReactionVolume(v) => {
+                if let Some(p) = &mut self.motion_preview {
+                    p.sound_settings_mut().volume = v.clamp(0.0, 1.0);
+                }
+            }
+            UiMsg::ReactionIdleOn(on) => {
+                if let Some(p) = &mut self.motion_preview {
+                    p.sound_settings_mut().idle_enabled = on;
+                }
+            }
+            UiMsg::ReactionIdleInterval(lo, hi) => {
+                if let Some(p) = &mut self.motion_preview {
+                    p.sound_settings_mut().idle_interval = (lo.min(hi), lo.max(hi));
+                }
+            }
+            UiMsg::ReactionsReset => {
+                if let Some(p) = &mut self.motion_preview {
+                    p.reset_reactions();
+                }
+            }
+            UiMsg::ReactionTest(e) => {
+                // Test plays the draft at its volume, bypassing eligibility
+                // and cooldown, never moving the desktop character, and
+                // obeying every mute.
+                if self.session.settings().bool(sound::MUTE_ALL) {
+                    self.notice = Some("Mute all sounds is on.".into());
+                    return Task::none();
+                }
+                let Some(sounds) = self.motion_preview.as_ref().map(|p| p.sounds()) else {
+                    return Task::none();
+                };
+                if !sounds.enabled {
+                    self.notice = Some("Character sounds are off for this character.".into());
+                    return Task::none();
+                }
+                let t = sounds.get(e);
+                if let Some(sound) = t.sound.clone() {
+                    let play = crate::mascot::reactions::Play {
+                        sound,
+                        volume: (sounds.volume * t.gain).clamp(0.0, 1.0),
+                        interrupt: true,
+                    };
+                    if self.play_reaction(&play).is_none() && self.notice.is_none() {
+                        self.notice = Some("That sound is missing or unreadable.".into());
+                    }
+                    self.audio.release_idle(self.session.is_enabled());
                 }
             }
             UiMsg::ArtRename(i, name) => {

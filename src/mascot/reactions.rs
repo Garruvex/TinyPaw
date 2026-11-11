@@ -5,10 +5,10 @@
 //! module owns eligibility, cooldowns, the idle deadline and the current
 //! voice; the app routes events here and plays what it is told to. Pointer
 //! taps are a different category and share none of this state.
-// The sound editor and pack persistence (phase 6) assign and read these.
-#![allow(dead_code)]
 
-use super::lines::SoundRef;
+use serde_json::{Map, Value as Json, json};
+
+use super::lines::{SoundRef, valid_pack_sound, valid_user_sound};
 
 /// What happened to the character. Emitted exactly once per gesture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -45,14 +45,6 @@ impl Event {
         self as usize
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Event::Click => "Click",
-            Event::Pickup => "Pick up",
-            Event::Drop => "Drop",
-            Event::Idle => "Idle",
-        }
-    }
 }
 
 /// A sound a trigger plays: an exact bundled clip or a managed file.
@@ -124,10 +116,275 @@ impl Sounds {
         &mut self.triggers[e.index()]
     }
 
-    /// Whether any trigger could play.
-    pub fn any(&self) -> bool {
-        self.enabled && self.triggers.iter().any(|t| t.enabled && t.sound.is_some())
+}
+
+/// The bundled clips a character may use, by exact ID.
+pub const BUILTIN_SOUNDS: [(&str, &str); 4] = [
+    ("duck-toy", "Duck Toy"),
+    ("mac-quack", "Mac Quack"),
+    ("bonk-clip", "Bonk"),
+    ("dry-fart", "Dry Fart"),
+];
+
+/// Most distinct WAV files one character's reactions may use.
+pub const MAX_FILES: usize = 4;
+
+/// One event's entry in a `reactions` object: its sound setup, plus keys
+/// this version doesn't edit (such as `visual`), kept as they were.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Entry {
+    pub sound: TriggerSound,
+    pub other: Map<String, Json>,
+}
+
+/// Character-wide sound settings, `reactions.sound`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Settings {
+    pub enabled: bool,
+    pub volume: f32,
+    pub idle_enabled: bool,
+    pub idle_interval: (f32, f32),
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        let d = Sounds::default();
+        Self {
+            enabled: d.enabled,
+            volume: d.volume,
+            idle_enabled: d.idle_enabled,
+            idle_interval: d.idle_interval,
+        }
     }
+}
+
+/// One layer of a `reactions` object: the pack's defaults in
+/// `character.json`, or the user's changes in overrides. An event entry
+/// replaces the layer below it as a whole.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Config {
+    pub settings: Option<Settings>,
+    events: [Option<Entry>; 4],
+}
+
+impl Config {
+    pub fn is_empty(&self) -> bool {
+        self.settings.is_none() && self.events.iter().all(Option::is_none)
+    }
+
+    pub fn entry(&self, e: Event) -> Option<&Entry> {
+        self.events[e.index()].as_ref()
+    }
+
+    pub fn entry_mut(&mut self, e: Event) -> Option<&mut Entry> {
+        self.events[e.index()].as_mut()
+    }
+
+    pub fn set_entry(&mut self, e: Event, entry: Option<Entry>) {
+        self.events[e.index()] = entry;
+    }
+
+    /// Every WAV this layer names.
+    pub fn files(&self) -> Vec<&SoundRef> {
+        let mut out: Vec<&SoundRef> = Vec::new();
+        for entry in self.events.iter().flatten() {
+            if let Some(Sound::File(r)) = &entry.sound.sound
+                && !out.contains(&r)
+            {
+                out.push(r);
+            }
+        }
+        out
+    }
+
+    /// Rewrites every file reference, for export.
+    pub fn map_files(&mut self, mut f: impl FnMut(&SoundRef) -> SoundRef) {
+        for entry in self.events.iter_mut().flatten() {
+            if let Some(Sound::File(r)) = &entry.sound.sound {
+                entry.sound.sound = Some(Sound::File(f(r)));
+            }
+        }
+    }
+
+    /// Reads a `reactions` object. `user` allows `user:` files (overrides
+    /// only). A missing object is an empty layer; anything malformed is an
+    /// error, so a pack never half-loads its sounds.
+    pub fn parse(v: &Json, user: bool) -> Result<Self, String> {
+        let mut out = Self::default();
+        let map = match v {
+            Json::Null => return Ok(out),
+            Json::Object(map) => map,
+            _ => return Err("reactions must be an object".into()),
+        };
+        for (key, value) in map {
+            if key == "sound" {
+                out.settings = Some(parse_settings(value)?);
+                continue;
+            }
+            let e = Event::parse(key).ok_or_else(|| format!("unknown reaction `{key}`"))?;
+            out.events[e.index()] = Some(parse_entry(value, user)?);
+        }
+        if out.files().len() > MAX_FILES {
+            return Err(format!("reactions may use at most {MAX_FILES} WAV files"));
+        }
+        Ok(out)
+    }
+
+    pub fn to_json(&self) -> Json {
+        let mut m = Map::new();
+        if let Some(s) = &self.settings {
+            m.insert(
+                "sound".into(),
+                json!({
+                    "enabled": s.enabled,
+                    "volume": s.volume,
+                    "idle_enabled": s.idle_enabled,
+                    "idle_interval_seconds": [s.idle_interval.0, s.idle_interval.1],
+                }),
+            );
+        }
+        for e in Event::ALL {
+            if let Some(entry) = &self.events[e.index()] {
+                let mut v = entry.other.clone();
+                let t = &entry.sound;
+                v.insert("enabled".into(), json!(t.enabled));
+                match &t.sound {
+                    Some(Sound::Builtin(id)) => {
+                        v.insert("sound".into(), json!({ "builtin": id }));
+                    }
+                    Some(Sound::File(SoundRef::Pack(p))) => {
+                        v.insert("sound".into(), json!({ "file": p }));
+                    }
+                    Some(Sound::File(SoundRef::User(f))) => {
+                        v.insert("sound".into(), json!({ "file": format!("user:{f}") }));
+                    }
+                    None => {
+                        v.remove("sound");
+                    }
+                }
+                v.insert("gain".into(), json!(t.gain));
+                v.insert("cooldown_ms".into(), json!(t.cooldown_ms));
+                m.insert(e.key().into(), Json::Object(v));
+            }
+        }
+        Json::Object(m)
+    }
+}
+
+fn parse_settings(v: &Json) -> Result<Settings, String> {
+    let d = Settings::default();
+    let unit = |key: &str, default: f32| -> Result<f32, String> {
+        match v[key].as_f64() {
+            None if v[key].is_null() => Ok(default),
+            Some(n) if n.is_finite() && (0.0..=1.0).contains(&n) => Ok(n as f32),
+            _ => Err(format!("reactions.sound.{key} must be 0–1")),
+        }
+    };
+    let flag = |key: &str, default: bool| -> Result<bool, String> {
+        match &v[key] {
+            Json::Null => Ok(default),
+            Json::Bool(b) => Ok(*b),
+            _ => Err(format!("reactions.sound.{key} must be true or false")),
+        }
+    };
+    let idle_interval = match v["idle_interval_seconds"].as_array().map(Vec::as_slice) {
+        None if v["idle_interval_seconds"].is_null() => d.idle_interval,
+        Some([lo, hi]) => {
+            let (lo, hi) = (lo.as_f64().unwrap_or(-1.0), hi.as_f64().unwrap_or(-1.0));
+            if !(1.0..=3600.0).contains(&lo) || !(1.0..=3600.0).contains(&hi) || lo > hi {
+                return Err("idle_interval_seconds must be [low, high] within 1–3600".into());
+            }
+            (lo as f32, hi as f32)
+        }
+        _ => return Err("idle_interval_seconds must be [low, high]".into()),
+    };
+    Ok(Settings {
+        enabled: flag("enabled", d.enabled)?,
+        volume: unit("volume", d.volume)?,
+        idle_enabled: flag("idle_enabled", d.idle_enabled)?,
+        idle_interval,
+    })
+}
+
+fn parse_entry(v: &Json, user: bool) -> Result<Entry, String> {
+    let Json::Object(map) = v else {
+        return Err("each reaction must be an object".into());
+    };
+    let sound = match &v["sound"] {
+        Json::Null => None,
+        s => Some(parse_sound(s, user)?),
+    };
+    let enabled = match &v["enabled"] {
+        Json::Null => sound.is_some(),
+        Json::Bool(b) => *b,
+        _ => return Err("a reaction's enabled must be true or false".into()),
+    };
+    let gain = match v["gain"].as_f64() {
+        None if v["gain"].is_null() => 1.0,
+        Some(n) if n.is_finite() && (0.0..=1.0).contains(&n) => n as f32,
+        _ => return Err("a reaction's gain must be 0–1".into()),
+    };
+    let cooldown_ms = match v["cooldown_ms"].as_u64() {
+        None if v["cooldown_ms"].is_null() => DEFAULT_COOLDOWN_MS,
+        Some(n) if n <= u64::from(MAX_COOLDOWN_MS) => n as u32,
+        _ => return Err(format!("a reaction's cooldown_ms must be 0–{MAX_COOLDOWN_MS}")),
+    };
+    let mut other = map.clone();
+    for key in ["enabled", "sound", "gain", "cooldown_ms"] {
+        other.remove(key);
+    }
+    Ok(Entry {
+        sound: TriggerSound {
+            // Enabled without a sound plays nothing; it reads as off.
+            enabled: enabled && sound.is_some(),
+            sound,
+            gain,
+            cooldown_ms,
+        },
+        other,
+    })
+}
+
+fn parse_sound(v: &Json, user: bool) -> Result<Sound, String> {
+    match (v["builtin"].as_str(), v["file"].as_str()) {
+        (Some(id), None) => BUILTIN_SOUNDS
+            .iter()
+            .find(|(b, _)| *b == id)
+            .map(|(b, _)| Sound::Builtin(b))
+            .ok_or_else(|| format!("unknown bundled sound `{id}`")),
+        (None, Some(f)) => match f.strip_prefix("user:") {
+            Some(file) if user && valid_user_sound(file) => {
+                Ok(Sound::File(SoundRef::User(file.into())))
+            }
+            Some(_) => Err(format!("`{f}` isn't a sound in this pack")),
+            None if valid_pack_sound(f) => Ok(Sound::File(SoundRef::Pack(f.into()))),
+            None => Err(format!("reaction sound `{f}` must be a WAV inside the pack folder")),
+        },
+        _ => Err("a reaction sound names exactly one of builtin or file".into()),
+    }
+}
+
+/// What a character actually does: the pack's layer under the user's.
+/// The pack never turns idle sounds on; only this user can.
+pub fn effective(pack: &Config, user: &Config) -> Sounds {
+    let mut out = Sounds::default();
+    if let Some(s) = pack.settings {
+        out.enabled = s.enabled;
+        out.volume = s.volume;
+        out.idle_interval = s.idle_interval;
+    }
+    if let Some(s) = user.settings {
+        out.enabled = s.enabled;
+        out.volume = s.volume;
+        out.idle_enabled = s.idle_enabled;
+        out.idle_interval = s.idle_interval;
+    }
+    for e in Event::ALL {
+        if let Some(entry) = user.entry(e).or(pack.entry(e)) {
+            *out.get_mut(e) = entry.sound.clone();
+        }
+    }
+    out
 }
 
 /// The user's global and situational quiet rules, read when an event fires.
@@ -248,6 +505,7 @@ impl Voice {
 
     /// When the next idle event is due, so the caller can wake for it
     /// instead of polling every frame.
+    #[cfg(test)]
     pub fn next_idle(&self) -> Option<f64> {
         self.next_idle
     }
@@ -353,6 +611,60 @@ mod tests {
         off.idle_enabled = false;
         assert!(!v.idle_due(&off, true, 5000.0, || 0.0));
         assert_eq!(v.next_idle(), None);
+    }
+
+    #[test]
+    fn reactions_round_trip_and_keep_keys_they_dont_edit() {
+        let v = json!({
+            "sound": { "enabled": true, "volume": 0.5, "idle_enabled": true, "idle_interval_seconds": [30, 90] },
+            "click": { "visual": "compress", "sound": { "builtin": "duck-toy" }, "gain": 0.8, "cooldown_ms": 300 },
+            "drop": { "sound": { "file": "user:reaction-1.wav" } },
+            "idle": { "enabled": false }
+        });
+        let c = Config::parse(&v, true).unwrap();
+        assert_eq!(c.entry(Event::Click).unwrap().other["visual"], json!("compress"));
+        assert!(c.entry(Event::Drop).unwrap().sound.enabled, "a sound with no flag is on");
+        assert_eq!(c.files().len(), 1);
+        let again = Config::parse(&c.to_json(), true).unwrap();
+        assert_eq!(again, c);
+        // Pack files can't name user sounds.
+        assert!(Config::parse(&v, false).is_err());
+    }
+
+    #[test]
+    fn malformed_reactions_are_rejected() {
+        for bad in [
+            json!({ "wave": {} }),
+            json!({ "click": { "sound": { "builtin": "pack" } } }),
+            json!({ "click": { "sound": { "builtin": "duck-toy", "file": "a.wav" } } }),
+            json!({ "click": { "sound": { "file": "../x.wav" } } }),
+            json!({ "click": { "sound": { "builtin": "duck-toy" }, "gain": 2.0 } }),
+            json!({ "click": { "sound": { "builtin": "duck-toy" }, "cooldown_ms": 20000 } }),
+            json!({ "sound": { "idle_interval_seconds": [300, 60] } }),
+        ] {
+            assert!(Config::parse(&bad, true).is_err(), "{bad}");
+        }
+        let four = json!({
+            "click": { "sound": { "file": "a.wav" } }, "pickup": { "sound": { "file": "b.wav" } },
+            "drop": { "sound": { "file": "c.wav" } }, "idle": { "sound": { "file": "d.wav" } },
+        });
+        assert!(Config::parse(&four, false).is_ok(), "four files is the limit");
+    }
+
+    #[test]
+    fn the_users_layer_wins_and_the_pack_never_enables_idle() {
+        let pack = Config::parse(&json!({
+            "sound": { "volume": 0.4, "idle_enabled": true },
+            "click": { "sound": { "builtin": "duck-toy" } },
+            "idle": { "sound": { "builtin": "mac-quack" } }
+        }), false).unwrap();
+        let s = effective(&pack, &Config::default());
+        assert_eq!((s.volume, s.idle_enabled), (0.4, false));
+        assert_eq!(s.get(Event::Click).sound, Some(Sound::Builtin("duck-toy")));
+        let user = Config::parse(&json!({ "click": { "enabled": false } }), true).unwrap();
+        let s = effective(&pack, &user);
+        assert!(!s.get(Event::Click).enabled, "the user's entry replaces the pack's");
+        assert_eq!(s.get(Event::Idle).sound, Some(Sound::Builtin("mac-quack")));
     }
 
     #[test]

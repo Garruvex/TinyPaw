@@ -82,6 +82,56 @@ fn decode_clip(decoder: impl Source<Item = f32>) -> Result<Clip, String> {
     })
 }
 
+/// Longest reaction sound, in seconds; longer files are refused rather than
+/// cut short.
+pub const MAX_REACTION_SECONDS: f32 = 5.0;
+/// Largest reaction WAV on disk.
+pub const MAX_REACTION_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Checks a WAV against the reaction sound limits: at most 2 MiB (checked
+/// before reading), mono or stereo, 8–96 kHz, at most five seconds and no
+/// non-finite samples. Returns its length in seconds.
+pub fn check_reaction_wav(path: &Path) -> Result<f32, String> {
+    let size = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+    if size > MAX_REACTION_BYTES {
+        return Err("reaction sounds must be 2 MiB or smaller".into());
+    }
+    if !path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("wav"))
+    {
+        return Err("reaction sounds must be WAV files".into());
+    }
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let decoder = Decoder::try_from(BufReader::new(file))
+        .map_err(|e| format!("not a readable WAV ({e})"))?;
+    let channels = decoder.channels().get();
+    let rate = decoder.sample_rate().get();
+    if !(1..=2).contains(&channels) {
+        return Err("reaction sounds must be mono or stereo".into());
+    }
+    if !(8_000..=96_000).contains(&rate) {
+        return Err("reaction sounds must use a sample rate from 8 to 96 kHz".into());
+    }
+    // Bounded: one sample past the limit is enough to know it's too long.
+    let limit = (rate as f32 * MAX_REACTION_SECONDS) as usize * channels as usize;
+    let mut count = 0usize;
+    for s in decoder.take(limit + 1) {
+        if !s.is_finite() {
+            return Err("the WAV has invalid samples".into());
+        }
+        count += 1;
+    }
+    if count == 0 {
+        return Err("the file has no audio".into());
+    }
+    if count > limit {
+        return Err("reaction sounds must be five seconds or shorter".into());
+    }
+    Ok(count as f32 / channels as f32 / rate as f32)
+}
+
 /// Copies a user's WAV into app storage after checking it decodes.
 pub fn import_wav(from: &Path) -> Result<Clip, String> {
     let clip = decode_wav(from)?;
@@ -309,6 +359,42 @@ impl Audio {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reaction_wavs_are_checked_not_truncated() {
+        let dir = std::env::temp_dir().join(format!("tinypaw-wav-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, seconds: f32, rate: u32| {
+            let path = dir.join(name);
+            let n = (seconds * rate as f32) as u32;
+            let mut b = Vec::new();
+            b.extend_from_slice(b"RIFF");
+            b.extend_from_slice(&(36 + n * 2).to_le_bytes());
+            b.extend_from_slice(b"WAVEfmt ");
+            b.extend_from_slice(&16u32.to_le_bytes());
+            b.extend_from_slice(&1u16.to_le_bytes());
+            b.extend_from_slice(&1u16.to_le_bytes());
+            b.extend_from_slice(&rate.to_le_bytes());
+            b.extend_from_slice(&(rate * 2).to_le_bytes());
+            b.extend_from_slice(&2u16.to_le_bytes());
+            b.extend_from_slice(&16u16.to_le_bytes());
+            b.extend_from_slice(b"data");
+            b.extend_from_slice(&(n * 2).to_le_bytes());
+            for i in 0..n {
+                b.extend_from_slice(&(((i % 50) as i16 - 25) * 300).to_le_bytes());
+            }
+            std::fs::write(&path, b).unwrap();
+            path
+        };
+        let ok = check_reaction_wav(&write("ok.wav", 1.0, 22_050)).unwrap();
+        assert!((ok - 1.0).abs() < 0.01);
+        assert!(check_reaction_wav(&write("long.wav", 6.0, 8_000)).unwrap_err().contains("five seconds"));
+        assert!(check_reaction_wav(&write("slow.wav", 0.5, 4_000)).unwrap_err().contains("sample rate"));
+        std::fs::write(dir.join("junk.wav"), b"not audio").unwrap();
+        assert!(check_reaction_wav(&dir.join("junk.wav")).is_err());
+        assert!(check_reaction_wav(&write("x.mp3", 0.5, 8_000)).unwrap_err().contains("WAV"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn bundled_wavs_decode_and_are_selectable() {

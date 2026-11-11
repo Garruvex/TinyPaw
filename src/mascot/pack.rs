@@ -129,7 +129,21 @@ impl Character {
             .unwrap_or_else(|| self.pack_lines())
     }
 
-    /// The file a line sound plays from.
+    /// The pack's own reaction defaults.
+    pub fn pack_reactions(&self) -> super::reactions::Config {
+        match &self.folder {
+            None => bundled_manifest().reactions,
+            Some(folder) => read_manifest(folder).map(|m| m.reactions).unwrap_or_default(),
+        }
+    }
+
+    /// What the character's reactions actually do: pack under user.
+    pub fn reaction_sounds(&self) -> super::reactions::Sounds {
+        let user = load_overrides(self.id).reactions.unwrap_or_default();
+        super::reactions::effective(&self.pack_reactions(), &user)
+    }
+
+    /// The file a line or reaction sound plays from.
     pub fn sound_path(&self, sound: &SoundRef) -> Option<PathBuf> {
         match sound {
             SoundRef::Pack(p) => self.folder.as_ref().map(|f| f.join(p)),
@@ -326,6 +340,9 @@ pub(super) struct Manifest {
     pub(super) lines: Lines,
     /// How it bops to music, if not the default nod.
     pub(super) bop: Option<Bop>,
+    /// The pack's reaction defaults (`reactions`); the user's changes are
+    /// overrides on top.
+    pub(super) reactions: super::reactions::Config,
 }
 
 /// The original PNG's size and the visible box quick import kept from it
@@ -674,14 +691,15 @@ impl Manifest {
 
     /// Line sounds inside the pack, each once.
     pub(super) fn sounds(&self) -> Vec<&str> {
-        self.lines
-            .sounds()
-            .into_iter()
-            .filter_map(|s| match s {
-                SoundRef::Pack(p) => Some(p.as_str()),
-                SoundRef::User(_) => None,
-            })
-            .collect()
+        let mut out: Vec<&str> = Vec::new();
+        for s in self.lines.sounds().into_iter().chain(self.reactions.files()) {
+            if let SoundRef::Pack(p) = s
+                && !out.contains(&p.as_str())
+            {
+                out.push(p);
+            }
+        }
+        out
     }
 
     /// Every file to copy with the pack.
@@ -746,6 +764,9 @@ impl Manifest {
         if let Some((lines, bubble)) = self.lines.to_json() {
             m["lines"] = lines;
             m["bubble"] = bubble;
+        }
+        if !self.reactions.is_empty() {
+            m["reactions"] = self.reactions.to_json();
         }
         if let Some(bop) = self.bop {
             m["music"] = json!({ "bop": bop.name() });
@@ -966,6 +987,7 @@ fn parse_manifest(text: &str) -> Result<Manifest, String> {
         lines: Lines::parse(&m["lines"], &m["bubble"], false)?,
         // A style this version doesn't know bops the default way.
         bop: m["music"]["bop"].as_str().and_then(Bop::parse),
+        reactions: super::reactions::Config::parse(&m["reactions"], false)?,
     };
     manifest.editor = super::placement::parse(&m["editor"], manifest.canvas, &manifest.assets())?;
     if manifest.assets().len() > MAX_IMAGES {
@@ -1290,6 +1312,7 @@ fn install_into_guarded(
         rest: super::rest::RestMode::Auto,
         lines: Lines::default(),
         bop: None,
+        reactions: Default::default(),
     };
     let art = draft.art.clone();
     stage_and_install_guarded(
@@ -1715,6 +1738,8 @@ pub struct Overrides {
     pub motion: Option<Vec<MotionSpec>>,
     pub lines: Option<Lines>,
     pub bop: Option<Bop>,
+    /// The user's reaction layer; `user:` sounds live beside the overrides.
+    pub reactions: Option<super::reactions::Config>,
 }
 
 pub fn load_overrides(id: &str) -> Overrides {
@@ -1750,7 +1775,11 @@ fn load_overrides_in(root: &Path, id: &str) -> Overrides {
         .then(|| Lines::parse(&v["lines"], &v["bubble"], true).ok())
         .flatten();
     let bop = v["bop"].as_str().and_then(Bop::parse);
-    Overrides { motion, lines, bop }
+    // Broken saved reactions fall back to the pack's rather than failing.
+    let reactions = (!v["reactions"].is_null())
+        .then(|| super::reactions::Config::parse(&v["reactions"], true).ok())
+        .flatten();
+    Overrides { motion, lines, bop, reactions }
 }
 
 pub fn save_overrides(id: &str, o: &Overrides) -> Result<(), String> {
@@ -1786,6 +1815,9 @@ fn save_overrides_in(root: &Path, id: &str, o: &Overrides) -> Result<(), String>
     }
     if let Some(bop) = o.bop {
         json["bop"] = json!(bop.name());
+    }
+    if let Some(r) = &o.reactions {
+        json["reactions"] = r.to_json();
     }
     // Write then rename, so a crash never leaves half a file.
     let partial = path.with_extension("json.partial");
@@ -1828,12 +1860,35 @@ pub fn import_line_sound(id: &str, from: &Path) -> Result<SoundRef, String> {
     Ok(SoundRef::User(file))
 }
 
-/// Deletes user line sounds no saved line uses any more.
-pub fn prune_line_sounds(id: &str, keep: &Lines) {
+/// Copies a WAV picked for a reaction into managed storage, after checking
+/// it against the reaction limits, so moving the original changes nothing.
+pub fn import_reaction_sound(id: &str, from: &Path) -> Result<SoundRef, String> {
+    let root = user_dir().ok_or("no per-user data folder")?;
+    crate::audio::check_reaction_wav(from)?;
+    let dir = user_sounds(&root, id);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut n = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let file = loop {
+        let name = format!("reaction-{n}.wav");
+        if !dir.join(&name).exists() {
+            break name;
+        }
+        n += 1;
+    };
+    fs::copy(from, dir.join(&file)).map_err(|e| e.to_string())?;
+    Ok(SoundRef::User(file))
+}
+
+/// Deletes the user's sounds that neither the saved lines nor the saved
+/// reactions use any more.
+pub fn prune_line_sounds(id: &str, keep: &Lines, reactions: Option<&super::reactions::Config>) {
     let Some(root) = user_dir() else { return };
     let used: Vec<&str> = keep
         .sounds()
         .into_iter()
+        .chain(reactions.map(|r| r.files()).unwrap_or_default())
         .filter_map(|s| match s {
             SoundRef::User(f) => Some(f.as_str()),
             SoundRef::Pack(_) => None,
@@ -1966,6 +2021,37 @@ fn bake(
     }
     if let Some(bop) = o.bop {
         m.bop = Some(bop);
+    }
+    if let Some(user) = &o.reactions {
+        let mut merged = m.reactions.clone();
+        if user.settings.is_some() {
+            merged.settings = user.settings;
+        }
+        for e in super::reactions::Event::ALL {
+            if let Some(entry) = user.entry(e) {
+                merged.set_entry(e, Some(entry.clone()));
+            }
+        }
+        let mut failed = None;
+        merged.map_files(|r| match r {
+            SoundRef::User(file) => {
+                let to = format!("sounds/{file}");
+                match user_sound(file) {
+                    Some(from) => {
+                        if !user_files.iter().any(|(_, t)| *t == to) {
+                            user_files.push((from, to.clone()));
+                        }
+                    }
+                    None => failed = Some("no per-user data folder"),
+                }
+                SoundRef::Pack(to)
+            }
+            pack => pack.clone(),
+        });
+        if let Some(e) = failed {
+            return Err(e.into());
+        }
+        m.reactions = merged;
     }
     Ok(())
 }
@@ -2529,6 +2615,7 @@ mod tests {
             motion: Some(specs.to_vec()),
             lines: None,
             bop: Some(Bop::Groove),
+            reactions: None,
         };
         save_overrides_in(&dir, BUILTIN, &o).unwrap();
         assert_eq!(load_overrides_in(&dir, BUILTIN).bop, Some(Bop::Groove));
@@ -2549,6 +2636,7 @@ mod tests {
             motion: None,
             lines: Some(Lines::default()),
             bop: None,
+            reactions: None,
         };
         save_overrides_in(&dir, BUILTIN, &quiet).unwrap();
         assert_eq!(load_overrides_in(&dir, BUILTIN), quiet);
@@ -2580,6 +2668,60 @@ mod tests {
         wav.extend(data);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, wav).unwrap();
+    }
+
+    #[test]
+    fn reaction_sounds_install_export_and_reimport() {
+        use super::super::reactions::{Config, Event, Sound};
+        let dir = scratch("reaction-sounds");
+        let src = dir.join("src");
+        fs::create_dir_all(src.join("sit")).unwrap();
+        RgbaImage::from_fn(100, 100, |x, y| {
+            let on = (30..70).contains(&x) && (50..95).contains(&y);
+            image::Rgba(if on { [40, 80, 200, 255] } else { [0, 0, 0, 0] })
+        })
+        .save(src.join("sit/body.png"))
+        .unwrap();
+        write_wav(&src.join("sounds/boop.wav"));
+        fs::write(
+            src.join(MANIFEST),
+            r#"{"schema_version":1,"id":"booper","name":"Booper","canvas":[100,100],
+              "default_pose":"sit","poses":{"sit":{"ground_anchor":[0.5,0.95],"body":"sit/body.png"}},
+              "reactions":{"click":{"sound":{"file":"sounds/boop.wav"},"visual":"compress"},
+                           "drop":{"sound":{"builtin":"duck-toy"}}}}"#,
+        )
+        .unwrap();
+        let root = dir.join("characters");
+        let Imported::Installed(c) = import_folder_into(&root, &src, &[], OnDuplicate::Ask).unwrap() else {
+            panic!("installed");
+        };
+        assert!(root.join("booper/sounds/boop.wav").exists(), "declared sounds are copied");
+        let pack = read_manifest(&root.join("booper")).unwrap().reactions;
+        assert_eq!(pack.entry(Event::Click).unwrap().other["visual"], "compress", "unknown keys survive");
+        // The user's layer: an imported WAV on Pick up, Drop turned off.
+        let user_dir = dir.join("user");
+        write_wav(&user_dir.join("reaction-7.wav"));
+        let mut user = Config::default();
+        let mut entry = super::super::reactions::Entry::default();
+        entry.sound.enabled = true;
+        entry.sound.sound = Some(Sound::File(SoundRef::User("reaction-7.wav".into())));
+        user.set_entry(Event::Pickup, Some(entry));
+        user.set_entry(Event::Drop, Some(Default::default()));
+        let o = Overrides { reactions: Some(user), ..Overrides::default() };
+        let out = dir.join("out");
+        fs::create_dir_all(&out).unwrap();
+        let folder = export_with(&c, &out, &o, |f| Some(user_dir.join(f))).unwrap();
+        assert!(folder.join("sounds/reaction-7.wav").exists() && folder.join("sounds/boop.wav").exists());
+        // The exported folder reimports with the same effective sounds.
+        let again = read_manifest(&folder).unwrap().reactions;
+        let s = super::super::reactions::effective(&again, &Config::default());
+        assert_eq!(s.get(Event::Click).sound, Some(Sound::File(SoundRef::Pack("sounds/boop.wav".into()))));
+        assert_eq!(s.get(Event::Pickup).sound, Some(Sound::File(SoundRef::Pack("sounds/reaction-7.wav".into()))));
+        assert!(!s.get(Event::Drop).enabled);
+        // A pack naming a missing reaction sound fails its import.
+        fs::remove_file(src.join("sounds/boop.wav")).unwrap();
+        assert!(import_folder_into(&root, &src, &[], OnDuplicate::KeepBoth).is_err());
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -2671,7 +2813,7 @@ mod tests {
             MotionSpec { preset: Preset::Nod, strength: 1.5, speed: 0.5 },
             MotionSpec { preset: Preset::Wag, strength: 2.0, speed: 1.2 },
         ];
-        let o = Overrides { motion: Some(motion.clone()), lines: Some(lines), bop: Some(Bop::RubberHose) };
+        let o = Overrides { motion: Some(motion.clone()), lines: Some(lines), bop: Some(Bop::RubberHose), reactions: None };
         let out = dir.join("out");
         fs::create_dir_all(&out).unwrap();
         let folder =
@@ -2699,6 +2841,7 @@ mod tests {
             motion: Some(vec![MotionSpec { preset: Preset::Nod, strength: 0.4, speed: 1.0 }]),
             lines: None,
             bop: None,
+            reactions: None,
         };
         let folder = export_with(&plain, &out, &o, |_| None).unwrap();
         let Imported::Installed(sprite) =
@@ -2717,6 +2860,7 @@ mod tests {
             motion: Some(vec![MotionSpec { preset: Preset::Nod, strength: 1.0, speed: 1.0 }]),
             lines: Some(Lines::default()),
             bop: None,
+            reactions: None,
         };
         let (root, c) = test_install_folder(&dir, OnDuplicate::Ask);
         save_overrides_in(&root, c.id, &o).unwrap();

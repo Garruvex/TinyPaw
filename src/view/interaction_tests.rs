@@ -223,13 +223,15 @@ fn character_tabs_show_the_selected_controls_and_keep_the_preview_interactive() 
         Default::default(),
         Default::default(),
         Default::default(),
+        Default::default(),
+        Default::default(),
     );
     let tabs = [CharacterTab::Home, CharacterTab::Behavior];
     for tab in tabs {
         let mut view = settings_view(&registry, &session, &[], settings::Page::Character);
         view.motion = Some(&preview);
         view.character_tab = tab;
-        let messages = click_layout(settings::view(view), Size::new(1040.0, 1200.0));
+        let messages = click_layout(settings::view(view), Size::new(1040.0, 4000.0));
         for target in [
             CharacterTab::Home,
             CharacterTab::Artwork,
@@ -279,7 +281,7 @@ fn one_save_and_the_leave_prompt_appear_only_with_unsaved_work() {
     let session = pointing(&registry);
     let rig = Rig::load();
     let defaults = rig.motion().to_vec();
-    let preview = MotionPreview::new("yohta", rig, defaults, Default::default(), Default::default(), Default::default());
+    let preview = MotionPreview::new("yohta", rig, defaults, Default::default(), Default::default(), Default::default(), Default::default(), Default::default());
     let messages = |unsaved: bool, leaving: bool| {
         let mut view = settings_view(&registry, &session, &[], settings::Page::Character);
         view.motion = Some(&preview);

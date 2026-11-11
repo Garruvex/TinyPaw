@@ -437,20 +437,151 @@ fn behavior_section<'a>(
     own = own
         .push(event_row(m, Trigger::MusicStart))
         .push(event_row(m, Trigger::AnnotationEnd));
+    let muted = s.bool(crate::features::sound::MUTE_ALL);
     column![
+        character_sounds(m, muted),
         section(vec![
             h2("When touched"),
             event_row(m, Trigger::Click),
+            sound_row(m, Event::Click, muted),
             event_row(m, Trigger::Pickup),
+            sound_row(m, Event::Pickup, muted),
             event_row(m, Trigger::Drop),
+            sound_row(m, Event::Drop, muted),
         ]),
-        section(vec![h2("On its own"), own.into()]),
+        section(vec![h2("On its own"), own.into(), sound_row(m, Event::Idle, muted)]),
         speech_options(v, m),
         motion_section(m),
         music_section(v),
     ]
     .spacing(22)
     .into()
+}
+
+use crate::mascot::reactions::{BUILTIN_SOUNDS, Event, Sound};
+
+/// A sound picker entry: None, a bundled clip, or the row's imported WAV.
+#[derive(Debug, Clone, PartialEq)]
+struct SoundPick(Option<Sound>);
+
+impl std::fmt::Display for SoundPick {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match &self.0 {
+            None => "None",
+            Some(Sound::Builtin(id)) => BUILTIN_SOUNDS
+                .iter()
+                .find(|(b, _)| b == id)
+                .map_or("Unknown", |(_, label)| label),
+            Some(Sound::File(_)) => "Imported WAV",
+        })
+    }
+}
+
+/// Character-wide reaction sound settings, above the event rows.
+fn character_sounds<'a>(m: &'a crate::mascot::preview::MotionPreview, muted: bool) -> Element<'a, Message> {
+    let s = m.sounds();
+    let mut items: Vec<Element<'a, Message>> = vec![
+        row![
+            h2("Character sounds"),
+            space().width(Length::Fill),
+            button(text("Reset to pack").size(12))
+                .padding([5, 10])
+                .style(theme::secondary)
+                .on_press_maybe(m.reactions_customised().then_some(Message::Ui(UiMsg::ReactionsReset))),
+        ]
+        .align_y(Alignment::Center)
+        .into(),
+        toggler(s.enabled)
+            .label("Sounds on")
+            .text_size(13)
+            .on_toggle(|on| Message::Ui(UiMsg::ReactionSoundsOn(on)))
+            .into(),
+    ];
+    if s.enabled {
+        items.push(
+            row![
+                text("Volume").size(12).color(theme::MUTED).width(110),
+                slider(0.0..=1.0, s.volume, |v| Message::Ui(UiMsg::ReactionVolume(v))).step(0.05_f32).style(theme::range),
+                text(format!("{:.0}%", s.volume * 100.0)).size(12).width(48),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .into(),
+        );
+        items.push(
+            toggler(s.idle_enabled)
+                .label("Idle sounds now and then")
+                .text_size(13)
+                .on_toggle(|on| Message::Ui(UiMsg::ReactionIdleOn(on)))
+                .into(),
+        );
+        if s.idle_enabled {
+            let (lo, hi) = s.idle_interval;
+            items.push(
+                row![
+                    text("Every").size(12).color(theme::MUTED).width(110),
+                    slider(10.0..=600.0, lo, move |x| Message::Ui(UiMsg::ReactionIdleInterval(x, hi))).step(10.0_f32).style(theme::range),
+                    text(format!("{lo:.0} s")).size(12).width(48),
+                    text("to").size(12).color(theme::MUTED),
+                    slider(10.0..=600.0, hi, move |x| Message::Ui(UiMsg::ReactionIdleInterval(lo, x))).step(10.0_f32).style(theme::range),
+                    text(format!("{hi:.0} s")).size(12).width(48),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .into(),
+            );
+        }
+    }
+    items.push(hint(if muted {
+        "Mute all sounds is on, so the character and Test are silent."
+    } else {
+        "One sound plays at a time; a new reaction replaces the last, and idle never interrupts. A reaction sound plays instead of that event's line sound."
+    }));
+    section(items)
+}
+
+/// An event's sound: picker, Import WAV…, Clear, Test, and its cooldown.
+fn sound_row<'a>(m: &'a crate::mascot::preview::MotionPreview, e: Event, muted: bool) -> Element<'a, Message> {
+    let sounds = m.sounds();
+    let t = sounds.get(e).clone();
+    let current = SoundPick(t.sound.clone().filter(|_| t.enabled));
+    let mut choices = vec![SoundPick(None)];
+    choices.extend(BUILTIN_SOUNDS.iter().map(|(id, _)| SoundPick(Some(Sound::Builtin(id)))));
+    if let Some(Sound::File(r)) = &t.sound {
+        choices.push(SoundPick(Some(Sound::File(r.clone()))));
+    }
+    let small = |label: &'static str, msg: Option<Message>| {
+        button(text(label).size(12)).padding([5, 10]).style(theme::secondary).on_press_maybe(msg)
+    };
+    let mut line = row![
+        text("Sound").size(12).color(theme::MUTED).width(48),
+        pick_list(choices, Some(current), move |c: SoundPick| Message::Ui(UiMsg::ReactionSound(e, c.0)))
+            .text_size(13)
+            .padding([5, 8])
+            .style(theme::select),
+        small("Import WAV…", Some(Message::Ui(UiMsg::ReactionImport(e)))),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center);
+    if t.enabled {
+        line = line
+            .push(small("Clear", Some(Message::Ui(UiMsg::ReactionSound(e, None)))))
+            .push(small("Test", (!muted && sounds.enabled).then_some(Message::Ui(UiMsg::ReactionTest(e)))));
+    }
+    let mut block = column![line.wrap()].spacing(6);
+    if t.enabled && e != Event::Idle {
+        let ms = t.cooldown_ms as f32;
+        block = block.push(
+            row![
+                text("Cooldown").size(12).color(theme::MUTED).width(64),
+                slider(0.0..=10_000.0, ms, move |x| Message::Ui(UiMsg::ReactionCooldown(e, x))).step(50.0_f32).style(theme::range),
+                text(format!("{ms:.0} ms")).size(12).width(64),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        );
+    }
+    block.into()
 }
 
 /// One event: a summary, a Try action, and its dialogue lines.

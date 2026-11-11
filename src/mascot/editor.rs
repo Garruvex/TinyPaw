@@ -120,7 +120,7 @@ pub const FACE_LABELS: [&str; 3] = ["Eyes closed", "Pressed", "Being carried"];
 pub fn display_name(path: &Path) -> String {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
     let words: Vec<&str> = stem
-        .split(|c: char| c == '_' || c == '-' || c == ' ' || c == '.')
+        .split(['_', '-', ' ', '.'])
         .filter(|w| !w.is_empty())
         .collect();
     let mut name = words.join(" ").to_lowercase();
@@ -211,9 +211,10 @@ pub struct Editor {
     other_sources: Vec<SourceRecord>,
     source: Option<Source>,
     author: Option<String>,
-    /// The pack's lines and bop, kept as they are by an art save.
+    /// The pack's lines, bop and reactions, kept as they are by an art save.
     lines: super::lines::Lines,
     bop: Option<super::motion::Bop>,
+    reactions: super::reactions::Config,
     /// Poses this editor doesn't show, kept as they are.
     others: Vec<Pose>,
     pose: String,
@@ -303,6 +304,7 @@ impl Editor {
             author: m.author.clone(),
             lines: m.lines.clone(),
             bop: m.bop,
+            reactions: m.reactions.clone(),
             others: m
                 .poses
                 .iter()
@@ -774,6 +776,7 @@ impl Editor {
             author: self.author.clone(),
             lines: self.lines.clone(),
             bop: self.bop,
+            reactions: self.reactions.clone(),
             canvas: self.canvas,
             default_pose: self.pose.clone(),
             poses,
@@ -911,6 +914,7 @@ impl Editor {
             author: None,
             lines: super::lines::Lines::default(),
             bop: None,
+            reactions: Default::default(),
             others: Vec::new(),
             pose: "sit".into(),
             mode: Mode::Arrange,
