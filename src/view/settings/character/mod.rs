@@ -10,11 +10,13 @@ mod behavior;
 mod reference;
 #[cfg(test)]
 mod tests;
+mod transfer;
 
 use art::*;
 use behavior::*;
 use iced::widget::{column, row};
 use reference::*;
+use transfer::*;
 
 /// `mascot::FRAME_RATE` choices with their labels.
 const FRAME_RATES: [(&str, &str); 3] = [
@@ -264,9 +266,9 @@ fn character_body<'a>(
         button("From parts…")
             .style(theme::secondary)
             .on_press(Message::Ui(UiMsg::ArtFromParts)),
-        button("Import folder")
+        button("Import…")
             .style(theme::secondary)
-            .on_press(Message::Ui(UiMsg::ImportCharacter)),
+            .on_press(Message::Ui(UiMsg::TransferOpen(false))),
         button("From reference…")
             .style(theme::secondary)
             .on_press(Message::Ui(UiMsg::ReferenceStart)),
@@ -276,7 +278,7 @@ fn character_body<'a>(
     let manage = row![
         button("Export…")
             .style(theme::secondary)
-            .on_press_maybe(selected.map(|_| Message::Ui(UiMsg::ExportCharacter))),
+            .on_press_maybe(selected.map(|_| Message::Ui(UiMsg::TransferOpen(true)))),
         button("Remove")
             .style(theme::secondary)
             .on_press_maybe(custom.map(|_| Message::Ui(UiMsg::RemoveCharacter))),
@@ -298,10 +300,11 @@ fn character_body<'a>(
     if let Some(m) = v.motion
         && tab == CharacterTab::Behavior
     {
-        return (
-            page.push(save_bar(v)).push(behavior_section(v, m)).into(),
-            side,
-        );
+        page = page.push(save_bar(v));
+        if let Some(t) = v.transfer {
+            page = page.push(transfer_panel(t, name));
+        }
+        return (page.push(behavior_section(v, m)).into(), side);
     }
     if tab == CharacterTab::Behavior {
         page = page.push(hint(
@@ -318,17 +321,20 @@ fn character_body<'a>(
             .push(section(vec![
                 h2("More ways to add"),
                 add.into(),
-                hint("Add character takes one transparent PNG. Import folder takes a character.json folder with a body and optional moving parts, like one made with Export."),
+                hint("Add character takes one transparent PNG. Import… takes a character folder (character.json with a body and optional moving parts, like one made with Export), or a dialogue file of speech lines."),
             ]))
             .push(section(vec![
                 h2("Selected character"),
                 manage.into(),
                 if custom.is_none() {
-                    hint(format!("{name} is built in, so it can't be removed."))
+                    hint(format!("{name} is built in, so it can't be removed. Export… saves it, or just its dialogue, to share or import later."))
                 } else {
-                    hint(format!("Export saves {name} as a folder you can share or import later."))
+                    hint(format!("Export… saves {name}, or just its dialogue, to share or import later."))
                 },
             ]));
+        if let Some(t) = v.transfer {
+            page = page.push(transfer_panel(t, name));
+        }
         if let Some(other) = v.character_conflict {
             page = page.push(
                 container(

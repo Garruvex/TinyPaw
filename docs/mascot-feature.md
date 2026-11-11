@@ -548,6 +548,62 @@ Implemented 11 November 2026.
   import cover sharing today; an archive format (and ZIP import) is separate
   work, as the import-and-arrange plan also notes.
 
+### Import and export panel, dialogue files, fitting and placement
+
+Implemented 12 November 2026.
+
+- **One panel.** The Library's **Import…** and **Export…** open one panel
+  that asks what to move: a character folder, a dialogue file, or (export
+  only) a dialogue template. The Behavior tab's Speech lines header opens
+  the same flows for dialogue. Picking a character folder works as before,
+  including Keep both / Replace.
+- **Dialogue files** (`src/mascot/pack/dialogue.rs`). A dialogue file has the
+  same `lines`, `bubble` and `menu` keys as `character.json`, so any
+  character's manifest can be imported as dialogue. `schema_version` is
+  optional and must be 1 if given; the file may be up to 256 KiB. A line may
+  be a bare string (`"click": ["Hi!", "Hello"]`). Sounds are WAVs relative
+  to the file; a missing or unreadable one imports its line without a sound
+  and is counted in the notice. Import asks **Replace** or **Add** (Add
+  skips exact duplicates and stops at 200 lines, reporting the rest) and
+  whether to also take the bubble look and menu placement. The lines land in
+  the Behavior draft, copied sounds included, so they can be tried before
+  Save; Discard drops them and their sounds. Export writes the saved lines
+  to `<id>-lines/lines.json` with their sounds in `lines/`, then reads it
+  back to check it. **Dialogue template…** writes one example line per
+  event.
+- **Fitting artwork** (`src/mascot/pack/fit.rs`). A folder whose canvas
+  images (pose layers and reaction pictures) don't all match `canvas` used
+  to fail. Import now lists them and asks where to place them: centred on
+  the bottom (the default), centred, or top-left. Each is baked onto a
+  canvas-sized PNG with transparent space around it, scaled down only if
+  too big, before the usual validation, so installed packs stay strict. A
+  manifest may say how itself, and such images aren't asked about:
+  `"fit": {"default": "bottom", "images": {"sit/tail.png": {"x": 210,
+  "y": 300, "scale": 1}}}`. Installed and exported packs never carry `fit`.
+  Every copied or baked file is checked to stay inside the folder.
+- **Placement.** `bubble` gains `anchor` (two canvas fractions the tail aims
+  at) and `side` (`above`, `left`, `right`); a new `menu` block has `side`
+  (`auto`, `left`, `right`) and `align` (`feet`, `middle`, `head`). Without
+  an anchor the tail aims at the top of the visible art, not the canvas
+  top, so transparent padding above the head no longer leaves the bubble
+  floating. A side bubble moves above while the menu is open on that side
+  or when it would be narrower than 96 px. A chosen menu side flips only
+  when it would leave the work area and fits on the other side. Behavior →
+  Speech lines → Placement edits all four. **Pick on preview** lets you
+  click the preview to set the anchor. They are saved and exported with the
+  lines; older builds ignore the new keys.
+- **Checked by** `shorthand_layout_and_merge`,
+  `dialogue_round_trips_with_sounds`,
+  `import_fits_images_that_dont_match_the_canvas`,
+  `placements_keep_art_on_the_canvas`, `bubble_follows_its_anchor_and_side`,
+  `menu_lines_up_with_feet_middle_or_head`,
+  `chosen_menu_side_holds_unless_it_leaves_the_screen` and
+  `import_and_export_panel_choices_receive_clicks`.
+- **Not done.** The fit question has no visual preview; parts placed badly
+  by a fit can be moved in Customize → Artwork. Quick import's 4 px margin
+  stays fixed, because the recorded crop that lines up later part art
+  depends on it.
+
 Completion checks:
 
 - Yohta and an imported original character both work without code changes.

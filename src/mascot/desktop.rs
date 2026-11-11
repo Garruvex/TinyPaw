@@ -18,7 +18,7 @@ use iced::{
 };
 
 use super::Msg;
-use super::lines::{Lines, Picker, SoundRef, Speech, Trigger};
+use super::lines::{BubbleSide, Lines, MenuAlign, MenuSide, Picker, SoundRef, Speech, Trigger};
 use super::motion::{Animator, Expression, Inputs, PartMotion, Pose};
 use super::reactions::Event;
 use super::rig::Rig;
@@ -130,6 +130,9 @@ pub struct Layout {
     pub anchor: Point,
     pub window: Size,
     menu: Size,
+    /// The menu's top, from [`Layout::align_menu`]; level with the feet
+    /// by default.
+    menu_y: f32,
 }
 
 /// Room above the character for its speech bubble, in logical pixels.
@@ -155,24 +158,52 @@ pub fn layout(
     let side = MENU_W + GAP;
     let h = (size.height + top).max(menu.height + below).ceil();
     let character = Rectangle::new(Point::new(side, h - size.height), size);
+    let anchor = Point::new(character.x + feet.x * scale, character.y + feet.y * scale);
     Layout {
         scale,
         character,
-        anchor: Point::new(character.x + feet.x * scale, character.y + feet.y * scale),
+        anchor,
         window: Size::new((size.width + 2.0 * side).ceil(), h),
         menu,
+        menu_y: (anchor.y - menu.height).max(0.0),
     }
 }
 
 impl Layout {
-    /// The menu sits beside the character with its bottom level with the feet.
+    /// Lines the menu up with the feet, the middle or the top of the
+    /// visible art (`visible`: its top and bottom rows, in rig pixels),
+    /// kept inside the window.
+    pub fn align_menu(mut self, align: MenuAlign, visible: (f32, f32)) -> Self {
+        let (top, bottom) = (
+            self.character.y + visible.0 * self.scale,
+            self.character.y + visible.1 * self.scale,
+        );
+        let y = match align {
+            MenuAlign::Feet => self.anchor.y - self.menu.height,
+            MenuAlign::Middle => (top + bottom - self.menu.height) / 2.0,
+            MenuAlign::Head => top,
+        };
+        self.menu_y = y.clamp(0.0, (self.window.height - self.menu.height).max(0.0));
+        self
+    }
+
+    /// The window point a speech bubble's tail aims at: the bubble's
+    /// anchor, or the top centre of the visible art.
+    pub fn speech_anchor(&self, anchor: Option<(f32, f32)>, visible_top: f32) -> Point {
+        let c = self.character;
+        match anchor {
+            Some((x, y)) => Point::new(c.x + x * c.width, c.y + y * c.height),
+            None => Point::new(self.anchor.x, c.y + visible_top * self.scale),
+        }
+    }
+
+    /// The menu sits beside the character, lined up by [`Layout::align_menu`].
     pub fn menu(&self, side: Side) -> Rectangle {
-        let y = (self.anchor.y - self.menu.height).max(0.0);
         let x = match side {
             Side::Left => self.character.x - GAP - MENU_W,
             Side::Right => self.character.x + self.character.width + GAP,
         };
-        Rectangle::new(Point::new(x, y), self.menu)
+        Rectangle::new(Point::new(x, self.menu_y), self.menu)
     }
 
     /// Physical window origin that puts the ground anchor at `anchor`.
@@ -239,6 +270,33 @@ impl Layout {
             Side::Right
         } else {
             Side::Left
+        }
+    }
+
+    /// The side the user chose, unless the menu would leave the work area
+    /// (`left`, `right`) there and fits on the other side.
+    pub fn chosen_side(&self, choice: MenuSide, anchor_x: f32, k: f32, work: (i32, i32)) -> Side {
+        let fits = |side: Side| {
+            let m = self.menu(side);
+            let (l, r) = (
+                anchor_x + (m.x - self.anchor.x) * k,
+                anchor_x + (m.x + m.width - self.anchor.x) * k,
+            );
+            l >= work.0 as f32 && r <= work.1 as f32
+        };
+        let flip = |s: Side| match s {
+            Side::Left => Side::Right,
+            Side::Right => Side::Left,
+        };
+        let want = match choice {
+            MenuSide::Auto => return self.menu_side(anchor_x, k, work.1),
+            MenuSide::Left => Side::Left,
+            MenuSide::Right => Side::Right,
+        };
+        if fits(want) || !fits(flip(want)) {
+            want
+        } else {
+            flip(want)
         }
     }
 }
@@ -486,14 +544,8 @@ impl Desktop {
     pub fn set_lines(&mut self, lines: Lines, o: &Options) {
         self.lines = lines;
         self.speech = None;
-        self.layout = layout(
-            self.size,
-            self.rig.visible_height(),
-            self.rig.size(),
-            self.rig.anchor(),
-            self.rows,
-            self.band(),
-        );
+        self.menu = None;
+        self.relayout();
         self.schedule_idle(o);
         self.place();
     }
@@ -592,6 +644,12 @@ impl Desktop {
         self.rig = rig;
         self.menu = None;
         self.press = None;
+        self.relayout();
+        self.place();
+    }
+
+    /// Lays the window out for the current size, rig, menu and lines.
+    fn relayout(&mut self) {
         self.layout = layout(
             self.size,
             self.rig.visible_height(),
@@ -599,8 +657,8 @@ impl Desktop {
             self.rig.anchor(),
             self.rows,
             self.band(),
-        );
-        self.place();
+        )
+        .align_menu(self.lines.menu.align, self.rig.visible_rows());
     }
 
     /// The native window, once known; 0 before then.
@@ -1121,7 +1179,8 @@ impl Desktop {
         };
         let k = self.k(rect);
         let (work, _) = native::monitor_at(self.anchor.0 as i32, self.anchor.1 as i32 - 1, false);
-        self.layout.menu_side(self.anchor.0, k, work.2)
+        self.layout
+            .chosen_side(self.lines.menu.side, self.anchor.0, k, (work.0, work.2))
     }
 
     /// Physical pixels per logical pixel, from the window's actual size.
@@ -1170,14 +1229,7 @@ impl Desktop {
         }
         self.size = size;
         self.rows = rows;
-        self.layout = layout(
-            size,
-            self.rig.visible_height(),
-            self.rig.size(),
-            self.rig.anchor(),
-            rows,
-            self.band(),
-        );
+        self.relayout();
         self.place();
     }
 
@@ -1338,12 +1390,15 @@ impl Desktop {
         let Some(speech) = self.speech.as_ref().filter(|_| o.lines) else {
             return iced::widget::stack![body, space()].into();
         };
-        // The bubble sits in the band above the character, centred on it
-        // and kept inside the window. It never takes clicks.
+        // The bubble sits by its anchor, above the head unless the
+        // character says otherwise, kept inside the window. It never takes
+        // clicks.
         let b = self.lines.bubble;
-        let width = b.max_width.min(l.window.width);
-        let left = (l.anchor.x - width / 2.0).clamp(0.0, (l.window.width - width).max(0.0));
-        // Pops up from just above the head, with a little bounce.
+        let place = speech_place(l, b, self.rig.visible_rows().0, self.menu);
+        let width = match place {
+            SpeechPlace::Above { width, .. } | SpeechPlace::Beside { width, .. } => width,
+        };
+        // Pops up from its anchor, with a little bounce.
         let (pop, alpha) = if self.reduced {
             (1.0, 1.0)
         } else {
@@ -1377,37 +1432,138 @@ impl Desktop {
             },
             ..container::Style::default()
         });
-        let bottom = SPEECH_TAIL + lift;
-        let band = container(row![
-            space().width(left),
-            container(bubble).width(width).center_x(width)
-        ])
-        .width(Length::Fill)
-        .height(l.character.y.max(1.0))
-        .padding(iced::Padding {
-            top: 0.0,
-            right: 0.0,
-            bottom,
-            left: 0.0,
-        })
-        .align_y(Alignment::End);
-        // The tail hangs from the middle of the bubble, leaning toward the
-        // character, and grows in with the pop.
-        let centre = left + width / 2.0;
-        let base = Point::new(centre, l.character.y - bottom);
-        let tip = Point::new(
-            l.anchor.x.clamp(centre - 12.0, centre + 12.0),
-            base.y + SPEECH_TAIL * pop.clamp(0.0, 1.0),
-        );
+        let grow = SPEECH_TAIL * pop.clamp(0.0, 1.0);
+        let (band, base, tip, normal) = match place {
+            // Beside the anchor: the bubble's bottom a little below it, the
+            // tail pointing straight at it from the bubble's edge.
+            SpeechPlace::Beside {
+                left,
+                width,
+                edge,
+                at,
+                side,
+            } => {
+                let band = container(row![
+                    space().width(left),
+                    container(bubble).width(width).align_x(match side {
+                        Side::Left => Alignment::End,
+                        Side::Right => Alignment::Start,
+                    })
+                ])
+                .width(Length::Fill)
+                .height((at.y + SIDE_DROP + lift).min(l.window.height).max(1.0))
+                .align_y(Alignment::End);
+                let base = Point::new(edge, at.y + lift);
+                let (tip, normal) = match side {
+                    Side::Left => (Point::new(edge + grow, base.y), Vector::new(1.0, 0.0)),
+                    Side::Right => (Point::new(edge - grow, base.y), Vector::new(-1.0, 0.0)),
+                };
+                (band, base, tip, normal)
+            }
+            // Above the anchor, centred on it and kept inside the window.
+            SpeechPlace::Above { left, width, at } => {
+                let bottom = at.y - SPEECH_TAIL - lift;
+                let band = container(row![
+                    space().width(left),
+                    container(bubble).width(width).center_x(width)
+                ])
+                .width(Length::Fill)
+                .height(bottom.max(1.0))
+                .align_y(Alignment::End);
+                // The tail hangs from the middle of the bubble, leaning
+                // toward the anchor, and grows in with the pop.
+                let centre = left + width / 2.0;
+                let base = Point::new(centre, bottom);
+                let tip = Point::new(at.x.clamp(centre - 12.0, centre + 12.0), base.y + grow);
+                (band, base, tip, Vector::new(0.0, 1.0))
+            }
+        };
         let tail = canvas_widget(SpeechTail {
             base,
             tip,
+            normal,
             fill,
             line,
         })
         .width(Length::Fill)
         .height(Length::Fill);
         iced::widget::stack![body, band, tail].into()
+    }
+}
+
+/// How far a side bubble's bottom sits below its anchor, so the tail
+/// leaves it near the bottom like the menu's.
+const SIDE_DROP: f32 = 18.0;
+/// Narrowest a side bubble may be before it moves above instead.
+const SIDE_MIN: f32 = 96.0;
+
+/// Where the speech bubble goes, in window coordinates.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SpeechPlace {
+    Above {
+        left: f32,
+        width: f32,
+        at: Point,
+    },
+    Beside {
+        left: f32,
+        width: f32,
+        /// The x of the bubble's edge facing the anchor.
+        edge: f32,
+        at: Point,
+        side: Side,
+    },
+}
+
+/// Places the bubble for `b` around its anchor. A side bubble moves above
+/// when the menu is open on that side or there's no room for it.
+pub fn speech_place(
+    l: &Layout,
+    b: super::lines::Bubble,
+    visible_top: f32,
+    menu: Option<Side>,
+) -> SpeechPlace {
+    let at = l.speech_anchor(b.anchor, visible_top);
+    let side = match b.side {
+        BubbleSide::Left => Some(Side::Left),
+        BubbleSide::Right => Some(Side::Right),
+        BubbleSide::Above => None,
+    }
+    .filter(|s| menu != Some(*s));
+    match side {
+        Some(Side::Left) => {
+            let edge = at.x - SPEECH_TAIL;
+            let left = (edge - b.max_width).max(0.0);
+            if edge - left >= SIDE_MIN {
+                return SpeechPlace::Beside {
+                    left,
+                    width: edge - left,
+                    edge,
+                    at,
+                    side: Side::Left,
+                };
+            }
+        }
+        Some(Side::Right) => {
+            let edge = at.x + SPEECH_TAIL;
+            let width = b.max_width.min(l.window.width - edge);
+            if width >= SIDE_MIN {
+                return SpeechPlace::Beside {
+                    left: edge,
+                    width,
+                    edge,
+                    at,
+                    side: Side::Right,
+                };
+            }
+        }
+        None => {}
+    }
+    let width = b.max_width.min(l.window.width);
+    SpeechPlace::Above {
+        left: (at.x - width / 2.0).clamp(0.0, (l.window.width - width).max(0.0)),
+        width,
+        at,
     }
 }
 
@@ -1572,6 +1728,8 @@ fn draw_menu(frame: &mut Frame, r: Rectangle, side: Side, scale: f32, alpha: f32
 struct SpeechTail {
     base: Point,
     tip: Point,
+    /// Out of the bubble, toward the anchor: the base runs across it.
+    normal: Vector,
     fill: iced::Color,
     line: iced::Color,
 }
@@ -1588,20 +1746,23 @@ impl canvas::Program<Message> for SpeechTail {
         _: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        let (b, tip) = (self.base, self.tip);
-        let left = Point::new(b.x - 8.0, b.y - 2.0);
-        let right = Point::new(b.x + 8.0, b.y - 2.0);
+        let (b, tip, n) = (self.base, self.tip, self.normal);
+        // Across the base, and a little back into the bubble so the fill
+        // covers its edge.
+        let across = Vector::new(-n.y, n.x) * 8.0;
+        let back = n * -2.0;
+        let (one, two) = (b - across, b + across);
         let shape = canvas::Path::new(|p| {
-            p.move_to(left);
+            p.move_to(one + back);
             p.line_to(tip);
-            p.line_to(right);
+            p.line_to(two + back);
             p.close();
         });
         frame.fill(&shape, self.fill);
         let edges = canvas::Path::new(|p| {
-            p.move_to(Point::new(left.x, b.y));
+            p.move_to(one);
             p.line_to(tip);
-            p.line_to(Point::new(right.x, b.y));
+            p.line_to(two);
         });
         frame.stroke(
             &edges,

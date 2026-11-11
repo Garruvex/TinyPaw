@@ -209,7 +209,25 @@ pub enum UiMsg {
     BubbleBackground([u8; 4]),
     BubbleText([u8; 4]),
     BubbleWidth(f32),
+    BubbleSide(crate::mascot::lines::BubbleSide),
+    /// Where the bubble's tail aims, as canvas fractions; `None` follows
+    /// the top of the art.
+    BubbleAnchor(Option<(f32, f32)>),
+    /// Start or stop picking the bubble's anchor on the preview.
+    BubblePlace,
+    MenuSide(crate::mascot::lines::MenuSide),
+    MenuAlign(crate::mascot::lines::MenuAlign),
     LinesReset,
+    /// Import… (`false`) or Export… (`true`): asks what.
+    TransferOpen(bool),
+    /// Import (`false`) or export (`true`) this.
+    TransferPick(bool, settings::TransferScope),
+    TransferFit(crate::mascot::pack::Fit),
+    TransferMerge(crate::mascot::lines::Merge),
+    /// Also take the bubble's look and the menu's placement.
+    TransferLayout(bool),
+    TransferConfirm,
+    TransferCancel,
 }
 
 /// Each live or frozen scene has its own revision counter.

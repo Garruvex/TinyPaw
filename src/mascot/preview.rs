@@ -67,6 +67,8 @@ pub struct MotionPreview {
     picker: Picker,
     speech: Option<Speech>,
     sound: Option<SoundRef>,
+    /// A click on the preview sets where the bubble's tail aims.
+    pub placing_bubble: bool,
 }
 
 impl MotionPreview {
@@ -98,6 +100,7 @@ impl MotionPreview {
             picker: Picker::default(),
             speech: None,
             sound: None,
+            placing_bubble: false,
             id,
             labels: rig.motion_labels(),
             kinds: rig.motion_parts().iter().map(|p| p.kind).collect(),

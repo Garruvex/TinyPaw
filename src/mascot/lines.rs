@@ -75,13 +75,52 @@ pub struct Line {
     pub sound: Option<SoundRef>,
 }
 
-/// The speech bubble's look.
+/// Which side of its anchor the speech bubble opens on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BubbleSide {
+    #[default]
+    Above,
+    Left,
+    Right,
+}
+
+impl BubbleSide {
+    pub const ALL: [BubbleSide; 3] = [BubbleSide::Above, BubbleSide::Left, BubbleSide::Right];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            BubbleSide::Above => "above",
+            BubbleSide::Left => "left",
+            BubbleSide::Right => "right",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|x| x.name() == s)
+    }
+}
+
+impl std::fmt::Display for BubbleSide {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            BubbleSide::Above => "Above",
+            BubbleSide::Left => "Left",
+            BubbleSide::Right => "Right",
+        })
+    }
+}
+
+/// The speech bubble's look and where it sits.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bubble {
     pub background: [u8; 4],
     pub text: [u8; 4],
     /// Widest the bubble grows, in logical pixels.
     pub max_width: f32,
+    /// The point the bubble's tail aims at, as fractions of the canvas.
+    /// `None` follows the top of the visible art.
+    pub anchor: Option<(f32, f32)>,
+    pub side: BubbleSide,
 }
 
 impl Default for Bubble {
@@ -90,7 +129,109 @@ impl Default for Bubble {
             background: [255, 255, 255, 255],
             text: [27, 27, 31, 255],
             max_width: 220.0,
+            anchor: None,
+            side: BubbleSide::Above,
         }
+    }
+}
+
+/// Which side of the character the menu opens on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MenuSide {
+    /// Right, unless that would leave the screen.
+    #[default]
+    Auto,
+    Left,
+    Right,
+}
+
+impl MenuSide {
+    pub const ALL: [MenuSide; 3] = [MenuSide::Auto, MenuSide::Left, MenuSide::Right];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            MenuSide::Auto => "auto",
+            MenuSide::Left => "left",
+            MenuSide::Right => "right",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|x| x.name() == s)
+    }
+}
+
+impl std::fmt::Display for MenuSide {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            MenuSide::Auto => "Auto",
+            MenuSide::Left => "Left",
+            MenuSide::Right => "Right",
+        })
+    }
+}
+
+/// What the menu lines up with, vertically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MenuAlign {
+    /// Its bottom level with the feet.
+    #[default]
+    Feet,
+    /// Centred on the visible art.
+    Middle,
+    /// Its top level with the top of the visible art.
+    Head,
+}
+
+impl MenuAlign {
+    pub const ALL: [MenuAlign; 3] = [MenuAlign::Feet, MenuAlign::Middle, MenuAlign::Head];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            MenuAlign::Feet => "feet",
+            MenuAlign::Middle => "middle",
+            MenuAlign::Head => "head",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|x| x.name() == s)
+    }
+}
+
+impl std::fmt::Display for MenuAlign {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            MenuAlign::Feet => "Feet",
+            MenuAlign::Middle => "Middle",
+            MenuAlign::Head => "Head",
+        })
+    }
+}
+
+/// Where the character's menu sits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MenuPlace {
+    pub side: MenuSide,
+    pub align: MenuAlign,
+}
+
+/// How [`Lines::merge`] combines imported lines with the current ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Merge {
+    /// The imported lines replace every current line.
+    #[default]
+    Replace,
+    /// The imported lines are added after the current ones.
+    Add,
+}
+
+impl std::fmt::Display for Merge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Merge::Replace => "Replace the current lines",
+            Merge::Add => "Add to the current lines",
+        })
     }
 }
 
@@ -105,6 +246,8 @@ pub const MAX_SOUND: u64 = 2 * 1024 * 1024;
 pub struct Lines {
     by_trigger: [Vec<Line>; 6],
     pub bubble: Bubble,
+    /// Where the menu sits; kept with the bubble as the character's layout.
+    pub menu: MenuPlace,
 }
 
 impl Lines {
@@ -137,9 +280,36 @@ impl Lines {
         out
     }
 
-    /// Reads `lines` and `bubble` from a manifest or override file. Pack
-    /// files may only name pack sounds; overrides may also name user sounds.
-    pub fn parse(lines: &Json, bubble: &Json, allow_user: bool) -> Result<Self, String> {
+    /// Whether `v` (a manifest, override or dialogue file) says anything
+    /// about lines, the bubble or the menu.
+    pub fn present(v: &Json) -> bool {
+        ["lines", "bubble", "menu"].iter().any(|k| !v[*k].is_null())
+    }
+
+    /// Reads `lines`, `bubble` and `menu` from a manifest, override or
+    /// dialogue file. Pack and dialogue files may only name sounds beside
+    /// them; overrides may also name user sounds.
+    pub fn parse(v: &Json, allow_user: bool) -> Result<Self, String> {
+        let mut out = Self::parse_parts(&v["lines"], &v["bubble"], allow_user)?;
+        let menu = &v["menu"];
+        match menu {
+            Json::Null => {}
+            Json::Object(_) => {
+                if let Some(s) = menu["side"].as_str() {
+                    out.menu.side = MenuSide::parse(s)
+                        .ok_or(format!("menu side `{s}` must be auto, left or right"))?;
+                }
+                if let Some(s) = menu["align"].as_str() {
+                    out.menu.align = MenuAlign::parse(s)
+                        .ok_or(format!("menu align `{s}` must be feet, middle or head"))?;
+                }
+            }
+            _ => return Err("menu must be an object".into()),
+        }
+        Ok(out)
+    }
+
+    fn parse_parts(lines: &Json, bubble: &Json, allow_user: bool) -> Result<Self, String> {
         let mut out = Self::default();
         match lines {
             Json::Null => {}
@@ -177,12 +347,79 @@ impl Lines {
                 }
                 out.bubble.max_width = w;
             }
+            match &bubble["anchor"] {
+                Json::Null => {}
+                v => {
+                    out.bubble.anchor = Some(
+                        super::pack::fraction_pair(v)
+                            .ok_or("bubble anchor must be two fractions of the canvas")?,
+                    );
+                }
+            }
+            if let Some(s) = bubble["side"].as_str() {
+                out.bubble.side = BubbleSide::parse(s)
+                    .ok_or(format!("bubble side `{s}` must be above, left or right"))?;
+            }
         }
         Ok(out)
     }
 
+    /// Writes `lines`, `bubble` and (when not the default) `menu` into `v`.
+    /// Without `always`, nothing is written when everything is default.
+    pub fn write(&self, v: &mut Json, always: bool) {
+        match self.to_json() {
+            Some((lines, bubble)) => {
+                v["lines"] = lines;
+                v["bubble"] = bubble;
+            }
+            None if always => {
+                v["lines"] = json!({});
+                v["bubble"] = json!({});
+            }
+            None => {}
+        }
+        if self.menu != MenuPlace::default() {
+            v["menu"] = json!({ "side": self.menu.side.name(), "align": self.menu.align.name() });
+        }
+    }
+
+    /// Combines `other` into these lines. `layout` also takes its bubble
+    /// look and menu placement. Returns how many lines didn't fit.
+    pub fn merge(&mut self, other: &Lines, mode: Merge, layout: bool) -> usize {
+        if mode == Merge::Replace {
+            self.by_trigger = Default::default();
+        }
+        let mut dropped = 0;
+        for t in Trigger::ALL {
+            for line in other.get(t) {
+                if self.get(t).iter().any(|l| l.text == line.text) {
+                    continue;
+                }
+                if self.total() >= MAX_LINES {
+                    dropped += 1;
+                    continue;
+                }
+                self.get_mut(t).push(line.clone());
+            }
+        }
+        if layout {
+            self.bubble = other.bubble;
+            self.menu = other.menu;
+        }
+        dropped
+    }
+
+    /// Replaces each line's sound with `f`'s answer; `None` drops it.
+    pub fn map_sounds(&mut self, mut f: impl FnMut(&SoundRef) -> Option<SoundRef>) {
+        for line in self.by_trigger.iter_mut().flatten() {
+            if let Some(s) = &line.sound {
+                line.sound = f(s);
+            }
+        }
+    }
+
     /// `(lines, bubble)` as JSON, or `None` when there's nothing to write.
-    pub fn to_json(&self) -> Option<(Json, Json)> {
+    fn to_json(&self) -> Option<(Json, Json)> {
         if self.is_empty() && self.bubble == Bubble::default() {
             return None;
         }
@@ -206,20 +443,54 @@ impl Lines {
                 .collect();
             map.insert(t.key().to_owned(), Json::Array(items));
         }
-        let hex = |c: [u8; 4]| format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]);
-        Some((
-            Json::Object(map),
-            json!({
-                "background": hex(self.bubble.background),
-                "text": hex(self.bubble.text),
-                "max_width": self.bubble.max_width,
-            }),
-        ))
+        Some((Json::Object(map), bubble_json(&self.bubble)))
     }
 }
 
+fn bubble_json(b: &Bubble) -> Json {
+    let hex = |c: [u8; 4]| format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]);
+    let mut bubble = json!({
+        "background": hex(b.background),
+        "text": hex(b.text),
+        "max_width": b.max_width,
+    });
+    if let Some((x, y)) = b.anchor {
+        bubble["anchor"] = json!([x, y]);
+    }
+    if b.side != BubbleSide::Above {
+        bubble["side"] = json!(b.side.name());
+    }
+    bubble
+}
+
+/// A starter dialogue file: one example line for every trigger.
+pub fn template() -> Json {
+    let examples = [
+        (Trigger::Click, "Hi there!"),
+        (Trigger::Pickup, "Whoa, where are we going?"),
+        (Trigger::Drop, "Thanks for the lift."),
+        (Trigger::Idle, "…"),
+        (Trigger::MusicStart, "Ooh, I like this one."),
+        (Trigger::AnnotationEnd, "Nice drawing!"),
+    ];
+    let mut lines = serde_json::Map::new();
+    for (t, text) in examples {
+        lines.insert(t.key().to_owned(), json!([text]));
+    }
+    json!({
+        "schema_version": 1,
+        "lines": lines,
+        "bubble": bubble_json(&Bubble::default()),
+    })
+}
+
 fn parse_line(v: &Json, allow_user: bool) -> Result<Line, String> {
-    let text = v["text"].as_str().unwrap_or_default().trim();
+    // A bare string is a line with no sound.
+    let text = v
+        .as_str()
+        .or_else(|| v["text"].as_str())
+        .unwrap_or_default()
+        .trim();
     if text.is_empty() || text.chars().count() > MAX_CHARS {
         return Err(format!("each line needs 1–{MAX_CHARS} characters of text"));
     }
@@ -388,27 +659,86 @@ mod tests {
             "idle": [{ "text": "…", "sound": "user:a1b2.wav" }],
         });
         let bubble = json!({ "background": "#202020", "max_width": 260 });
+        let file = json!({ "lines": lines, "bubble": bubble });
         assert!(
-            Lines::parse(&lines, &bubble, false).is_err(),
+            Lines::parse(&file, false).is_err(),
             "packs can't name user sounds"
         );
-        let l = Lines::parse(&lines, &bubble, true).unwrap();
+        let l = Lines::parse(&file, true).unwrap();
         assert_eq!(l.get(Trigger::Click).len(), 2);
         assert_eq!(l.sounds().len(), 2);
         assert_eq!(l.bubble.background, [32, 32, 32, 255]);
-        let (lj, bj) = l.to_json().unwrap();
-        assert_eq!(Lines::parse(&lj, &bj, true).unwrap(), l);
+        let mut out = json!({});
+        l.write(&mut out, false);
+        assert_eq!(Lines::parse(&out, true).unwrap(), l);
 
         for bad in [
-            json!({ "wink": [{ "text": "x" }] }),
-            json!({ "click": [{ "text": "" }] }),
-            json!({ "click": [{ "text": "x", "sound": "../x.wav" }] }),
-            json!({ "click": [{ "text": "x", "sound": "x.mp3" }] }),
+            json!({ "lines": { "wink": [{ "text": "x" }] } }),
+            json!({ "lines": { "click": [{ "text": "" }] } }),
+            json!({ "lines": { "click": [{ "text": "x", "sound": "../x.wav" }] } }),
+            json!({ "lines": { "click": [{ "text": "x", "sound": "x.mp3" }] } }),
+            json!({ "bubble": { "max_width": 9000 } }),
+            json!({ "bubble": { "anchor": [0.5, 2.0] } }),
+            json!({ "bubble": { "side": "below" } }),
+            json!({ "menu": { "align": "knees" } }),
         ] {
-            assert!(Lines::parse(&bad, &Json::Null, true).is_err(), "{bad}");
+            assert!(Lines::parse(&bad, true).is_err(), "{bad}");
         }
-        assert!(Lines::parse(&Json::Null, &json!({ "max_width": 9000 }), true).is_err());
-        assert!(Lines::default().to_json().is_none());
+        let mut empty = json!({});
+        Lines::default().write(&mut empty, false);
+        assert_eq!(empty, json!({}));
+        Lines::default().write(&mut empty, true);
+        assert!(Lines::present(&empty), "an explicit empty override is kept");
+    }
+
+    #[test]
+    fn shorthand_layout_and_merge() {
+        let file = json!({
+            "lines": { "click": ["Hi!", { "text": "Hey" }], "idle": ["…"] },
+            "bubble": { "anchor": [0.5, 0.2], "side": "right" },
+            "menu": { "side": "left", "align": "head" },
+        });
+        let imported = Lines::parse(&file, false).unwrap();
+        assert_eq!(imported.get(Trigger::Click)[0].text, "Hi!");
+        assert_eq!(imported.bubble.anchor, Some((0.5, 0.2)));
+        assert_eq!(imported.bubble.side, BubbleSide::Right);
+        assert_eq!(imported.menu.align, MenuAlign::Head);
+        let mut out = json!({});
+        imported.write(&mut out, false);
+        assert_eq!(
+            Lines::parse(&out, false).unwrap(),
+            imported,
+            "layout round-trips"
+        );
+
+        let mut mine = Lines::default();
+        mine.get_mut(Trigger::Click).push(Line {
+            text: "Hi!".into(),
+            sound: None,
+        });
+        mine.get_mut(Trigger::Drop).push(Line {
+            text: "Oof".into(),
+            sound: None,
+        });
+        let mut added = mine.clone();
+        assert_eq!(added.merge(&imported, Merge::Add, false), 0);
+        assert_eq!(added.get(Trigger::Click).len(), 2, "duplicates are skipped");
+        assert_eq!(added.get(Trigger::Drop).len(), 1, "Add keeps current lines");
+        assert_eq!(added.bubble, Bubble::default(), "layout only when asked");
+        let mut replaced = mine.clone();
+        replaced.merge(&imported, Merge::Replace, true);
+        assert!(replaced.get(Trigger::Drop).is_empty());
+        assert_eq!(replaced.menu.side, MenuSide::Left);
+
+        let mut full = Lines::default();
+        for i in 0..MAX_LINES {
+            full.get_mut(Trigger::Idle).push(Line {
+                text: format!("{i}"),
+                sound: None,
+            });
+        }
+        assert_eq!(full.merge(&imported, Merge::Add, false), 3);
+        assert!(Lines::parse(&template(), false).unwrap().total() == Trigger::ALL.len());
     }
 
     #[test]

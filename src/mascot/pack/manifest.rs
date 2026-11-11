@@ -472,10 +472,7 @@ impl Manifest {
             let (x, y, w, h) = src.visible;
             m["source"] = json!({ "size": [src.size.0, src.size.1], "visible": [x, y, w, h] });
         }
-        if let Some((lines, bubble)) = self.lines.to_json() {
-            m["lines"] = lines;
-            m["bubble"] = bubble;
-        }
+        self.lines.write(&mut m, false);
         if !self.reactions.is_empty() {
             m["reactions"] = self.reactions.to_json();
         }
@@ -695,7 +692,7 @@ pub(in crate::mascot) fn parse_manifest(text: &str) -> Result<Manifest, String> 
             .as_str()
             .and_then(super::super::rest::RestMode::parse)
             .unwrap_or_default(),
-        lines: Lines::parse(&m["lines"], &m["bubble"], false)?,
+        lines: Lines::parse(&m, false)?,
         // A style this version doesn't know bops the default way.
         bop: m["music"]["bop"].as_str().and_then(Bop::parse),
         reactions: super::super::reactions::Config::parse(&m["reactions"], false)?,

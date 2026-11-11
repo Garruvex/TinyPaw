@@ -82,6 +82,37 @@ pub enum Leave {
     Close,
 }
 
+/// What Import… and Export… move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferScope {
+    /// A whole character folder.
+    Character,
+    /// Speech lines, the bubble and the menu, as a dialogue file.
+    Dialogue,
+    /// A starter dialogue file to fill in (export only).
+    Template,
+}
+
+/// The import and export panel on the Character page.
+#[derive(Debug, Clone)]
+pub enum Transfer {
+    /// Import… or Export… was pressed: what to move.
+    Choose { export: bool },
+    /// A character folder whose images don't all match its canvas: how to
+    /// fit them before importing.
+    Fit {
+        path: std::path::PathBuf,
+        found: crate::mascot::pack::Inspected,
+        choice: crate::mascot::pack::Fit,
+    },
+    /// A dialogue file, waiting on how to combine it with the lines.
+    Dialogue {
+        dialogue: crate::mascot::pack::Dialogue,
+        merge: crate::mascot::lines::Merge,
+        layout: bool,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LeaveChoice {
     Save,
@@ -118,6 +149,8 @@ pub struct SettingsView<'a> {
     pub character_busy: bool,
     /// A folder import waiting on Keep both or Replace: the character's name.
     pub character_conflict: Option<&'a str>,
+    /// The import and export panel, while open.
+    pub transfer: Option<&'a Transfer>,
     /// The Art tab's open character, while editing.
     pub art: Option<&'a crate::mascot::editor::Editor>,
     /// The Motion tab's live preview, on the Character page.

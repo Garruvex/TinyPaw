@@ -76,6 +76,106 @@ fn menu_flips_left_near_the_right_edge() {
 }
 
 #[test]
+fn chosen_menu_side_holds_unless_it_leaves_the_screen() {
+    let l = yohta(160.0);
+    let work = (0, 1920);
+    assert_eq!(l.chosen_side(MenuSide::Left, 960.0, 1.0, work), Side::Left);
+    assert_eq!(
+        l.chosen_side(MenuSide::Right, 960.0, 1.0, work),
+        Side::Right
+    );
+    assert_eq!(l.chosen_side(MenuSide::Left, 60.0, 1.0, work), Side::Right);
+    assert_eq!(
+        l.chosen_side(MenuSide::Right, 1850.0, 1.0, work),
+        Side::Left
+    );
+    assert_eq!(l.chosen_side(MenuSide::Auto, 1850.0, 1.0, work), Side::Left);
+}
+
+#[test]
+fn menu_lines_up_with_feet_middle_or_head() {
+    let visible = (100.0, GROUND);
+    let base = layout(
+        160.0,
+        GROUND - 100.0,
+        Size::new(rig::WIDTH, rig::HEIGHT),
+        Point::new(rig::WIDTH * 0.5, GROUND),
+        3,
+        104.0,
+    );
+    let at = |a| base.align_menu(a, visible).menu(Side::Right);
+    let feet = at(MenuAlign::Feet);
+    assert!((feet.y + feet.height - base.anchor.y).abs() < 0.01);
+    let head = at(MenuAlign::Head);
+    assert!((head.y - (base.character.y + 100.0 * base.scale)).abs() < 0.01);
+    let middle = at(MenuAlign::Middle);
+    assert!(head.y < middle.y && middle.y < feet.y);
+    for a in MenuAlign::ALL {
+        let m = at(a);
+        assert!(
+            m.y >= 0.0 && m.y + m.height <= base.window.height + 0.01,
+            "{a:?}"
+        );
+    }
+}
+
+#[test]
+fn bubble_follows_its_anchor_and_side() {
+    use crate::mascot::lines::Bubble;
+    let l = yohta(200.0);
+    let top = 120.0;
+    // By default the tail aims at the top of the visible art, not the
+    // canvas, so padding above the head doesn't leave it floating.
+    let SpeechPlace::Above { at, left, width } = speech_place(&l, Bubble::default(), top, None)
+    else {
+        panic!("above by default");
+    };
+    assert!((at.y - (l.character.y + top * l.scale)).abs() < 0.01);
+    assert!(left >= 0.0 && left + width <= l.window.width + 0.01);
+    let pinned = Bubble {
+        anchor: Some((0.25, 0.5)),
+        ..Bubble::default()
+    };
+    let SpeechPlace::Above { at, .. } = speech_place(&l, pinned, top, None) else {
+        panic!("above");
+    };
+    assert!((at.x - (l.character.x + l.character.width * 0.25)).abs() < 0.01);
+    let right = Bubble {
+        side: BubbleSide::Right,
+        ..pinned
+    };
+    match speech_place(&l, right, top, None) {
+        SpeechPlace::Beside {
+            edge,
+            side,
+            left,
+            width,
+            ..
+        } => {
+            assert_eq!(side, Side::Right);
+            assert!(edge > at.x && left + width <= l.window.width + 0.01);
+        }
+        other => panic!("beside: {other:?}"),
+    }
+    assert!(
+        matches!(
+            speech_place(&l, right, top, Some(Side::Right)),
+            SpeechPlace::Above { .. }
+        ),
+        "an open menu on that side moves the bubble above"
+    );
+    let left_side = Bubble {
+        side: BubbleSide::Left,
+        anchor: Some((0.0, 0.5)),
+        ..Bubble::default()
+    };
+    match speech_place(&l, left_side, top, None) {
+        SpeechPlace::Beside { left, edge, .. } => assert!(left >= 0.0 && edge <= at.x),
+        other => panic!("beside: {other:?}"),
+    }
+}
+
+#[test]
 fn gaze_points_at_the_cursor_and_saturates() {
     let eyes = Point::new(100.0, 100.0);
     assert_eq!(gaze_toward(eyes, eyes, 50.0), Vector::ZERO);

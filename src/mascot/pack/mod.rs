@@ -12,10 +12,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+mod dialogue;
+mod fit;
 mod manifest;
 #[cfg(test)]
 mod tests;
 
+pub use dialogue::{DIALOGUE, Dialogue, export_dialogue, read_dialogue, write_template};
+pub use fit::{Fit, Misfit};
 pub(super) use manifest::*;
 
 static INSTALL_LOCK: Mutex<()> = Mutex::new(());
@@ -886,13 +890,69 @@ impl PreparedFolder {
     }
 }
 
-pub fn prepare_folder(source: &Path) -> Result<Arc<PreparedFolder>, String> {
-    let root = user_dir().ok_or("no per-user data folder")?;
-    prepare_folder_into(&root, source)
+/// What a picked character folder holds that import must ask about: its
+/// name, and the images whose size isn't its canvas.
+#[derive(Debug, Clone)]
+pub struct Inspected {
+    pub name: String,
+    pub canvas: (u32, u32),
+    pub misfits: Vec<Misfit>,
+    /// The manifest's own `fit` default, if it gives one.
+    pub suggested: Option<Fit>,
 }
 
-fn prepare_folder_into(root: &Path, source: &Path) -> Result<Arc<PreparedFolder>, String> {
+pub fn inspect_folder(source: &Path) -> Result<Inspected, String> {
     let m = read_manifest(source)?;
+    let rules = fit_rules(source, m.canvas)?;
+    // Images the manifest places itself need no question.
+    let misfits = fit::misfits(&m, source)?
+        .into_iter()
+        .filter(|f| !rules.images.iter().any(|(a, _)| *a == f.asset))
+        .collect();
+    Ok(Inspected {
+        name: m.name,
+        canvas: m.canvas,
+        misfits,
+        suggested: rules.default,
+    })
+}
+
+fn fit_rules(source: &Path, canvas: (u32, u32)) -> Result<fit::Rules, String> {
+    let text = fs::read_to_string(source.join(MANIFEST)).map_err(|e| e.to_string())?;
+    let v: Json = serde_json::from_str(&text).map_err(|e| format!("character.json: {e}"))?;
+    fit::Rules::parse(&v["fit"], canvas)
+}
+
+/// Copies and validates a folder for import. Images that don't match the
+/// canvas are baked onto it with `fit` (or the manifest's own rules).
+pub fn prepare_folder(source: &Path, fit: Option<Fit>) -> Result<Arc<PreparedFolder>, String> {
+    let root = user_dir().ok_or("no per-user data folder")?;
+    prepare_folder_into(&root, source, fit)
+}
+
+fn prepare_folder_into(
+    root: &Path,
+    source: &Path,
+    choice: Option<Fit>,
+) -> Result<Arc<PreparedFolder>, String> {
+    let m = read_manifest(source)?;
+    let rules = fit_rules(source, m.canvas)?;
+    let misfits = fit::misfits(&m, source)?;
+    if !misfits.is_empty() {
+        return prepare_fitted(root, source, m, &rules, choice, &misfits);
+    }
+    let prepared = new_prepared(root, &m)?;
+    let assets: Vec<String> = m.files();
+    // Validate containment before copying, and validate the actual copied bytes.
+    m.validate_files(source)?;
+    copy_assets(source, prepared.path(), &assets)?;
+    fs::write(prepared.path.join(MANIFEST), m.to_json().to_string()).map_err(|e| e.to_string())?;
+    m.validate_files(prepared.path())?;
+    Ok(prepared)
+}
+
+/// A hidden folder for one prepared import, removed when dropped.
+fn new_prepared(root: &Path, m: &Manifest) -> Result<Arc<PreparedFolder>, String> {
     let expected_revision = revision(&root.join(&m.id))?;
     fs::create_dir_all(root).map_err(|e| e.to_string())?;
     let path = root.join(format!(
@@ -901,15 +961,42 @@ fn prepare_folder_into(root: &Path, source: &Path) -> Result<Arc<PreparedFolder>
         NEXT_STAGE.fetch_add(1, Ordering::Relaxed)
     ));
     fs::create_dir(&path).map_err(|e| e.to_string())?;
-    let prepared = Arc::new(PreparedFolder {
+    Ok(Arc::new(PreparedFolder {
         path,
         id: m.id.clone(),
         expected_revision,
-    });
-    let assets: Vec<String> = m.files();
-    // Validate containment before copying, and validate the actual copied bytes.
-    m.validate_files(source)?;
-    copy_assets(source, prepared.path(), &assets)?;
+    }))
+}
+
+/// Like the plain copy, but bakes each misfit onto the canvas first. Every
+/// file is checked to stay in the folder; the result is validated whole.
+fn prepare_fitted(
+    root: &Path,
+    source: &Path,
+    m: Manifest,
+    rules: &fit::Rules,
+    choice: Option<Fit>,
+    misfits: &[Misfit],
+) -> Result<Arc<PreparedFolder>, String> {
+    let prepared = new_prepared(root, &m)?;
+    let mut encoded = 0u64;
+    for asset in m.files() {
+        let from = fit::contained(source, &asset)?;
+        encoded += fs::metadata(&from).map_err(|e| e.to_string())?.len();
+        if encoded > 128 * 1024 * 1024 {
+            return Err("character files exceed the 128 MiB disk budget".into());
+        }
+        if misfits.iter().any(|f| f.asset == asset) {
+            let fit = rules.for_asset(&asset, choice);
+            fit::bake_asset(source, prepared.path(), &asset, fit, m.canvas)?;
+        } else {
+            let target = prepared.path().join(&asset);
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            fs::copy(from, target).map_err(|e| e.to_string())?;
+        }
+    }
     fs::write(prepared.path.join(MANIFEST), m.to_json().to_string()).map_err(|e| e.to_string())?;
     m.validate_files(prepared.path())?;
     Ok(prepared)
@@ -1065,8 +1152,8 @@ fn load_overrides_in(root: &Path, id: &str) -> Overrides {
             .collect()
     });
     // Broken saved lines fall back to the pack's rather than failing.
-    let lines = (!v["lines"].is_null() || !v["bubble"].is_null())
-        .then(|| Lines::parse(&v["lines"], &v["bubble"], true).ok())
+    let lines = Lines::present(&v)
+        .then(|| Lines::parse(&v, true).ok())
         .flatten();
     let bop = v["bop"].as_str().and_then(Bop::parse);
     // Broken saved reactions fall back to the pack's rather than failing.
@@ -1106,9 +1193,7 @@ fn save_overrides_in(root: &Path, id: &str, o: &Overrides) -> Result<(), String>
     }
     if let Some(lines) = &o.lines {
         // Saved even when empty: "no lines" is a choice that overrides the pack.
-        let (l, b) = lines.to_json().unwrap_or_else(|| (json!({}), json!({})));
-        json["lines"] = l;
-        json["bubble"] = b;
+        lines.write(&mut json, true);
     }
     if let Some(bop) = o.bop {
         json["bop"] = json!(bop.name());

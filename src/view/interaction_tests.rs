@@ -135,6 +135,7 @@ fn settings_view<'a>(
         character_draft: None,
         character_busy: false,
         character_conflict: None,
+        transfer: None,
         art: None,
         motion: None,
         reference: None,
@@ -160,6 +161,38 @@ fn assert_ui(messages: &[Message], expected: &[&str]) {
 }
 
 #[test]
+fn import_and_export_panel_choices_receive_clicks() {
+    let registry = Registry::build(crate::features::BUILTINS).unwrap();
+    let session = pointing(&registry);
+    let packs = crate::packs::load_all().0;
+    for (export, expected) in [
+        (
+            false,
+            vec![
+                "TransferPick(false, Character)",
+                "TransferPick(false, Dialogue)",
+                "TransferCancel",
+            ],
+        ),
+        (
+            true,
+            vec![
+                "TransferPick(true, Character)",
+                "TransferPick(true, Dialogue)",
+                "TransferPick(true, Template)",
+                "TransferCancel",
+            ],
+        ),
+    ] {
+        let panel = settings::Transfer::Choose { export };
+        let mut view = settings_view(&registry, &session, &packs, settings::Page::Character);
+        view.transfer = Some(&panel);
+        let messages = click_layout(settings::view(view), Size::new(1200.0, 2400.0));
+        assert_ui(&messages, &expected);
+    }
+}
+
+#[test]
 fn settings_navigation_and_page_actions_receive_clicks() {
     let registry = Registry::build(crate::features::BUILTINS).unwrap();
     let session = pointing(&registry);
@@ -178,7 +211,7 @@ fn settings_navigation_and_page_actions_receive_clicks() {
         ),
         (
             Page::Character,
-            vec!["AddCharacter", "ArtFromParts", "ImportCharacter"],
+            vec!["AddCharacter", "ArtFromParts", "TransferOpen(false)"],
         ),
         (Page::Ink, vec![]),
         (Page::Tools, vec!["RefreshSources"]),

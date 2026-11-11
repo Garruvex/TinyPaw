@@ -67,6 +67,10 @@ pub enum Message {
     /// The artwork draft built as a rig for Test character, by request.
     DraftRig(u64, Box<crate::mascot::rig::Rig>),
     CharacterExportPicked(Option<PathBuf>),
+    /// A dialogue file to import.
+    DialoguePicked(Option<PathBuf>),
+    /// Where to export the dialogue, or (`true`) write a template.
+    DialogueExportPicked(bool, Option<PathBuf>),
     ArtFilesPicked(u64, crate::mascot::editor::Target, Vec<PathBuf>),
     /// Frames for the Motion tab's preview.
     MotionTick,
@@ -93,6 +97,8 @@ pub enum CharacterWork {
     Draft(characters::Draft),
     Editor(Box<crate::mascot::editor::Editor>, Vec<String>),
     Prepared(Arc<characters::PreparedFolder>),
+    /// A folder whose images need fitting to its canvas, and what it holds.
+    Misfits(PathBuf, characters::Inspected),
     Imported(characters::Imported, bool),
 }
 
@@ -1449,6 +1455,7 @@ impl App {
                 character_draft: self.studio.character_draft.as_ref(),
                 character_busy: self.studio.character_job.is_some(),
                 character_conflict: self.studio.character_conflict.as_deref(),
+                transfer: self.studio.transfer.as_ref(),
                 art: self.studio.art.as_ref(),
                 motion: self.studio.motion_preview.as_ref(),
                 reference: self

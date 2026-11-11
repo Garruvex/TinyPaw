@@ -38,6 +38,66 @@ fn bundled_yohta_is_an_ordinary_pack_that_exports_and_copies() {
     fs::remove_dir_all(&dir).unwrap();
 }
 
+#[test]
+fn import_fits_images_that_dont_match_the_canvas() {
+    let dir = scratch("fit");
+    let src = dir.join("cropped");
+    fs::create_dir_all(src.join("sit")).unwrap();
+    let solid = |w, h| RgbaImage::from_pixel(w, h, image::Rgba([200, 80, 40, 255]));
+    solid(200, 200).save(src.join("sit/body.png")).unwrap();
+    // A cropped tail, 40 × 20, which the manifest places itself, and a
+    // cropped head, 50 × 50, which import must ask about.
+    solid(40, 20).save(src.join("sit/tail.png")).unwrap();
+    solid(50, 50).save(src.join("sit/head.png")).unwrap();
+    fs::write(
+        src.join(MANIFEST),
+        r#"{"schema_version":1,"id":"cropped","name":"Cropped","canvas":[200,200],
+          "default_pose":"sit","poses":{"sit":{"ground_anchor":[0.5,0.95],"body":"sit/body.png",
+          "head":{"image":"sit/head.png","pivot":[0.5,0.4]},
+          "tail":{"image":"sit/tail.png","pivot":[0.6,0.8]}}},
+          "fit":{"images":{"sit/tail.png":{"x":150,"y":170,"scale":1}}}}"#,
+    )
+    .unwrap();
+    assert!(
+        read_manifest(&src).unwrap().validate_files(&src).is_err(),
+        "the folder as is doesn't fit the canvas"
+    );
+    let found = inspect_folder(&src).unwrap();
+    assert_eq!(
+        found.misfits,
+        vec![Misfit {
+            asset: "sit/head.png".into(),
+            size: (50, 50)
+        }],
+        "images the manifest places need no question"
+    );
+    let root = dir.join("characters");
+    let prepared = prepare_folder_into(&root, &src, Some(Fit::TopLeft)).unwrap();
+    let head = read_png(prepared.path(), "sit/head.png", (200, 200)).unwrap();
+    assert_eq!(head.get_pixel(10, 10)[3], 255, "top-left fit");
+    assert_eq!(head.get_pixel(100, 100)[3], 0, "transparent around the art");
+    let tail = read_png(prepared.path(), "sit/tail.png", (200, 200)).unwrap();
+    assert_eq!(
+        tail.get_pixel(160, 180)[3],
+        255,
+        "exact placement from the manifest"
+    );
+    assert_eq!(tail.get_pixel(10, 10)[3], 0);
+    let text = fs::read_to_string(prepared.path().join(MANIFEST)).unwrap();
+    assert!(
+        !text.contains("\"fit\""),
+        "installed packs carry no fit rules"
+    );
+    let Imported::Installed(c) = prepared
+        .install_into(&root, &[], OnDuplicate::Ask, &AtomicU8::new(0))
+        .unwrap()
+    else {
+        panic!("installs");
+    };
+    assert!(c.rig().is_ok());
+    fs::remove_dir_all(&dir).unwrap();
+}
+
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("tinypaw-character-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
@@ -82,7 +142,7 @@ fn reference_prompt_folders_pass_import_with_every_requested_image_mapped() {
             png.save(source.join(file)).unwrap();
         }
         request.validate_folder(&source).unwrap();
-        prepare_folder_into(&dir.join("library"), &source).unwrap();
+        prepare_folder_into(&dir.join("library"), &source, None).unwrap();
         if tracking {
             let mut changed: Json = serde_json::from_str(json).unwrap();
             changed["poses"]["sit"]["eyes"][0]["mask"] = json!("body.png");
@@ -178,7 +238,7 @@ fn prepared_snapshot_survives_source_changes_and_rejects_stale_replacement() {
     let dir = scratch("snapshot");
     let (root, installed) = test_install_folder(&dir, OnDuplicate::Ask);
     let source = dir.join("fixture");
-    let prepared = prepare_folder_into(&root, &source).unwrap();
+    let prepared = prepare_folder_into(&root, &source, None).unwrap();
     fs::write(source.join("sit/body.png"), b"changed after validation").unwrap();
     let Imported::Installed(copy) = prepared
         .install_into(
@@ -209,7 +269,7 @@ fn prepared_snapshot_survives_source_changes_and_rejects_stale_replacement() {
 fn cancellation_before_commit_preserves_the_installed_pack() {
     let dir = scratch("cancel");
     let (root, installed) = test_install_folder(&dir, OnDuplicate::Ask);
-    let prepared = prepare_folder_into(&root, &dir.join("fixture")).unwrap();
+    let prepared = prepare_folder_into(&root, &dir.join("fixture"), None).unwrap();
     let before = revision(installed.folder.as_ref().unwrap()).unwrap();
     let err = prepared
         .install_into(&root, &[], OnDuplicate::Replace, &AtomicU8::new(2))

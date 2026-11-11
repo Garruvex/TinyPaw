@@ -36,6 +36,8 @@ pub(super) struct Studio {
     pub(super) reference_thumb: Option<image::Handle>,
     /// The latest draft-rig request; older results are dropped.
     pub(super) draft_rig_request: u64,
+    /// The import and export panel, while open.
+    pub(super) transfer: Option<view::settings::Transfer>,
 }
 
 impl App {
@@ -152,6 +154,7 @@ impl App {
         self.studio.character_conflict = None;
         self.studio.character_draft = None;
         self.studio.art = None;
+        self.studio.transfer = None;
         out.sets.push((character::CHARACTER, Value::Choice(id)));
     }
 
@@ -203,6 +206,58 @@ impl App {
         );
         self.notice = Some("Preparing character…".into());
         self.studio.character_request
+    }
+
+    /// The panel's Import: fits and imports a character folder, or brings a
+    /// dialogue file's lines into the behavior draft for Save.
+    fn confirm_transfer(&mut self) -> Task<Message> {
+        use view::settings::Transfer;
+        match self.studio.transfer.take() {
+            Some(Transfer::Fit { path, choice, .. }) => {
+                let id = self.begin_character_job();
+                character_work(id, move || {
+                    characters::prepare_folder(&path, Some(choice)).map(CharacterWork::Prepared)
+                })
+            }
+            Some(Transfer::Dialogue {
+                dialogue,
+                merge,
+                layout,
+            }) => {
+                let Some(p) = &mut self.studio.motion_preview else {
+                    self.notice = Some(
+                        "The character's preview isn't ready yet; try again in a moment.".into(),
+                    );
+                    return Task::none();
+                };
+                let (lines, failed) = dialogue.import_sounds(p.id);
+                let dropped = p.lines.merge(&lines, merge, layout);
+                let mut notes = vec![format!(
+                    "Imported {} lines. Save to keep them.",
+                    lines.total() - dropped
+                )];
+                if dropped > 0 {
+                    notes.push(format!(
+                        "{dropped} didn't fit: a character has at most {} lines.",
+                        crate::mascot::lines::MAX_LINES
+                    ));
+                }
+                let missing = failed + dialogue.missing_sounds;
+                if missing > 0 {
+                    notes.push(format!(
+                        "{missing} sounds were missing or unreadable, so those lines have none."
+                    ));
+                }
+                self.notice = Some(notes.join(" "));
+                self.character_tab = view::settings::CharacterTab::Behavior;
+                Task::none()
+            }
+            Some(choose @ Transfer::Choose { .. }) => {
+                self.studio.transfer = Some(choose);
+                Task::none()
+            }
+            None => Task::none(),
+        }
     }
 
     pub(super) fn import_character(&mut self, choice: characters::OnDuplicate) -> Task<Message> {
@@ -285,9 +340,47 @@ impl App {
                     if let Some(request) = request {
                         request.validate_folder(&path)?;
                     }
-                    characters::prepare_folder(&path).map(CharacterWork::Prepared)
+                    // Images that don't match the canvas: ask how to fit them.
+                    let found = characters::inspect_folder(&path)?;
+                    if !found.misfits.is_empty() {
+                        return Ok(CharacterWork::Misfits(path, found));
+                    }
+                    characters::prepare_folder(&path, None).map(CharacterWork::Prepared)
                 }));
             }
+            Message::DialoguePicked(Some(path)) => match characters::read_dialogue(&path) {
+                Ok(dialogue) => {
+                    self.notice = None;
+                    self.studio.transfer = Some(view::settings::Transfer::Dialogue {
+                        dialogue,
+                        merge: crate::mascot::lines::Merge::Replace,
+                        layout: true,
+                    });
+                }
+                Err(e) => self.notice = Some(format!("Could not read that dialogue file: {e}")),
+            },
+            Message::DialogueExportPicked(template, Some(into)) => {
+                let c = self.current_character().clone();
+                self.notice = Some(if template {
+                    match characters::write_template(&into) {
+                        Ok(file) => format!(
+                            "Wrote a dialogue template to {}. Fill it in, then Import… → Dialogue.",
+                            file.display()
+                        ),
+                        Err(e) => format!("Could not write the template: {e}"),
+                    }
+                } else {
+                    match characters::export_dialogue(&c, &c.lines(), &into) {
+                        Ok(folder) => format!(
+                            "Exported {}'s dialogue to {}",
+                            c.name,
+                            folder.join(characters::DIALOGUE).display()
+                        ),
+                        Err(e) => format!("Could not export {}'s dialogue: {e}", c.name),
+                    }
+                });
+            }
+            Message::DialoguePicked(None) | Message::DialogueExportPicked(_, None) => {}
             Message::CharacterWorked(id, result) => {
                 self.studio.character_jobs.remove(&id);
                 if id != self.studio.character_request
@@ -334,6 +427,14 @@ impl App {
                             if !errors.is_empty() {
                                 self.notice = Some(errors.join("; "));
                             }
+                        }
+                        Ok(CharacterWork::Misfits(path, found)) => {
+                            let choice = found.suggested.unwrap_or(characters::Fit::Bottom);
+                            self.studio.transfer = Some(view::settings::Transfer::Fit {
+                                path,
+                                found,
+                                choice,
+                            });
                         }
                         Ok(CharacterWork::Prepared(prepared)) => {
                             self.studio.reference = None;
@@ -826,11 +927,102 @@ impl App {
                     );
                 }
             }
+            UiMsg::BubbleSide(side) => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.lines.bubble.side = side;
+                    p.test(crate::mascot::preview::Test::Speak);
+                }
+            }
+            UiMsg::BubbleAnchor(at) => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.lines.bubble.anchor = at.map(|(x, y)| (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)));
+                    p.placing_bubble = false;
+                }
+            }
+            UiMsg::BubblePlace => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.placing_bubble = !p.placing_bubble;
+                }
+            }
+            UiMsg::MenuSide(side) => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.lines.menu.side = side;
+                }
+            }
+            UiMsg::MenuAlign(align) => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.lines.menu.align = align;
+                }
+            }
             UiMsg::LinesReset => {
                 if let Some(p) = &mut self.studio.motion_preview {
                     p.reset_lines();
                 }
             }
+            UiMsg::TransferOpen(export) => {
+                self.notice = None;
+                self.studio.transfer = Some(view::settings::Transfer::Choose { export });
+            }
+            UiMsg::TransferCancel => self.studio.transfer = None,
+            UiMsg::TransferPick(export, scope) => {
+                use view::settings::TransferScope;
+                self.studio.transfer = None;
+                return match (export, scope) {
+                    (false, TransferScope::Character) => {
+                        self.ui_message(UiMsg::ImportCharacter, now, out)
+                    }
+                    (true, TransferScope::Character) => {
+                        self.ui_message(UiMsg::ExportCharacter, now, out)
+                    }
+                    (false, _) => Task::perform(
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Import dialogue: a lines.json or character.json")
+                            .add_filter("Dialogue (JSON)", &["json"])
+                            .pick_file(),
+                        |f| Message::DialoguePicked(f.map(|f| f.path().to_path_buf())),
+                    ),
+                    (true, scope) => {
+                        let template = scope == TransferScope::Template;
+                        Task::perform(
+                            rfd::AsyncFileDialog::new()
+                                .set_title(if template {
+                                    "Choose where to save the dialogue template"
+                                } else {
+                                    "Choose where to save the dialogue folder"
+                                })
+                                .pick_folder(),
+                            move |f| {
+                                Message::DialogueExportPicked(
+                                    template,
+                                    f.map(|f| f.path().to_path_buf()),
+                                )
+                            },
+                        )
+                    }
+                };
+            }
+            UiMsg::TransferFit(fit) => {
+                if let Some(view::settings::Transfer::Fit { choice, .. }) =
+                    &mut self.studio.transfer
+                {
+                    *choice = fit;
+                }
+            }
+            UiMsg::TransferMerge(m) => {
+                if let Some(view::settings::Transfer::Dialogue { merge, .. }) =
+                    &mut self.studio.transfer
+                {
+                    *merge = m;
+                }
+            }
+            UiMsg::TransferLayout(on) => {
+                if let Some(view::settings::Transfer::Dialogue { layout, .. }) =
+                    &mut self.studio.transfer
+                {
+                    *layout = on;
+                }
+            }
+            UiMsg::TransferConfirm => return self.confirm_transfer(),
             UiMsg::MotionReset => {
                 if let Some(p) = &mut self.studio.motion_preview {
                     p.reset();

@@ -505,7 +505,7 @@ pub(super) fn speech_options<'a>(
     v: &SettingsView<'a>,
     m: &'a crate::mascot::preview::MotionPreview,
 ) -> Element<'a, Message> {
-    use crate::mascot::lines::{MAX_WIDTH, MIN_WIDTH};
+    use crate::mascot::lines::{BubbleSide, MAX_WIDTH, MIN_WIDTH, MenuAlign, MenuSide};
     let s = v.session.settings();
 
     let swatches = |colours: [[u8; 4]; 4], current: [u8; 4], msg: fn([u8; 4]) -> UiMsg| {
@@ -523,6 +523,17 @@ pub(super) fn speech_options<'a>(
         row![
             h2("Speech lines"),
             space().width(Length::Fill),
+            button(text("Import…").size(12))
+                .padding([5, 10])
+                .style(theme::secondary)
+                .on_press(Message::Ui(UiMsg::TransferPick(
+                    false,
+                    super::TransferScope::Dialogue
+                ))),
+            button(text("Export…").size(12))
+                .padding([5, 10])
+                .style(theme::secondary)
+                .on_press(Message::Ui(UiMsg::TransferOpen(true))),
             button(text("Reset to pack").size(12))
                 .padding([5, 10])
                 .style(theme::secondary)
@@ -608,6 +619,79 @@ pub(super) fn speech_options<'a>(
         .spacing(8)
         .align_y(Alignment::Center)
         .into(),
+        h2("Placement"),
+        row![
+            text("Bubble opens").size(12).color(theme::MUTED).width(110),
+            pick_list(BubbleSide::ALL, Some(b.side), |s| Message::Ui(
+                UiMsg::BubbleSide(s)
+            ))
+            .text_size(13)
+            .padding([6, 10])
+            .style(theme::select),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .into(),
+        row![
+            text("Tail points at")
+                .size(12)
+                .color(theme::MUTED)
+                .width(110),
+            text(match b.anchor {
+                None => "Top of the art".to_owned(),
+                Some((x, y)) => format!("{:.0}% across, {:.0}% down", x * 100.0, y * 100.0),
+            })
+            .size(12)
+            .width(Length::Fill),
+            button(
+                text(if m.placing_bubble {
+                    "Click the preview…"
+                } else {
+                    "Pick on preview"
+                })
+                .size(12)
+            )
+            .padding([5, 10])
+            .style(if m.placing_bubble {
+                theme::primary
+            } else {
+                theme::secondary
+            })
+            .on_press(Message::Ui(UiMsg::BubblePlace)),
+            button(text("Top of the art").size(12))
+                .padding([5, 10])
+                .style(theme::secondary)
+                .on_press_maybe(
+                    b.anchor
+                        .is_some()
+                        .then_some(Message::Ui(UiMsg::BubbleAnchor(None)))
+                ),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .into(),
+        row![
+            text("Menu opens").size(12).color(theme::MUTED).width(110),
+            pick_list(MenuSide::ALL, Some(m.lines.menu.side), |s| Message::Ui(
+                UiMsg::MenuSide(s)
+            ))
+            .text_size(13)
+            .padding([6, 10])
+            .style(theme::select),
+            text("lined up with").size(12).color(theme::MUTED),
+            pick_list(MenuAlign::ALL, Some(m.lines.menu.align), |a| Message::Ui(
+                UiMsg::MenuAlign(a)
+            ))
+            .text_size(13)
+            .padding([6, 10])
+            .style(theme::select),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .into(),
+        hint(
+            "Where the bubble and the right-click menu sit on the desktop. The tail points at the top of the visible art unless you pick a spot, such as the mouth. A side bubble moves above while the menu is open on that side, or when there's no room. A chosen menu side flips only when it would leave the screen. Saved with the character's Save, and carried in exports.",
+        ),
     ])
 }
 
@@ -917,8 +1001,65 @@ pub(super) struct MotionStage<'a> {
     preview: &'a crate::mascot::preview::MotionPreview,
 }
 
+impl MotionStage<'_> {
+    /// The rig's scale and top-left on the stage, feet on the floor line.
+    fn fit(&self, size: iced::Size) -> (f32, iced::Vector) {
+        let rig = self.preview.rig();
+        let canvas_size = rig.size();
+        let pad = 18.0;
+        let k = ((size.width - pad * 2.0) / canvas_size.width)
+            .min((size.height - pad * 2.0) / canvas_size.height);
+        let feet = rig.anchor();
+        let origin = iced::Vector::new(
+            size.width / 2.0 - feet.x * k,
+            size.height - pad - feet.y * k,
+        );
+        (k, origin)
+    }
+}
+
 impl canvas::Program<Message> for MotionStage<'_> {
     type State = ();
+
+    /// While picking the bubble's anchor, a click on the stage sets it.
+    fn update(
+        &self,
+        _state: &mut (),
+        event: &canvas::Event,
+        bounds: iced::Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        use iced::mouse::{Button, Event};
+        if !self.preview.placing_bubble {
+            return None;
+        }
+        let canvas::Event::Mouse(Event::ButtonPressed(Button::Left)) = event else {
+            return None;
+        };
+        let at = cursor.position_in(bounds)?;
+        let (k, origin) = self.fit(bounds.size());
+        let size = self.preview.rig().size();
+        let (x, y) = (
+            (at.x - origin.x) / k / size.width,
+            (at.y - origin.y) / k / size.height,
+        );
+        ((0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y)).then(|| {
+            canvas::Action::publish(Message::Ui(UiMsg::BubbleAnchor(Some((x, y))))).and_capture()
+        })
+    }
+
+    fn mouse_interaction(
+        &self,
+        _state: &(),
+        bounds: iced::Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> iced::mouse::Interaction {
+        if self.preview.placing_bubble && cursor.is_over(bounds) {
+            iced::mouse::Interaction::Crosshair
+        } else {
+            iced::mouse::Interaction::default()
+        }
+    }
 
     fn draw(
         &self,
@@ -938,15 +1079,20 @@ impl canvas::Program<Message> for MotionStage<'_> {
         let rig = self.preview.rig();
         let mut pose = self.preview.pose().clone();
         let canvas_size = rig.size();
-        let pad = 18.0;
-        let k = ((size.width - pad * 2.0) / canvas_size.width)
-            .min((size.height - pad * 2.0) / canvas_size.height);
         let feet = rig.anchor();
         // Stand the feet on a floor line near the bottom, centred.
-        let origin = iced::Vector::new(
-            size.width / 2.0 - feet.x * k,
-            size.height - pad - feet.y * k,
-        );
+        let (k, origin) = self.fit(size);
+        // Where the bubble's tail aims, while it's being picked.
+        let marker = self.preview.placing_bubble.then(|| {
+            let (x, y) = self.preview.lines.bubble.anchor.unwrap_or((
+                feet.x / canvas_size.width,
+                rig.visible_rows().0 / canvas_size.height,
+            ));
+            iced::Point::new(
+                origin.x + x * canvas_size.width * k,
+                origin.y + y * canvas_size.height * k,
+            )
+        });
         // A live cursor test: tracking eyes follow the pointer over the
         // preview, counter-rotated into the head like on the desktop.
         if let (Some(eye), Some(at)) = (rig.eye_point(), cursor.position_in(bounds)) {
@@ -966,6 +1112,19 @@ impl canvas::Program<Message> for MotionStage<'_> {
             Some(picture) => rig.draw_picture(&mut frame, &picture),
             None => rig.draw_pose(&mut frame, &pose),
         }
-        vec![frame.into_geometry()]
+        let mut out = vec![frame.into_geometry()];
+        if let Some(at) = marker {
+            let mut ui = Frame::new(renderer, size);
+            let ring = Path::circle(at, 7.0);
+            ui.fill(&ring, iced::Color::from_rgba(0.13, 0.83, 0.93, 0.35));
+            ui.stroke(
+                &ring,
+                canvas::Stroke::default()
+                    .with_color(theme::CYAN_TEXT)
+                    .with_width(2.0),
+            );
+            out.push(ui.into_geometry());
+        }
+        out
     }
 }
