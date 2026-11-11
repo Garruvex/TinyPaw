@@ -48,9 +48,12 @@ impl Pipeline {
                 (bounds.height * transform.sy) as u32,
             ),
         ) {
+            // TinyPaw patch: include the translation. Damaged regions are
+            // drawn into their own pixmap with an offset; without it, icons
+            // landed shifted by the region's origin.
             pixels.draw_pixmap(
-                (bounds.x * transform.sx) as i32,
-                (bounds.y * transform.sy) as i32,
+                (bounds.x * transform.sx + transform.tx) as i32,
+                (bounds.y * transform.sy + transform.ty) as i32,
                 image,
                 &tiny_skia::PixmapPaint {
                     opacity,

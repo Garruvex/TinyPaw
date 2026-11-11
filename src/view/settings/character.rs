@@ -385,7 +385,7 @@ fn character_body<'a>(
         };
         card(
             art,
-            c.name.clone(),
+            card_label(&c.name),
             c.id == v.character && v.character_draft.is_none(),
             Message::Ui(UiMsg::PickCharacter(c.id)),
         )
@@ -1467,7 +1467,7 @@ fn motion_preview<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'
         ]
         .spacing(6),
         hint(
-            "Idle motion follows Settings → Character. Reduced motion stops it, as on the desktop."
+            "Idle motion follows Character → On desktop. Reduced motion stops it, as on the desktop."
         ),
     ]
     .spacing(10)

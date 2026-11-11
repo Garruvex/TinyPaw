@@ -194,6 +194,17 @@ fn section<'a>(children: Vec<Element<'a, Message>>) -> Element<'a, Message> {
     Column::with_children(children).spacing(10).into()
 }
 
+/// A library card's name, shortened to fit the 92 px card.
+fn card_label(name: &str) -> String {
+    const MAX: usize = 12;
+    if name.chars().count() <= MAX {
+        return name.to_owned();
+    }
+    let mut short: String = name.chars().take(MAX - 1).collect();
+    short.push('…');
+    short
+}
+
 /// An inline jump to the place a related setting lives.
 fn link<'a>(label: &'a str, msg: Message) -> Element<'a, Message> {
     button(text(label).size(12).color(theme::CYAN_TEXT))
@@ -483,7 +494,7 @@ fn pointer_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Eleme
     let mut pointers = row(v.packs.iter().map(|p| {
         card(
             iced::widget::image(p.image.clone()).height(48).into(),
-            p.name.clone(),
+            card_label(&p.name),
             !laser && current == Some(p.id),
             Message::Ui(UiMsg::PickPack(p.id)),
         )
@@ -988,9 +999,8 @@ fn tools_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
                 "zoom"
             )),
             shortcuts(),
-            h2("Lens source"),
-            source_picker,
         ]),
+        section(vec![h2("Lens source"), source_picker]),
     ]
     .spacing(22)
     .max_width(640)

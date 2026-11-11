@@ -31,6 +31,9 @@ Performance patches (November 2026), measured with
 - `src/geometry.rs` (`Frame::stroke`): strokes wider than a hairline are
   outlined once when the geometry is built and stored as fills, instead of
   re-running the stroker over the whole path on every repaint.
+- `src/vector.rs` (`Pipeline::draw`): SVGs are placed with the transform's
+  translation. Upstream ignored it because it never translated; with
+  per-region pixmaps, icons were drawn shifted by the region's origin.
 - `src/window/compositor.rs` (`present`): only damaged rectangles are copied
   to the window (`present_with_damage`), and an unchanged frame copies
   nothing. Upstream copied the full window every frame.

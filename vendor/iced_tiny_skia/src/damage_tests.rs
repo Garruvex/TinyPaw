@@ -35,6 +35,39 @@ fn partial_redraw_matches_a_fresh_transparent_frame() {
     }
 }
 
+#[cfg(feature = "svg")]
+#[test]
+fn partial_redraw_keeps_svgs_in_place() {
+    use crate::core::svg;
+    let size = Size::new(180, 135);
+    let viewport = Viewport::with_physical_size(size, 1.25);
+    let screen = Rectangle::with_size(viewport.logical_size());
+    let mut renderer = Renderer::new(Font::DEFAULT, Pixels(16.0));
+    renderer.reset(screen);
+    let handle = svg::Handle::from_memory(
+        br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" fill="#000"/></svg>"##
+            .to_vec(),
+    );
+    svg::Renderer::draw_svg(
+        &mut renderer,
+        svg::Svg::new(handle).color(Color::WHITE),
+        Rectangle::new(Point::new(60.0, 50.0), Size::new(18.0, 18.0)),
+        screen,
+    );
+
+    let mut pixels = tiny_skia::Pixmap::new(size.width, size.height).unwrap();
+    let mut mask = tiny_skia::Mask::new(size.width, size.height).unwrap();
+    let mut draw = |pixels: &mut tiny_skia::Pixmap, damage: &[Rectangle]| {
+        renderer.draw(&mut pixels.as_mut(), &mut mask, &viewport, damage, Color::TRANSPARENT);
+    };
+    draw(&mut pixels, &[screen]);
+    let expected = pixels.clone();
+    assert!(expected.data().iter().any(|&v| v != 0));
+    // A damaged region that holds the icon but starts away from the origin.
+    draw(&mut pixels, &[Rectangle::new(Point::new(40.0, 30.0), Size::new(60.0, 60.0))]);
+    assert!(pixels.data() == expected.data(), "icon moved on partial redraw");
+}
+
 #[test]
 fn clearing_a_stroke_erases_every_painted_pixel() {
     let size = Size::new(180, 135);
