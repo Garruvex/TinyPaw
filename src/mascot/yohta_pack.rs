@@ -222,6 +222,21 @@ mod generate {
                 ],
                 "eyes": eyes,
             }},
+            "lines": {
+                "click": [
+                    { "text": "Hey!" },
+                    { "text": "That tickles!" },
+                    { "text": "Mrrp?" },
+                ],
+                "drag": [{ "text": "Whoa, where are we going?" }, { "text": "Wheee!" }],
+                "drop": [{ "text": "Nice spot." }, { "text": "Here? Okay." }],
+                "idle": [
+                    { "text": "*yawns*" },
+                    { "text": "Need a paw pointing at something?" },
+                    { "text": "Still here! // Just resting my eyes." },
+                ],
+                "annotation_end": [{ "text": "Nice drawing!" }, { "text": "All done?" }],
+            },
         });
         std::fs::write(
             out.join("character.json"),

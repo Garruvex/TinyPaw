@@ -38,6 +38,11 @@ impl Clip {
         }
     }
 
+    /// Length in seconds.
+    pub fn seconds(&self) -> f32 {
+        self.samples.len() as f32 / f32::from(self.channels.max(1)) / self.rate.max(1) as f32
+    }
+
     fn source(&self, volume: f32) -> impl Source + Send + 'static {
         SamplesBuffer::new(
             NonZero::new(self.channels).unwrap_or(NonZero::<u16>::MIN),
@@ -235,6 +240,14 @@ impl Audio {
                 .find(|(key, _)| *key == id)
                 .map(|(_, clip)| clip)
                 .unwrap_or(&self.knock),
+        }
+    }
+
+    /// Plays a clip that isn't one of the tap sounds, such as a line sound.
+    pub fn play_clip(&mut self, clip: &Clip, volume: f32) {
+        self.open();
+        if let Some(sink) = &self.sink {
+            sink.mixer().add(clip.source(volume.clamp(0.0, 1.0)));
         }
     }
 

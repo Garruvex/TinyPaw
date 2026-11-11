@@ -7,6 +7,35 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SetForegroundWindow,
 };
 
+/// Whether another app's window fills its whole monitor in front, such as
+/// a full-screen game or video, so unprompted lines wait.
+pub fn foreground_fullscreen() -> bool {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetShellWindow, GetWindowRect};
+    let Some(hwnd) = foreground_window() else {
+        return false;
+    };
+    unsafe {
+        let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
+        if hwnd == GetShellWindow() {
+            return false;
+        }
+        let mut rect: RECT = std::mem::zeroed();
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = size_of::<MONITORINFO>() as u32;
+        if GetWindowRect(hwnd, &mut rect) == 0
+            || GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut info) == 0
+        {
+            return false;
+        }
+        let m = info.rcMonitor;
+        rect.left <= m.left && rect.top <= m.top && rect.right >= m.right && rect.bottom >= m.bottom
+    }
+}
+
 /// The current foreground window, unless it belongs to TinyPaw itself.
 pub fn foreground_window() -> Option<isize> {
     unsafe {

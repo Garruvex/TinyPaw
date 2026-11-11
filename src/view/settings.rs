@@ -1642,7 +1642,7 @@ fn character_page<'a>(
                 ),
         );
     if let Some(m) = v.motion {
-        page = page.push(motion_section(m));
+        page = page.push(motion_section(m)).push(lines_section(v, m));
     }
 
     let side = match (v.character_draft, v.motion) {
@@ -1717,6 +1717,194 @@ fn motion_section<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'
     ])
 }
 
+/// The Lines tab: what the character says, when, and how it sounds.
+fn lines_section<'a>(
+    v: &SettingsView<'a>,
+    m: &'a crate::mascot::preview::MotionPreview,
+) -> Element<'a, Message> {
+    use crate::mascot::lines::{MAX_WIDTH, MIN_WIDTH, Trigger};
+    let s = v.session.settings();
+    let small = |label: &'static str, msg: Message| {
+        button(text(label).size(12))
+            .padding([5, 10])
+            .style(theme::secondary)
+            .on_press(msg)
+    };
+    let mut groups = column![].spacing(16);
+    for t in Trigger::ALL {
+        let mut group = column![
+            row![
+                text(t.label()).font(theme::MEDIUM).size(13).width(Length::Fill),
+                small("Add line", Message::Ui(UiMsg::LineAdd(t))),
+            ]
+            .align_y(Alignment::Center)
+        ]
+        .spacing(6);
+        for (i, line) in m.lines.get(t).iter().enumerate() {
+            let mut row_ = row![
+                iced::widget::text_input("What it says; // splits it into parts", &line.text)
+                    .on_input(move |text| Message::Ui(UiMsg::LineText(t, i, text)))
+                    .size(13)
+                    .padding([7, 9])
+                    .width(Length::Fill)
+                    .style(|_, status| iced::widget::text_input::Style {
+                        background: theme::CONTROL.into(),
+                        border: iced::Border {
+                            radius: 8.0.into(),
+                            width: 1.0,
+                            color: if matches!(
+                                status,
+                                iced::widget::text_input::Status::Focused { .. }
+                            ) {
+                                theme::CYAN_RING
+                            } else {
+                                theme::LINE_STRONG
+                            },
+                        },
+                        icon: theme::MUTED,
+                        placeholder: theme::FAINT,
+                        value: theme::TEXT,
+                        selection: theme::CYAN_BG,
+                    }),
+                small(
+                    if line.sound.is_some() { "Sound ✓" } else { "Sound…" },
+                    Message::Ui(UiMsg::LineSound(t, i)),
+                ),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center);
+            if line.sound.is_some() {
+                row_ = row_.push(
+                    button(text("No sound").size(12))
+                        .padding([5, 8])
+                        .style(theme::tool_button(theme::Tone::Plain))
+                        .on_press(Message::Ui(UiMsg::LineClearSound(t, i))),
+                );
+            }
+            row_ = row_.push(
+                button(text("×").size(13))
+                    .padding([5, 9])
+                    .style(theme::tool_button(theme::Tone::Plain))
+                    .on_press(Message::Ui(UiMsg::LineRemove(t, i))),
+            );
+            group = group.push(row_);
+        }
+        groups = groups.push(group);
+    }
+
+    let swatches = |colours: [[u8; 4]; 4], current: [u8; 4], msg: fn([u8; 4]) -> UiMsg| {
+        row(colours.into_iter().map(move |c| {
+            button(space().width(24).height(24))
+                .padding(0)
+                .style(theme::swatch(theme::rgba(c), c == current))
+                .on_press(Message::Ui(msg(c)))
+                .into()
+        }))
+        .spacing(6)
+    };
+    let b = m.lines.bubble;
+    let minutes = |x: f64| format!("{x:.0} min");
+    section(vec![
+        row![
+            h2("Lines"),
+            space().width(Length::Fill),
+            button(text("Reset to pack").size(12))
+                .padding([5, 10])
+                .style(theme::secondary)
+                .on_press_maybe(m.lines_customised().then_some(Message::Ui(UiMsg::LinesReset))),
+            button(text("Save lines").font(theme::MEDIUM).size(12))
+                .padding([5, 12])
+                .style(theme::primary)
+                .on_press_maybe(m.lines_dirty().then_some(Message::Ui(UiMsg::LinesSave))),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .into(),
+        hint("A line is picked at random, never the same twice in a row, and shows in a bubble above the character. Try them with Speak in the preview."),
+        check("Show speech lines", s.bool(mascot::LINES), mascot::LINES),
+        check(
+            "Quiet: no idle or music lines",
+            s.bool(mascot::QUIET_LINES),
+            mascot::QUIET_LINES,
+        ),
+        row![
+            text("Idle lines every").size(12).color(theme::MUTED).width(110),
+            slider(1.0..=30.0, s.float(mascot::IDLE_MIN), |x| Message::Set(
+                mascot::IDLE_MIN,
+                Value::Float(x)
+            ))
+            .step(1.0)
+            .style(theme::range),
+            text(minutes(s.float(mascot::IDLE_MIN))).size(12).width(48),
+            text("to").size(12).color(theme::MUTED),
+            slider(1.0..=30.0, s.float(mascot::IDLE_MAX), |x| Message::Set(
+                mascot::IDLE_MAX,
+                Value::Float(x)
+            ))
+            .step(1.0)
+            .style(theme::range),
+            text(minutes(s.float(mascot::IDLE_MAX))).size(12).width(48),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .into(),
+        row![
+            text("Character volume").size(12).color(theme::MUTED).width(110),
+            slider(0.0..=1.0, s.float(mascot::VOICE_VOLUME), |x| Message::Set(
+                mascot::VOICE_VOLUME,
+                Value::Float(x)
+            ))
+            .step(0.05)
+            .style(theme::range),
+            text(format!("{:.0}%", s.float(mascot::VOICE_VOLUME) * 100.0))
+                .size(12)
+                .width(48),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .into(),
+        hint("Line sounds play at Character volume, separate from the pointer's tap sound."),
+        groups.into(),
+        row![
+            text("Bubble").size(12).color(theme::MUTED).width(110),
+            swatches(
+                [
+                    [255, 255, 255, 255],
+                    [255, 247, 224, 255],
+                    [27, 27, 31, 255],
+                    [34, 211, 238, 255],
+                ],
+                b.background,
+                UiMsg::BubbleBackground,
+            ),
+            text("Text").size(12).color(theme::MUTED),
+            swatches(
+                [
+                    [27, 27, 31, 255],
+                    [255, 255, 255, 255],
+                    [14, 116, 144, 255],
+                    [180, 83, 9, 255],
+                ],
+                b.text,
+                UiMsg::BubbleText,
+            ),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center)
+        .into(),
+        row![
+            text("Bubble width").size(12).color(theme::MUTED).width(110),
+            slider(MIN_WIDTH..=MAX_WIDTH, b.max_width, |x| Message::Ui(UiMsg::BubbleWidth(x)))
+                .step(10.0_f32)
+                .style(theme::range),
+            text(format!("{:.0} px", b.max_width)).size(12).width(48),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .into(),
+    ])
+}
+
 /// The selected character, animated, with buttons to try its reactions.
 fn motion_preview<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'a, Message> {
     use crate::mascot::preview::Test;
@@ -1727,8 +1915,30 @@ fn motion_preview<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'
             .style(theme::secondary)
             .on_press(Message::Ui(UiMsg::MotionTest(t)))
     };
+    let b = m.lines.bubble;
+    let bubble: Element<'a, Message> = match m.speech() {
+        Some(said) => container(
+            text(said.to_owned())
+                .size(13)
+                .color(Color::from_rgba8(b.text[0], b.text[1], b.text[2], 1.0)),
+        )
+        .padding([8, 12])
+        .max_width(b.max_width.min(260.0))
+        .style(move |_: &Theme| container::Style {
+            background: Some(Color::from_rgba8(b.background[0], b.background[1], b.background[2], 1.0).into()),
+            border: iced::Border {
+                radius: 14.0.into(),
+                width: 1.0,
+                color: Color::from_rgba8(0, 0, 0, 0.18),
+            },
+            ..container::Style::default()
+        })
+        .into(),
+        None => space().height(34).into(),
+    };
     column![
         h2("Preview"),
+        container(bubble).width(Length::Fill).center_x(Length::Fill),
         canvas(MotionStage { preview: m })
             .width(Length::Fill)
             .height(300),
@@ -1736,6 +1946,7 @@ fn motion_preview<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'
             test("Click", Test::Click),
             test("Drag ←", Test::DragLeft),
             test("Drag →", Test::DragRight),
+            test("Speak", Test::Speak),
         ]
         .spacing(6),
         hint("Idle motion follows Settings → Character. Reduced motion stops it, as on the desktop."),

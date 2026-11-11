@@ -426,6 +426,37 @@ as shorthand for parts. Limits: 16 parts, 4 eyes, 32 images per pack.
   is no longer embedded. **Export…** works for him, and **Edit a copy**
   installs "Yohta (copy)" for editing, since the built-in Yohta never changes.
 
+### Speech lines (character creation step 3)
+
+Implemented 11 November 2026.
+
+- **Format.** A pack may carry `"lines"`, mapping triggers (`click`, `drag`
+  for pick-up, `drop`, `idle`, `music`, `annotation_end`) to lists of
+  `{"text": …, "sound": "lines/x.wav"}`, and a `"bubble"` with `background`
+  and `text` colours (`#RRGGBB`) and `max_width` (120–400). Limits: 200
+  lines, 280 characters each, WAV sounds of at most 2 MiB inside the pack.
+  Sounds are validated, copied on import, written on export and kept by Art
+  tab saves. Bundled Yohta ships a dozen lines.
+- **Saying them.** `src/mascot/lines.rs` picks a line at random, never the
+  same one twice in a row, and shows `//`-separated parts in turn for their
+  reading time (1.5–8 s), or longer while the line's sound plays. Click,
+  pick-up and drop fire from the character's own gestures; idle lines come at
+  a random time in the chosen range and wait while another app is full
+  screen, the character is busy or a line is showing; annotation ending
+  fires when the character comes back.
+- **Bubble.** Drawn in a band above the character inside its own window,
+  centred over it and kept inside the window. It never takes clicks. The
+  band exists only when the character has lines.
+- **Settings.** The Character page's Lines section edits lines per trigger,
+  each with an optional WAV (copied into managed storage), plus bubble
+  colours and width, **Show speech lines**, **Quiet** (no idle or music
+  lines; click, drag and drop lines stay), the idle interval and **Character
+  volume**, which is separate from the pointer's tap sound. The preview's
+  **Speak** shows the bubble. **Save lines** stores them as overrides beside
+  the pack; **Reset to pack** returns to the pack's own.
+- **Not yet.** Music-start lines need music response (step 4). Arbitration
+  with the planned reaction sounds is left to that feature.
+
 Completion checks:
 
 - Yohta and an imported original character both work without code changes.

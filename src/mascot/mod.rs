@@ -4,6 +4,7 @@
 #[cfg(windows)]
 pub mod desktop;
 pub mod editor;
+pub mod lines;
 pub mod motion;
 pub mod pack;
 pub mod placement;

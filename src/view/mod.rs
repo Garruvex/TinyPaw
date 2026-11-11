@@ -143,6 +143,17 @@ pub enum UiMsg {
     MotionTest(crate::mascot::preview::Test),
     MotionSave,
     MotionReset,
+    /// Lines: edit, add or remove a line, and its sound.
+    LineText(crate::mascot::lines::Trigger, usize, String),
+    LineAdd(crate::mascot::lines::Trigger),
+    LineRemove(crate::mascot::lines::Trigger, usize),
+    LineSound(crate::mascot::lines::Trigger, usize),
+    LineClearSound(crate::mascot::lines::Trigger, usize),
+    BubbleBackground([u8; 4]),
+    BubbleText([u8; 4]),
+    BubbleWidth(f32),
+    LinesSave,
+    LinesReset,
 }
 
 /// Each live or frozen scene has its own revision counter.

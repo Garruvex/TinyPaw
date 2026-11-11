@@ -160,6 +160,8 @@ pub struct Editor {
     other_sources: Vec<SourceRecord>,
     source: Option<Source>,
     author: Option<String>,
+    /// The pack's lines, kept as they are by an art save.
+    lines: super::lines::Lines,
     /// Poses this editor doesn't show, kept as they are.
     others: Vec<Pose>,
     pose: String,
@@ -237,6 +239,7 @@ impl Editor {
                 .collect(),
             source: m.source,
             author: m.author.clone(),
+            lines: m.lines.clone(),
             others: m
                 .poses
                 .iter()
@@ -570,6 +573,7 @@ impl Editor {
             id: self.id.to_owned(),
             name: name.chars().take(60).collect(),
             author: self.author.clone(),
+            lines: self.lines.clone(),
             canvas: self.canvas,
             default_pose: self.pose.clone(),
             poses,
@@ -634,6 +638,14 @@ impl Editor {
                 }
                 std::fs::copy(installed.join(asset), to).map_err(|e| e.to_string())?;
             }
+            // Line sounds come along unchanged.
+            for sound in manifest.sounds() {
+                let to = stage.join(sound);
+                if let Some(parent) = to.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                }
+                std::fs::copy(installed.join(sound), to).map_err(|e| e.to_string())?;
+            }
             Ok(())
         };
         let replace = (!self.new_install).then_some(self.id);
@@ -693,6 +705,7 @@ impl Editor {
             selected: Selected::Body,
             source: None,
             author: None,
+            lines: super::lines::Lines::default(),
             others: Vec::new(),
             pose: "sit".into(),
             mode: Mode::Arrange,

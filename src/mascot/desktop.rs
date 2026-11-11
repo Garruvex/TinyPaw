@@ -18,6 +18,7 @@ use iced::{
 };
 
 use super::Msg;
+use super::lines::{Lines, Picker, SoundRef, Speech, Trigger};
 use super::motion::{Animator, Inputs, PartMotion, Pose};
 use super::rig::Rig;
 use crate::app::Message;
@@ -61,16 +62,19 @@ pub struct Layout {
     menu: Size,
 }
 
+/// Room above the character for its speech bubble, in logical pixels.
+const BUBBLE_BAND: f32 = 104.0;
+
 /// `height` is the character's logical height; `canvas` the rig's size and
 /// `feet` where it meets the ground, both in rig pixels; `rows` the number of
-/// menu entries.
-pub fn layout(height: f32, canvas: Size, feet: Point, rows: usize) -> Layout {
+/// menu entries; `top` room kept above the character for its bubble.
+pub fn layout(height: f32, canvas: Size, feet: Point, rows: usize, top: f32) -> Layout {
     let scale = height / canvas.height;
     let size = Size::new(canvas.width * scale, canvas.height * scale);
     let below = (canvas.height - feet.y).max(0.0) * scale;
     let menu = Size::new(MENU_W, menu_height(rows));
     let side = MENU_W + GAP;
-    let h = size.height.max(menu.height + below).ceil();
+    let h = (size.height + top).max(menu.height + below).ceil();
     let character = Rectangle::new(Point::new(side, h - size.height), size);
     Layout {
         scale,
@@ -164,6 +168,12 @@ pub struct Options {
     pub eyes: bool,
     pub idle: bool,
     pub reduced: bool,
+    /// Speech lines are shown.
+    pub lines: bool,
+    /// Quiet: no idle or music lines.
+    pub quiet: bool,
+    /// Idle lines come at a random time in this range, in seconds.
+    pub idle_every: (f32, f32),
 }
 
 /// One menu row. `checked` draws a tick column; `on_press: None` disables it.
@@ -190,6 +200,14 @@ pub struct Desktop {
     animator: Animator,
     /// The latest frame of motion.
     pose: Pose,
+    lines: Lines,
+    picker: Picker,
+    /// The line being said, if any.
+    speech: Option<Speech>,
+    /// When the next idle line is due, in `now` seconds.
+    next_idle: f32,
+    /// A line sound for the app to play.
+    sound: Option<SoundRef>,
     /// When motion last stepped, and where the feet were then.
     stepped: f32,
     last_anchor: (f32, f32),
@@ -227,7 +245,7 @@ impl Desktop {
         rows: usize,
         hidden: bool,
     ) -> (Self, Task<window::Id>) {
-        let layout = layout(size, rig.size(), rig.anchor(), rows);
+        let layout = layout(size, rig.size(), rig.anchor(), rows, 0.0);
         let parts = rig.motion_parts();
         let (id, task) = window::open(window::Settings {
             size: layout.window,
@@ -255,6 +273,11 @@ impl Desktop {
             parts,
             animator: Animator::default(),
             pose: Pose::default(),
+            lines: Lines::default(),
+            picker: Picker::default(),
+            speech: None,
+            next_idle: f32::INFINITY,
+            sound: None,
             stepped: 0.0,
             last_anchor: (anchor.0 as f32, anchor.1 as f32),
             size,
@@ -276,6 +299,56 @@ impl Desktop {
         (desktop, task)
     }
 
+    /// Room above the character for a bubble, when it has lines.
+    fn band(&self) -> f32 {
+        if self.lines.is_empty() { 0.0 } else { BUBBLE_BAND }
+    }
+
+    /// The character's lines; re-lays out for the bubble band.
+    pub fn set_lines(&mut self, lines: Lines, o: &Options) {
+        self.lines = lines;
+        self.speech = None;
+        self.layout = layout(self.size, self.rig.size(), self.rig.anchor(), self.rows, self.band());
+        self.schedule_idle(o);
+        self.place();
+    }
+
+    fn schedule_idle(&mut self, o: &Options) {
+        let (min, max) = (o.idle_every.0.min(o.idle_every.1), o.idle_every.0.max(o.idle_every.1));
+        let span = ((max - min) * 1000.0) as usize + 1;
+        self.next_idle = self.now + min + self.picker.below(span) as f32 / 1000.0;
+    }
+
+    /// Says a line for `t`, unless lines are off, Quiet holds back an
+    /// unprompted one, or the character is hidden.
+    pub fn say(&mut self, t: Trigger, o: &Options) {
+        if !o.lines || self.hidden || (t.unprompted() && o.quiet) {
+            return;
+        }
+        if let Some(line) = self.picker.pick(&self.lines, t)
+            && let Some(speech) = Speech::new(&line.text, self.now)
+        {
+            self.speech = Some(speech);
+            self.sound = line.sound.clone();
+        }
+    }
+
+    /// Keeps the bubble up while its sound plays.
+    pub fn hold_speech(&mut self, seconds: f32) {
+        if let Some(s) = &mut self.speech {
+            s.hold(self.now, seconds);
+        }
+    }
+
+    /// The line sound to play now, once.
+    pub fn take_sound(&mut self) -> Option<SoundRef> {
+        self.sound.take()
+    }
+
+    pub fn is_hidden(&self) -> bool {
+        self.hidden
+    }
+
     /// The selected character this window shows.
     pub fn character(&self) -> &'static str {
         self.character
@@ -289,7 +362,7 @@ impl Desktop {
         self.rig = rig;
         self.menu = None;
         self.press = None;
-        self.layout = layout(self.size, self.rig.size(), self.rig.anchor(), self.rows);
+        self.layout = layout(self.size, self.rig.size(), self.rig.anchor(), self.rows, self.band());
         self.place();
     }
 
@@ -332,7 +405,7 @@ impl Desktop {
                 }
                 (Task::none(), None)
             }
-            Msg::Released => (Task::none(), self.release()),
+            Msg::Released => (Task::none(), self.release(o)),
             Msg::Menu => {
                 self.menu = match self.menu {
                     Some(_) => None,
@@ -350,6 +423,7 @@ impl Desktop {
         if !self.shown {
             return (Task::none(), None);
         }
+        let mut picked_up = false;
         let (Some(cursor), Some(rect)) = (native::cursor_pos(), native::window_rect(self.hwnd))
         else {
             return (Task::none(), None);
@@ -370,11 +444,12 @@ impl Desktop {
             let delta = (cursor.0 - press.cursor.0, cursor.1 - press.cursor.1);
             if !left {
                 // The release happened where the canvas could not see it.
-                save = self.release();
+                save = self.release(o);
             } else {
                 if !press.dragging && is_drag(delta, k) {
                     press.dragging = true;
                     self.menu = None;
+                    picked_up = true;
                 }
                 if press.dragging {
                     let origin = (press.origin.0 + delta.0, press.origin.1 + delta.1);
@@ -421,7 +496,29 @@ impl Desktop {
             self.gaze + (self.target - self.gaze) * 0.3
         };
         self.step_motion(o, k);
+        if picked_up {
+            self.say(Trigger::Pickup, o);
+        }
+        self.step_speech(o);
         (task, save)
+    }
+
+    /// Moves a line along, and says an idle line when one is due and the
+    /// character isn't busy or behind a full-screen app.
+    fn step_speech(&mut self, o: &Options) {
+        if let Some(s) = &mut self.speech
+            && !s.advance(self.now)
+        {
+            self.speech = None;
+        }
+        if self.now < self.next_idle {
+            return;
+        }
+        let free = self.press.is_none() && self.menu.is_none() && self.speech.is_none();
+        if free && !native::foreground_fullscreen() {
+            self.say(Trigger::Idle, o);
+        }
+        self.schedule_idle(o);
     }
 
     /// Advances idle motion and reactions to now.
@@ -458,13 +555,15 @@ impl Desktop {
 
     /// Ends a press: a short one is a click the character reacts to, a drag
     /// saves the spot. The menu is on the right button.
-    fn release(&mut self) -> Option<(f64, f64)> {
+    fn release(&mut self, o: &Options) -> Option<(f64, f64)> {
         let press = self.press.take()?;
         if press.dragging {
+            self.say(Trigger::Drop, o);
             return Some((self.anchor.0 as f64, self.anchor.1 as f64));
         }
         self.menu = None;
         self.animator.clicked(self.now);
+        self.say(Trigger::Click, o);
         None
     }
 
@@ -523,7 +622,7 @@ impl Desktop {
         }
         self.size = size;
         self.rows = rows;
-        self.layout = layout(size, self.rig.size(), self.rig.anchor(), rows);
+        self.layout = layout(size, self.rig.size(), self.rig.anchor(), rows, self.band());
         self.place();
     }
 
@@ -545,6 +644,7 @@ impl Desktop {
         }
         self.hidden = hidden;
         if hidden {
+            self.speech = None;
             self.menu = None;
             self.press = None;
         }
@@ -625,14 +725,45 @@ impl Desktop {
         let stage = canvas_widget(Stage { desktop: self })
         .width(l.character.width)
         .height(Length::Fill);
-        row![
+        let body = row![
             slot(Side::Left, &mut items),
             stage,
             slot(Side::Right, &mut items)
         ]
         .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+        .height(Length::Fill);
+        let Some(speech) = self.speech.as_ref().filter(|_| o.lines) else {
+            return body.into();
+        };
+        // The bubble sits in the band above the character, centred on it
+        // and kept inside the window. It never takes clicks.
+        let b = self.lines.bubble;
+        let width = b.max_width.min(l.window.width);
+        let left = (l.anchor.x - width / 2.0).clamp(0.0, (l.window.width - width).max(0.0));
+        let bubble = container(
+            text(speech.text().to_owned())
+                .size(14)
+                .color(iced::Color::from_rgba8(b.text[0], b.text[1], b.text[2], 1.0)),
+        )
+        .padding([8, 12])
+        .max_width(width)
+        .style(move |_: &Theme| container::Style {
+            background: Some(
+                iced::Color::from_rgba8(b.background[0], b.background[1], b.background[2], 1.0)
+                    .into(),
+            ),
+            border: iced::Border {
+                radius: 14.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgba8(0, 0, 0, 0.18),
+            },
+            ..container::Style::default()
+        });
+        let band = container(row![space().width(left), container(bubble).width(width).center_x(width)])
+            .width(Length::Fill)
+            .height(l.character.y.max(1.0))
+            .align_y(Alignment::End);
+        iced::widget::stack![body, band].into()
     }
 }
 
@@ -760,6 +891,7 @@ mod tests {
             Size::new(rig::WIDTH, rig::HEIGHT),
             Point::new(rig::WIDTH * 0.5, GROUND),
             5,
+            0.0,
         )
     }
     const WORK: (i32, i32, i32, i32) = (0, 0, 1920, 1040);
@@ -837,10 +969,17 @@ mod tests {
     #[test]
     fn layout_follows_a_custom_canvas_and_off_centre_feet() {
         // A wide image whose feet sit left of centre.
-        let l = layout(100.0, Size::new(400.0, 200.0), Point::new(100.0, 190.0), 3);
+        let l = layout(100.0, Size::new(400.0, 200.0), Point::new(100.0, 190.0), 3, 0.0);
         assert!((l.character.width - 200.0).abs() < 0.01);
         assert!((l.anchor.x - (l.character.x + 50.0)).abs() < 0.01);
         assert!((l.anchor.y - (l.character.y + 95.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn the_bubble_band_sits_above_the_character() {
+        let l = layout(100.0, Size::new(100.0, 100.0), Point::new(50.0, 95.0), 3, BUBBLE_BAND);
+        assert!(l.character.y >= BUBBLE_BAND - 0.01);
+        assert!((l.window.height - (l.character.y + 100.0)).abs() < 1.0);
     }
 
     #[test]

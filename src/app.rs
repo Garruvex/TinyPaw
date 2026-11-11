@@ -56,6 +56,8 @@ pub enum Message {
     ArtFilesPicked(u64, crate::mascot::editor::Target, Vec<PathBuf>),
     /// Frames for the Motion tab's preview.
     MotionTick,
+    /// A WAV picked for a line: its trigger and index.
+    LineSoundPicked(crate::mascot::lines::Trigger, usize, Option<PathBuf>),
     ArtBodyPicked(u64, Option<PathBuf>),
     Acquired(Ticket),
     TextChanged(String),
@@ -615,6 +617,20 @@ impl App {
                 }
             }
             Message::ArtBodyPicked(_, _) | Message::ArtFilesPicked(_, _, _) => {}
+            Message::LineSoundPicked(t, i, Some(path)) => {
+                if let Some(p) = &mut self.motion_preview {
+                    match characters::import_line_sound(p.id, &path) {
+                        Ok(sound) => {
+                            if let Some(line) = p.lines.get_mut(t).get_mut(i) {
+                                line.sound = Some(sound);
+                            }
+                            self.notice = None;
+                        }
+                        Err(e) => self.notice = Some(format!("Could not use that sound: {e}")),
+                    }
+                }
+            }
+            Message::LineSoundPicked(_, _, None) => {}
             Message::MotionTick => {
                 let now_i = Instant::now();
                 let dt = self
@@ -994,8 +1010,13 @@ impl App {
                 if let Some(specs) = characters::load_motion(c.id) {
                     rig.set_motion(&specs);
                 }
-                self.motion_preview =
-                    Some(crate::mascot::preview::MotionPreview::new(c.id, rig, defaults));
+                self.motion_preview = Some(crate::mascot::preview::MotionPreview::new(
+                    c.id,
+                    rig,
+                    defaults,
+                    c.lines(),
+                    c.pack_lines(),
+                ));
                 self.motion_failed = None;
                 self.motion_ticked = None;
             }
@@ -1013,6 +1034,12 @@ impl App {
             eyes: s.bool(character::EYES),
             idle: s.bool(character::IDLE),
             reduced: system::reduced(s),
+            lines: s.bool(character::LINES),
+            quiet: s.bool(character::QUIET_LINES),
+            idle_every: (
+                s.float(character::IDLE_MIN) as f32 * 60.0,
+                s.float(character::IDLE_MAX) as f32 * 60.0,
+            ),
         }
     }
 
@@ -1053,6 +1080,7 @@ impl App {
                         out.sets.push((character::Y, Value::Float(y)));
                     }
                 }
+                self.play_mascot_sound();
             }
             #[cfg(not(windows))]
             _ => {}
@@ -1077,14 +1105,20 @@ impl App {
                 .mascot
                 .as_ref()
                 .is_some_and(|m| m.character() != selected);
+            let options = self.mascot_options();
             if want && (self.mascot.is_none() || stale) {
                 let rig = self.character_rig(selected);
+                let lines = self.character_lines(selected);
                 match &mut self.mascot {
-                    Some(m) => m.set_rig(selected, rig),
+                    Some(m) => {
+                        m.set_rig(selected, rig);
+                        m.set_lines(lines, &options);
+                    }
                     None => {
-                        let (m, open) = crate::mascot::desktop::Desktop::open(
+                        let (mut m, open) = crate::mascot::desktop::Desktop::open(
                             selected, rig, size, anchor, rows, hidden,
                         );
+                        m.set_lines(lines, &options);
                         self.mascot = Some(m);
                         return open.map(Message::WindowOpened);
                     }
@@ -1098,12 +1132,56 @@ impl App {
                 }
                 (Some(m), true) => {
                     m.resize(size, rows);
-                    return m.set_hidden(hidden);
+                    let was_hidden = m.is_hidden();
+                    let task = m.set_hidden(hidden);
+                    // Back from annotation: the character can say so.
+                    if was_hidden && !hidden {
+                        m.say(crate::mascot::lines::Trigger::AnnotationEnd, &options);
+                    }
+                    self.play_mascot_sound();
+                    return task;
                 }
                 (None, false) => {}
             }
         }
         Task::none()
+    }
+
+    /// The character's lines: the user's if they changed them, else the pack's.
+    fn character_lines(&self, id: &str) -> crate::mascot::lines::Lines {
+        self.characters
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.lines())
+            .unwrap_or_default()
+    }
+
+    /// Plays the line sound the desktop character asked for, if any, at
+    /// Character volume.
+    fn play_mascot_sound(&mut self) {
+        #[cfg(windows)]
+        if let Some(sound) = self.mascot.as_mut().and_then(|m| m.take_sound())
+            && let Some(seconds) = self.play_line_sound(&sound)
+            && let Some(m) = &mut self.mascot
+        {
+            m.hold_speech(seconds);
+        }
+    }
+
+    /// Plays a line sound at Character volume; returns how long it runs.
+    fn play_line_sound(&mut self, sound: &crate::mascot::lines::SoundRef) -> Option<f32> {
+        let volume = self.session.settings().float(character::VOICE_VOLUME) as f32;
+        let path = self.current_character().sound_path(sound)?;
+        match crate::audio::decode_wav(&path) {
+            Ok(clip) => {
+                self.audio.play_clip(&clip, volume);
+                Some(clip.seconds())
+            }
+            Err(e) => {
+                eprintln!("tinypaw: line sound {}: {e}", path.display());
+                None
+            }
+        }
     }
 
     /// Decodes the selected character's art. A missing or broken pack shows
@@ -1399,6 +1477,106 @@ impl App {
             UiMsg::MotionTest(test) => {
                 if let Some(p) = &mut self.motion_preview {
                     p.test(test);
+                }
+                if let Some(sound) = self.motion_preview.as_mut().and_then(|p| p.take_sound())
+                    && let Some(seconds) = self.play_line_sound(&sound)
+                    && let Some(p) = &mut self.motion_preview
+                {
+                    p.hold_speech(seconds);
+                }
+            }
+            UiMsg::LineText(t, i, text) => {
+                if let Some(line) = self
+                    .motion_preview
+                    .as_mut()
+                    .and_then(|p| p.lines.get_mut(t).get_mut(i))
+                {
+                    line.text = text.chars().take(crate::mascot::lines::MAX_CHARS).collect();
+                }
+            }
+            UiMsg::LineAdd(t) => {
+                if let Some(p) = &mut self.motion_preview
+                    && p.lines.total() < crate::mascot::lines::MAX_LINES
+                {
+                    p.lines.get_mut(t).push(crate::mascot::lines::Line {
+                        text: String::new(),
+                        sound: None,
+                    });
+                }
+            }
+            UiMsg::LineRemove(t, i) => {
+                if let Some(p) = &mut self.motion_preview
+                    && i < p.lines.get(t).len()
+                {
+                    p.lines.get_mut(t).remove(i);
+                }
+            }
+            UiMsg::LineClearSound(t, i) => {
+                if let Some(line) = self
+                    .motion_preview
+                    .as_mut()
+                    .and_then(|p| p.lines.get_mut(t).get_mut(i))
+                {
+                    line.sound = None;
+                }
+            }
+            UiMsg::LineSound(t, i) => {
+                return Task::perform(
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Choose a WAV for this line")
+                        .add_filter("WAV sound", &["wav"])
+                        .pick_file(),
+                    move |f| Message::LineSoundPicked(t, i, f.map(|f| f.path().to_path_buf())),
+                );
+            }
+            UiMsg::BubbleBackground(c) => {
+                if let Some(p) = &mut self.motion_preview {
+                    p.lines.bubble.background = c;
+                }
+            }
+            UiMsg::BubbleText(c) => {
+                if let Some(p) = &mut self.motion_preview {
+                    p.lines.bubble.text = c;
+                }
+            }
+            UiMsg::BubbleWidth(w) => {
+                if let Some(p) = &mut self.motion_preview {
+                    p.lines.bubble.max_width = w.clamp(
+                        crate::mascot::lines::MIN_WIDTH,
+                        crate::mascot::lines::MAX_WIDTH,
+                    );
+                }
+            }
+            UiMsg::LinesReset => {
+                if let Some(p) = &mut self.motion_preview {
+                    p.reset_lines();
+                }
+            }
+            UiMsg::LinesSave => {
+                if let Some(p) = &mut self.motion_preview {
+                    let id = p.id;
+                    // Empty lines are dropped rather than saved.
+                    for t in crate::mascot::lines::Trigger::ALL {
+                        p.lines.get_mut(t).retain(|l| !l.text.trim().is_empty());
+                    }
+                    let mut o = characters::load_overrides(id);
+                    o.lines = p.lines_customised().then(|| p.lines.clone());
+                    match characters::save_overrides(id, &o) {
+                        Ok(()) => {
+                            p.mark_lines_saved();
+                            characters::prune_line_sounds(id, &p.lines);
+                            self.notice = None;
+                            #[cfg(windows)]
+                            if self.mascot.as_ref().is_some_and(|m| m.character() == id) {
+                                let lines = p.lines.clone();
+                                let options = self.mascot_options();
+                                if let Some(m) = &mut self.mascot {
+                                    m.set_lines(lines, &options);
+                                }
+                            }
+                        }
+                        Err(e) => self.notice = Some(format!("Could not save lines: {e}")),
+                    }
                 }
             }
             UiMsg::MotionReset => {

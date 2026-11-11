@@ -4,6 +4,7 @@
 
 use iced::Vector;
 
+use super::lines::{Lines, Picker, SoundRef, Speech, Trigger};
 use super::motion::{Animator, Inputs, MotionSpec, PartType, Pose};
 use super::rig::Rig;
 
@@ -13,6 +14,8 @@ pub enum Test {
     Click,
     DragLeft,
     DragRight,
+    /// Say a line: a click line, or any line if there are none.
+    Speak,
 }
 
 /// How long a test press is held before it releases into a click.
@@ -37,13 +40,32 @@ pub struct MotionPreview {
     pose: Pose,
     now: f32,
     test: Option<(Test, f32)>,
+    /// The lines being edited, what's saved, and the pack's own.
+    pub lines: Lines,
+    lines_saved: Lines,
+    lines_defaults: Lines,
+    picker: Picker,
+    speech: Option<Speech>,
+    sound: Option<SoundRef>,
 }
 
 impl MotionPreview {
     /// `rig` carries the saved motion; `defaults` is the pack's own.
-    pub fn new(id: &'static str, rig: Rig, defaults: Vec<MotionSpec>) -> Self {
+    pub fn new(
+        id: &'static str,
+        rig: Rig,
+        defaults: Vec<MotionSpec>,
+        lines: Lines,
+        pack_lines: Lines,
+    ) -> Self {
         let specs = rig.motion().to_vec();
         Self {
+            lines_saved: lines.clone(),
+            lines,
+            lines_defaults: pack_lines,
+            picker: Picker::default(),
+            speech: None,
+            sound: None,
             id,
             labels: rig.motion_labels(),
             kinds: rig.motion_parts().iter().map(|p| p.kind).collect(),
@@ -93,12 +115,65 @@ impl MotionPreview {
     }
 
     pub fn test(&mut self, test: Test) {
+        if test == Test::Speak {
+            let t = if self.lines.get(Trigger::Click).is_empty() {
+                Trigger::ALL
+                    .into_iter()
+                    .find(|t| !self.lines.get(*t).is_empty())
+                    .unwrap_or(Trigger::Click)
+            } else {
+                Trigger::Click
+            };
+            if let Some(line) = self.picker.pick(&self.lines, t)
+                && let Some(speech) = Speech::new(&line.text, self.now)
+            {
+                self.speech = Some(speech);
+                self.sound = line.sound.clone();
+            }
+            return;
+        }
         self.test = Some((test, self.now));
+    }
+
+    pub fn lines_dirty(&self) -> bool {
+        self.lines != self.lines_saved
+    }
+
+    pub fn lines_customised(&self) -> bool {
+        self.lines != self.lines_defaults
+    }
+
+    pub fn reset_lines(&mut self) {
+        self.lines = self.lines_defaults.clone();
+    }
+
+    pub fn mark_lines_saved(&mut self) {
+        self.lines_saved = self.lines.clone();
+    }
+
+    /// The line being said in the preview.
+    pub fn speech(&self) -> Option<&str> {
+        self.speech.as_ref().map(Speech::text)
+    }
+
+    pub fn hold_speech(&mut self, seconds: f32) {
+        if let Some(s) = &mut self.speech {
+            s.hold(self.now, seconds);
+        }
+    }
+
+    pub fn take_sound(&mut self) -> Option<SoundRef> {
+        self.sound.take()
     }
 
     /// Advances the preview by `dt` seconds.
     pub fn tick(&mut self, dt: f32, idle: bool, reduced: bool) {
         self.now += dt.clamp(0.0, 0.1);
+        if let Some(s) = &mut self.speech
+            && !s.advance(self.now)
+        {
+            self.speech = None;
+        }
         let mut inputs = Inputs {
             now: self.now,
             dt,
@@ -121,7 +196,7 @@ impl MotionPreview {
                     inputs.dragging = true;
                     inputs.velocity = Vector::new(sign * speed, 0.0);
                 }
-                Test::DragLeft | Test::DragRight => self.test = None,
+                Test::DragLeft | Test::DragRight | Test::Speak => self.test = None,
             }
         }
         self.pose = self.animator.step(&self.rig.motion_parts(), &inputs);
@@ -137,7 +212,7 @@ mod tests {
     fn yohta() -> MotionPreview {
         let rig = Rig::load();
         let defaults = rig.motion().to_vec();
-        MotionPreview::new("yohta", rig, defaults)
+        MotionPreview::new("yohta", rig, defaults, Lines::default(), Lines::default())
     }
 
     #[test]
@@ -159,6 +234,27 @@ mod tests {
         assert!(!p.dirty());
         p.reset();
         assert!(p.dirty() && !p.customised());
+    }
+
+    #[test]
+    fn speak_says_a_line_and_lines_edits_are_tracked() {
+        let mut p = yohta();
+        p.test(Test::Speak);
+        assert!(p.speech().is_none(), "nothing to say yet");
+        p.lines.get_mut(Trigger::Idle).push(crate::mascot::lines::Line {
+            text: "Hmm // hm".into(),
+            sound: None,
+        });
+        assert!(p.lines_dirty() && p.lines_customised());
+        p.test(Test::Speak);
+        assert_eq!(p.speech(), Some("Hmm"), "falls back to other triggers' lines");
+        for _ in 0..200 {
+            p.tick(0.05, true, false);
+        }
+        assert!(p.speech().is_none(), "the line ends");
+        p.mark_lines_saved();
+        p.reset_lines();
+        assert!(p.lines_dirty() && !p.lines_customised());
     }
 
     #[test]

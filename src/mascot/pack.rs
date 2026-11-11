@@ -19,6 +19,7 @@ use iced::advanced::image::Handle;
 use image::RgbaImage;
 use serde_json::{Value as Json, json};
 
+use super::lines::{Lines, SoundRef};
 use super::motion::{MotionSpec, PartType, Preset};
 use super::rig::{EyeArt, LayeredArt, PartArt, Rig};
 
@@ -111,6 +112,29 @@ impl Character {
                 .clone();
         }
         self.thumb.clone()
+    }
+
+    /// The pack's own lines, before the user's changes.
+    pub fn pack_lines(&self) -> Lines {
+        match &self.folder {
+            None => bundled_manifest().lines,
+            Some(folder) => read_manifest(folder).map(|m| m.lines).unwrap_or_default(),
+        }
+    }
+
+    /// What the character says: the user's lines if they changed them.
+    pub fn lines(&self) -> Lines {
+        load_overrides(self.id)
+            .lines
+            .unwrap_or_else(|| self.pack_lines())
+    }
+
+    /// The file a line sound plays from.
+    pub fn sound_path(&self, sound: &SoundRef) -> Option<PathBuf> {
+        match sound {
+            SoundRef::Pack(p) => self.folder.as_ref().map(|f| f.join(p)),
+            SoundRef::User(f) => user_dir().map(|r| user_sounds(&r, self.id).join(f)),
+        }
     }
 
     /// The rig with the user's Motion tab settings applied, if they still fit.
@@ -269,6 +293,8 @@ pub(super) struct Manifest {
     /// art drawn on that original lines up.
     pub(super) source: Option<Source>,
     pub(super) editor: Vec<super::placement::SourceRecord>,
+    /// What the character says, and its bubble's look.
+    pub(super) lines: Lines,
 }
 
 /// The original PNG's size and the visible box quick import kept from it
@@ -583,7 +609,32 @@ impl Manifest {
         out
     }
 
+    /// Line sounds inside the pack, each once.
+    pub(super) fn sounds(&self) -> Vec<&str> {
+        self.lines
+            .sounds()
+            .into_iter()
+            .filter_map(|s| match s {
+                SoundRef::Pack(p) => Some(p.as_str()),
+                SoundRef::User(_) => None,
+            })
+            .collect()
+    }
+
+    /// Every file to copy with the pack.
+    pub(super) fn files(&self) -> Vec<String> {
+        self.resources()
+            .into_iter()
+            .map(|(a, _)| a)
+            .chain(self.sounds())
+            .map(str::to_owned)
+            .collect()
+    }
+
     pub(super) fn validate_files(&self, folder: &Path) -> Result<(), String> {
+        for sound in self.sounds() {
+            check_sound(folder, sound)?;
+        }
         let mut encoded = 0u64;
         for (asset, dimensions) in self.resources() {
             encoded = encoded
@@ -626,8 +677,30 @@ impl Manifest {
             let (x, y, w, h) = src.visible;
             m["source"] = json!({ "size": [src.size.0, src.size.1], "visible": [x, y, w, h] });
         }
+        if let Some((lines, bubble)) = self.lines.to_json() {
+            m["lines"] = lines;
+            m["bubble"] = bubble;
+        }
         m
     }
+}
+
+/// A line sound inside `folder`: contained, small, and a readable WAV.
+fn check_sound(folder: &Path, asset: &str) -> Result<(), String> {
+    let root = folder.canonicalize().map_err(|e| e.to_string())?;
+    let path = folder
+        .join(asset)
+        .canonicalize()
+        .map_err(|_| format!("{asset} is missing"))?;
+    if !path.starts_with(&root) {
+        return Err(format!("{asset} is outside the pack folder"));
+    }
+    if fs::metadata(&path).map_err(|e| e.to_string())?.len() > super::lines::MAX_SOUND {
+        return Err(format!("{asset} is larger than 2 MiB"));
+    }
+    crate::audio::decode_wav(&path)
+        .map(|_| ())
+        .map_err(|e| format!("{asset} is not a readable WAV ({e})"))
 }
 
 impl Source {
@@ -810,6 +883,7 @@ fn parse_manifest(text: &str) -> Result<Manifest, String> {
         poses,
         source,
         editor: Vec::new(),
+        lines: Lines::parse(&m["lines"], &m["bubble"], false)?,
     };
     manifest.editor = super::placement::parse(&m["editor"], manifest.canvas, &manifest.assets())?;
     if manifest.assets().len() > MAX_IMAGES {
@@ -1161,6 +1235,7 @@ fn install_into_guarded(
         }],
         source: Some(draft.source),
         editor: Vec::new(),
+        lines: Lines::default(),
     };
     let art = draft.art.clone();
     stage_and_install_guarded(
@@ -1460,11 +1535,7 @@ fn prepare_folder_into(root: &Path, source: &Path) -> Result<Arc<PreparedFolder>
         id: m.id.clone(),
         expected_revision,
     });
-    let assets = m
-        .resources()
-        .into_iter()
-        .map(|(a, _)| a.to_owned())
-        .collect::<Vec<_>>();
+    let assets: Vec<String> = m.files();
     // Validate containment before copying, and validate the actual copied bytes.
     m.validate_files(source)?;
     copy_assets(source, prepared.path(), &assets)?;
@@ -1505,11 +1576,7 @@ fn import_folder_into_guarded(
             OnDuplicate::Replace => replace = Some(m.id.clone()),
         }
     }
-    let assets: Vec<String> = m
-        .resources()
-        .into_iter()
-        .map(|(a, _)| a.to_owned())
-        .collect();
+    let assets: Vec<String> = m.files();
     stage_and_install_guarded(
         root,
         &m,
@@ -1573,7 +1640,10 @@ pub(super) fn installed_folder(c: &Character) -> Result<PathBuf, String> {
 /// Deletes TinyPaw's installed copy; the original source is never touched.
 pub fn remove(c: &Character) -> Result<(), String> {
     fs::remove_dir_all(installed_folder(c)?).map_err(|e| e.to_string())?;
-    let _ = clear_motion(c.id);
+    let _ = save_overrides(c.id, &Overrides::default());
+    if let Some(root) = user_dir() {
+        let _ = fs::remove_dir_all(user_sounds(&root, c.id));
+    }
     Ok(())
 }
 
@@ -1585,50 +1655,79 @@ fn motion_file(root: &Path, id: &str) -> PathBuf {
     root.join(".overrides").join(format!("{id}.json"))
 }
 
-/// Saved motion for `id`, if any. The rig checks it still fits its parts.
-pub fn load_motion(id: &str) -> Option<Vec<MotionSpec>> {
-    load_motion_in(&user_dir()?, id)
+/// What the user changed for a character, kept beside its pack.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Overrides {
+    pub motion: Option<Vec<MotionSpec>>,
+    pub lines: Option<Lines>,
 }
 
-fn load_motion_in(root: &Path, id: &str) -> Option<Vec<MotionSpec>> {
+pub fn load_overrides(id: &str) -> Overrides {
+    user_dir()
+        .map(|root| load_overrides_in(&root, id))
+        .unwrap_or_default()
+}
+
+fn load_overrides_in(root: &Path, id: &str) -> Overrides {
     let path = motion_file(root, id);
-    if fs::metadata(&path).ok()?.len() > MAX_MANIFEST {
-        return None;
-    }
-    let v: Json = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
-    if v["schema_version"].as_u64() != Some(1) {
-        return None;
-    }
-    v["motion"]
-        .as_array()?
-        .iter()
-        .map(|m| {
-            Some(MotionSpec {
-                preset: Preset::parse(m["preset"].as_str()?)?,
-                strength: (m["strength"].as_f64()? as f32).clamp(0.0, 2.0),
-                speed: (m["speed"].as_f64()? as f32).clamp(0.0, 2.0),
+    let Some(v) = fs::metadata(&path)
+        .ok()
+        .filter(|m| m.len() <= MAX_MANIFEST)
+        .and_then(|_| fs::read_to_string(&path).ok())
+        .and_then(|t| serde_json::from_str::<Json>(&t).ok())
+        .filter(|v| v["schema_version"].as_u64() == Some(1))
+    else {
+        return Overrides::default();
+    };
+    let motion = v["motion"].as_array().and_then(|list| {
+        list.iter()
+            .map(|m| {
+                Some(MotionSpec {
+                    preset: Preset::parse(m["preset"].as_str()?)?,
+                    strength: (m["strength"].as_f64()? as f32).clamp(0.0, 2.0),
+                    speed: (m["speed"].as_f64()? as f32).clamp(0.0, 2.0),
+                })
             })
-        })
-        .collect()
+            .collect()
+    });
+    // Broken saved lines fall back to the pack's rather than failing.
+    let lines = (!v["lines"].is_null() || !v["bubble"].is_null())
+        .then(|| Lines::parse(&v["lines"], &v["bubble"], true).ok())
+        .flatten();
+    Overrides { motion, lines }
 }
 
-pub fn save_motion(id: &str, specs: &[MotionSpec]) -> Result<(), String> {
-    save_motion_in(&user_dir().ok_or("no per-user data folder")?, id, specs)
+pub fn save_overrides(id: &str, o: &Overrides) -> Result<(), String> {
+    save_overrides_in(&user_dir().ok_or("no per-user data folder")?, id, o)
 }
 
-fn save_motion_in(root: &Path, id: &str, specs: &[MotionSpec]) -> Result<(), String> {
+fn save_overrides_in(root: &Path, id: &str, o: &Overrides) -> Result<(), String> {
     if !(valid_id(id) || id == BUILTIN) {
         return Err("unknown character".into());
     }
     let path = motion_file(root, id);
+    if *o == Overrides::default() {
+        return match fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        };
+    }
     fs::create_dir_all(path.parent().expect("overrides folder")).map_err(|e| e.to_string())?;
-    let json = json!({
-        "schema_version": 1,
-        "motion": specs
+    let mut json = json!({ "schema_version": 1 });
+    if let Some(specs) = &o.motion {
+        json["motion"] = specs
             .iter()
             .map(|s| json!({ "preset": s.preset.name(), "strength": s.strength, "speed": s.speed }))
-            .collect::<Vec<_>>(),
-    });
+            .collect();
+    }
+    if let Some(lines) = &o.lines {
+        // Saved even when empty: "no lines" is a choice that overrides the pack.
+        let (l, b) = lines
+            .to_json()
+            .unwrap_or_else(|| (json!({}), json!({})));
+        json["lines"] = l;
+        json["bubble"] = b;
+    }
     // Write then rename, so a crash never leaves half a file.
     let partial = path.with_extension("json.partial");
     fs::write(&partial, serde_json::to_vec_pretty(&json).map_err(|e| e.to_string())?)
@@ -1636,12 +1735,71 @@ fn save_motion_in(root: &Path, id: &str, specs: &[MotionSpec]) -> Result<(), Str
     fs::rename(&partial, &path).map_err(|e| e.to_string())
 }
 
+/// Saved motion for `id`, if any. The rig checks it still fits its parts.
+pub fn load_motion(id: &str) -> Option<Vec<MotionSpec>> {
+    load_overrides(id).motion
+}
+
+pub fn save_motion(id: &str, specs: &[MotionSpec]) -> Result<(), String> {
+    let mut o = load_overrides(id);
+    o.motion = Some(specs.to_vec());
+    save_overrides(id, &o)
+}
+
 /// Forgets the Motion tab settings, returning the character to its pack's.
 pub fn clear_motion(id: &str) -> Result<(), String> {
+    let mut o = load_overrides(id);
+    o.motion = None;
+    save_overrides(id, &o)
+}
+
+/// Where the user's own line sounds for `id` are kept.
+fn user_sounds(root: &Path, id: &str) -> PathBuf {
+    root.join(".overrides").join(format!("{id}-sounds"))
+}
+
+/// Copies a WAV the user picked for a line into managed storage, so moving
+/// or deleting the original doesn't silence it.
+pub fn import_line_sound(id: &str, from: &Path) -> Result<SoundRef, String> {
     let root = user_dir().ok_or("no per-user data folder")?;
-    match fs::remove_file(motion_file(&root, id)) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
-        _ => Ok(()),
+    if fs::metadata(from).map_err(|e| e.to_string())?.len() > super::lines::MAX_SOUND {
+        return Err("line sounds must be 2 MiB or smaller".into());
+    }
+    crate::audio::decode_wav(from).map_err(|e| format!("not a readable WAV ({e})"))?;
+    let dir = user_sounds(&root, id);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut n = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let file = loop {
+        let name = format!("line-{n}.wav");
+        if !dir.join(&name).exists() {
+            break name;
+        }
+        n += 1;
+    };
+    fs::copy(from, dir.join(&file)).map_err(|e| e.to_string())?;
+    Ok(SoundRef::User(file))
+}
+
+/// Deletes user line sounds no saved line uses any more.
+pub fn prune_line_sounds(id: &str, keep: &Lines) {
+    let Some(root) = user_dir() else { return };
+    let used: Vec<&str> = keep
+        .sounds()
+        .into_iter()
+        .filter_map(|s| match s {
+            SoundRef::User(f) => Some(f.as_str()),
+            SoundRef::Pack(_) => None,
+        })
+        .collect();
+    if let Ok(entries) = fs::read_dir(user_sounds(&root, id)) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if !used.contains(&name.as_str()) {
+                let _ = fs::remove_file(e.path());
+            }
+        }
     }
 }
 
@@ -1668,11 +1826,7 @@ pub fn export(c: &Character, into: &Path) -> Result<PathBuf, String> {
     let target = free_folder(into, &m.id);
     fs::create_dir_all(&target).map_err(|e| e.to_string())?;
     let result = (|| {
-        let assets: Vec<String> = m
-            .resources()
-            .into_iter()
-            .map(|(a, _)| a.to_owned())
-            .collect();
+        let assets: Vec<String> = m.files();
         m.validate_files(folder)?;
         copy_assets(folder, &target, &assets)?;
         let text = serde_json::to_string_pretty(&m.to_json()).map_err(|e| e.to_string())?;
@@ -1709,6 +1863,9 @@ mod tests {
         assert_eq!(rig.motion_parts().len(), 2, "head and tail");
         assert!(rig.eye_point().is_some(), "his eyes still track the cursor");
         assert!(Character::builtin().thumbnail().is_some());
+        let lines = Character::builtin().pack_lines();
+        assert_eq!(lines.total(), 12, "Yohta has a few things to say");
+        assert!(lines.sounds().is_empty());
         // Export writes a folder Import folder accepts as another character.
         let out = dir.join("out");
         fs::create_dir_all(&out).unwrap();
@@ -2219,8 +2376,12 @@ mod tests {
                 speed: 1.0,
             },
         ];
-        save_motion_in(&dir, BUILTIN, &specs).unwrap();
-        let loaded = load_motion_in(&dir, BUILTIN).unwrap();
+        let o = Overrides {
+            motion: Some(specs.to_vec()),
+            lines: None,
+        };
+        save_overrides_in(&dir, BUILTIN, &o).unwrap();
+        let loaded = load_overrides_in(&dir, BUILTIN).motion.unwrap();
         assert_eq!(loaded[0], specs[0]);
         assert_eq!(loaded[1].strength, 2.0, "clamped to the slider range");
         assert!(!dir.join(".overrides/yohta.json.partial").exists());
@@ -2231,7 +2392,87 @@ mod tests {
         assert_eq!(rig.motion()[0].preset, Preset::Nod);
         assert!(!rig.set_motion(&loaded[..1]));
         assert!(!rig.set_motion(&[specs[1], specs[1]]), "a head can't wag");
-        assert!(save_motion_in(&dir, "../escape", &specs).is_err());
+        assert!(save_overrides_in(&dir, "../escape", &o).is_err());
+        // Lines save beside motion, and "no lines" is kept as a choice.
+        let quiet = Overrides {
+            motion: None,
+            lines: Some(Lines::default()),
+        };
+        save_overrides_in(&dir, BUILTIN, &quiet).unwrap();
+        assert_eq!(load_overrides_in(&dir, BUILTIN), quiet);
+        // Clearing everything removes the file.
+        save_overrides_in(&dir, BUILTIN, &Overrides::default()).unwrap();
+        assert!(!dir.join(".overrides/yohta.json").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A short 16-bit mono WAV, written by hand so tests need no fixtures.
+    fn write_wav(path: &Path) {
+        let samples: Vec<i16> = (0..800)
+            .map(|n| ((n as f32 * 0.2).sin() * 8000.0) as i16)
+            .collect();
+        let data: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let mut wav = Vec::new();
+        wav.extend(b"RIFF");
+        wav.extend((36 + data.len() as u32).to_le_bytes());
+        wav.extend(b"WAVEfmt ");
+        wav.extend(16u32.to_le_bytes());
+        wav.extend(1u16.to_le_bytes()); // PCM
+        wav.extend(1u16.to_le_bytes()); // mono
+        wav.extend(8000u32.to_le_bytes());
+        wav.extend(16000u32.to_le_bytes());
+        wav.extend(2u16.to_le_bytes());
+        wav.extend(16u16.to_le_bytes());
+        wav.extend(b"data");
+        wav.extend((data.len() as u32).to_le_bytes());
+        wav.extend(data);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, wav).unwrap();
+    }
+
+    #[test]
+    fn line_sounds_travel_with_the_pack() {
+        let dir = scratch("line-sounds");
+        let src = dir.join("src");
+        fs::create_dir_all(src.join("sit")).unwrap();
+        RgbaImage::from_fn(100, 100, |x, y| {
+            let on = (30..70).contains(&x) && (50..95).contains(&y);
+            image::Rgba(if on { [40, 80, 200, 255] } else { [0, 0, 0, 0] })
+        })
+        .save(src.join("sit/body.png"))
+        .unwrap();
+        write_wav(&src.join("lines/hi.wav"));
+        fs::write(
+            src.join(MANIFEST),
+            r##"{"schema_version":1,"id":"talker","name":"Talker","canvas":[100,100],
+              "default_pose":"sit","poses":{"sit":{"ground_anchor":[0.5,0.95],"body":"sit/body.png"}},
+              "lines":{"click":[{"text":"Hi!","sound":"lines/hi.wav"}]},
+              "bubble":{"background":"#FFF7E0"}}"##,
+        )
+        .unwrap();
+        let root = dir.join("characters");
+        let Imported::Installed(c) =
+            import_folder_into(&root, &src, &[], OnDuplicate::Ask).unwrap()
+        else {
+            panic!("installed");
+        };
+        assert!(root.join("talker/lines/hi.wav").exists(), "the sound was copied");
+        let lines = read_manifest(&root.join("talker")).unwrap().lines;
+        assert_eq!(lines.get(super::super::lines::Trigger::Click).len(), 1);
+        assert_eq!(lines.bubble.background, [255, 247, 224, 255]);
+        // Export carries it too.
+        let out = dir.join("out");
+        fs::create_dir_all(&out).unwrap();
+        let folder = export(&c, &out).unwrap();
+        assert!(folder.join("lines/hi.wav").exists());
+        // A missing or unreadable sound fails the import.
+        fs::remove_file(src.join("lines/hi.wav")).unwrap();
+        assert!(import_folder_into(&root, &src, &[], OnDuplicate::KeepBoth).is_err());
+        fs::write(src.join("lines/hi.wav"), b"not a wav").unwrap();
+        let err = import_folder_into(&root, &src, &[], OnDuplicate::KeepBoth)
+            .err()
+            .unwrap();
+        assert!(err.contains("hi.wav"), "{err}");
         fs::remove_dir_all(&dir).unwrap();
     }
 }
