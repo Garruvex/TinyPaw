@@ -9,6 +9,7 @@ pub mod pack;
 pub mod placement;
 pub mod preview;
 pub mod rig;
+mod yohta_pack;
 
 /// Messages from the desktop character window.
 #[derive(Debug, Clone)]
@@ -343,8 +344,19 @@ impl drawing::Program<Message> for Stage<'_> {
         // remains directional while the neck tilts.
         let (s, c) = (-motion.head).sin_cos();
         let gaze = Vector::new(p.gaze.x * c - p.gaze.y * s, p.gaze.x * s + p.gaze.y * c);
-        p.rig
-            .draw(&mut frame, gaze, motion.head, motion.tail, motion.blink);
+        p.rig.draw_pose(
+            &mut frame,
+            &motion::Pose {
+                angles: vec![motion.head, motion.tail],
+                gaze,
+                expression: if motion.blink {
+                    motion::Expression::Blink
+                } else {
+                    motion::Expression::Idle
+                },
+                ..motion::Pose::default()
+            },
+        );
         vec![frame.into_geometry()]
     }
 

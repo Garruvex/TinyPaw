@@ -24,6 +24,23 @@ use super::rig::{EyeArt, LayeredArt, PartArt, Rig};
 
 /// The bundled character's ID, also the fallback selection.
 pub const BUILTIN: &str = "yohta";
+
+/// Bundled Yohta's pack (see `yohta_pack`), embedded so the release needs no
+/// asset folder. It goes through the same parsing and checks as any pack.
+const YOHTA_FILES: &[(&str, &[u8])] = &[
+    ("character.json", include_bytes!("../../assets/mascot/yohta/pack/character.json")),
+    ("sit/body.png", include_bytes!("../../assets/mascot/yohta/pack/sit/body.png")),
+    ("sit/head.png", include_bytes!("../../assets/mascot/yohta/pack/sit/head.png")),
+    ("sit/tail.png", include_bytes!("../../assets/mascot/yohta/pack/sit/tail.png")),
+    ("sit/eye-1-white.png", include_bytes!("../../assets/mascot/yohta/pack/sit/eye-1-white.png")),
+    ("sit/eye-1-pupil.png", include_bytes!("../../assets/mascot/yohta/pack/sit/eye-1-pupil.png")),
+    ("sit/eye-1-mask.png", include_bytes!("../../assets/mascot/yohta/pack/sit/eye-1-mask.png")),
+    ("sit/eye-1-blink.png", include_bytes!("../../assets/mascot/yohta/pack/sit/eye-1-blink.png")),
+    ("sit/eye-2-white.png", include_bytes!("../../assets/mascot/yohta/pack/sit/eye-2-white.png")),
+    ("sit/eye-2-pupil.png", include_bytes!("../../assets/mascot/yohta/pack/sit/eye-2-pupil.png")),
+    ("sit/eye-2-mask.png", include_bytes!("../../assets/mascot/yohta/pack/sit/eye-2-mask.png")),
+    ("sit/eye-2-blink.png", include_bytes!("../../assets/mascot/yohta/pack/sit/eye-2-blink.png")),
+];
 pub(super) const MANIFEST: &str = "character.json";
 const THUMB: &str = "thumb.png";
 /// Largest canvas side a pack may declare.
@@ -78,15 +95,20 @@ impl Character {
         self.folder.is_none()
     }
 
-    /// A small picture for lists. Yohta's is cut from his sheet on first use.
+    /// A small picture for lists. Yohta's comes from his head art on first use.
     pub fn thumbnail(&self) -> Option<Handle> {
         if self.is_builtin() {
-            static YOHTA: OnceLock<Handle> = OnceLock::new();
-            return Some(
-                YOHTA
-                    .get_or_init(|| handle(Rig::yohta_thumbnail(THUMB_SIDE)))
-                    .clone(),
-            );
+            static YOHTA: OnceLock<Option<Handle>> = OnceLock::new();
+            return YOHTA
+                .get_or_init(|| {
+                    let m = bundled_manifest();
+                    let head = m.default_pose().parts.first()?.image.clone();
+                    let art = decode_png(bundled(&head).ok()?, &head, m.canvas).ok()?;
+                    let (x, y, w, h) = visible_box(&art)?;
+                    let face = image::imageops::crop_imm(&art, x, y, w, h).to_image();
+                    Some(handle(thumbnail(&face)))
+                })
+                .clone();
         }
         self.thumb.clone()
     }
@@ -108,49 +130,10 @@ impl Character {
             return Ok(rig);
         }
         let Some(folder) = &self.folder else {
-            return Ok(Rig::load());
+            return Ok(bundled_rig());
         };
         let m = read_manifest(folder)?;
-        let pose = m.default_pose();
-        let png = |asset: &str| read_png(folder, asset, m.canvas);
-        let body = png(&pose.body)?;
-        if pose.parts.is_empty() && pose.eyes.is_empty() {
-            return Ok(Rig::sprite(body, pose.ground));
-        }
-        let mut parts = Vec::new();
-        for part in &pose.parts {
-            let mut faces = [None, None, None];
-            for (slot, face) in faces.iter_mut().zip(&part.faces) {
-                if let Some(asset) = face {
-                    *slot = Some(png(asset)?);
-                }
-            }
-            parts.push(PartArt {
-                kind: part.kind,
-                image: png(&part.image)?,
-                pivot: part.pivot,
-                parent: part.parent,
-                behind: part.behind,
-                motion: part.motion,
-                faces,
-            });
-        }
-        let mut eyes = Vec::new();
-        for eye in &pose.eyes {
-            eyes.push(EyeArt {
-                white: png(&eye.white)?,
-                pupil: png(&eye.pupil)?,
-                mask: png(&eye.mask)?,
-                blink: eye.blink.as_deref().map(png).transpose()?,
-                max_offset: eye.max_offset,
-            });
-        }
-        Ok(Rig::layered(LayeredArt {
-            body,
-            ground: pose.ground,
-            parts,
-            eyes,
-        }))
+        build_rig(&m, |asset| read_png(folder, asset, m.canvas))
     }
 
     pub fn release_prepared_rig(&self) {
@@ -158,6 +141,110 @@ impl Character {
             rig.lock().unwrap_or_else(|e| e.into_inner()).take();
         }
     }
+}
+
+/// A rig from a manifest's default pose, reading images through `png`.
+fn build_rig(m: &Manifest, png: impl Fn(&str) -> Result<RgbaImage, String>) -> Result<Rig, String> {
+    let pose = m.default_pose();
+    let body = png(&pose.body)?;
+    if pose.parts.is_empty() && pose.eyes.is_empty() {
+        return Ok(Rig::sprite(body, pose.ground));
+    }
+    let mut parts = Vec::new();
+    for part in &pose.parts {
+        let mut faces = [None, None, None];
+        for (slot, face) in faces.iter_mut().zip(&part.faces) {
+            if let Some(asset) = face {
+                *slot = Some(png(asset)?);
+            }
+        }
+        parts.push(PartArt {
+            kind: part.kind,
+            image: png(&part.image)?,
+            pivot: part.pivot,
+            parent: part.parent,
+            behind: part.behind,
+            motion: part.motion,
+            faces,
+        });
+    }
+    let mut eyes = Vec::new();
+    for eye in &pose.eyes {
+        eyes.push(EyeArt {
+            white: png(&eye.white)?,
+            pupil: png(&eye.pupil)?,
+            mask: png(&eye.mask)?,
+            blink: eye.blink.as_deref().map(&png).transpose()?,
+            max_offset: eye.max_offset,
+        });
+    }
+    Ok(Rig::layered(LayeredArt {
+        body,
+        ground: pose.ground,
+        parts,
+        eyes,
+    }))
+}
+
+fn bundled(asset: &str) -> Result<&'static [u8], String> {
+    YOHTA_FILES
+        .iter()
+        .find(|(name, _)| *name == asset)
+        .map(|(_, bytes)| *bytes)
+        .ok_or_else(|| format!("{asset} is missing from bundled Yohta"))
+}
+
+fn bundled_manifest() -> Manifest {
+    let text = std::str::from_utf8(bundled(MANIFEST).expect("bundled manifest"))
+        .expect("bundled manifest is UTF-8");
+    parse_manifest(text).expect("bundled Yohta's manifest is valid")
+}
+
+/// Bundled Yohta's rig, decoded and checked like any installed pack.
+pub(super) fn bundled_rig() -> Rig {
+    let m = bundled_manifest();
+    build_rig(&m, |asset| decode_png(bundled(asset)?, asset, m.canvas))
+        .expect("bundled Yohta's art is valid")
+}
+
+/// Writes bundled Yohta's files into `to`, as a pack folder.
+fn write_bundled(to: &Path, m: &Manifest) -> Result<(), String> {
+    for asset in m.assets() {
+        let target = to.join(asset);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        fs::write(target, bundled(asset)?).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Installs an editable copy of bundled Yohta, which stays built in.
+pub fn copy_builtin(taken: &[&str]) -> Result<Character, String> {
+    let root = user_dir().ok_or("no per-user data folder")?;
+    copy_builtin_into(&root, taken)
+}
+
+fn copy_builtin_into(root: &Path, taken: &[&str]) -> Result<Character, String> {
+    let mut m = bundled_manifest();
+    m.id = unique_id(root, BUILTIN, taken);
+    m.name = "Yohta (copy)".into();
+    let manifest = &m;
+    stage_and_install(root, manifest, None, |stage| write_bundled(stage, manifest))
+}
+
+/// Bounding box of pixels at least `SOLID`, or `None` if empty.
+fn visible_box(art: &RgbaImage) -> Option<(u32, u32, u32, u32)> {
+    let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+    for (x, y, p) in art.enumerate_pixels() {
+        if p[3] >= SOLID {
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x);
+            y1 = y1.max(y);
+        }
+    }
+    (x0 <= x1).then(|| (x0, y0, x1 - x0 + 1, y1 - y0 + 1))
 }
 
 fn handle(pixels: RgbaImage) -> Handle {
@@ -776,8 +863,14 @@ pub(super) fn read_png(
         return Err(format!("{asset} is larger than 64 MiB"));
     }
     let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+    decode_png(&bytes, asset, canvas)
+}
+
+/// Decodes one pack image from bytes: the canvas size is checked before the
+/// pixels are decoded, and empty art is refused.
+fn decode_png(bytes: &[u8], asset: &str, canvas: (u32, u32)) -> Result<RgbaImage, String> {
     let dimensions =
-        image::ImageReader::with_format(std::io::Cursor::new(&bytes), image::ImageFormat::Png)
+        image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Png)
             .into_dimensions()
             .map_err(|e| format!("{asset}: {e}"))?;
     if dimensions != canvas {
@@ -786,7 +879,7 @@ pub(super) fn read_png(
             dimensions.0, dimensions.1, canvas.0, canvas.1
         ));
     }
-    let art = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+    let art = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
         .map_err(|e| format!("{asset} is not a readable PNG ({e})"))?
         .to_rgba8();
     if art.dimensions() != canvas {
@@ -1555,17 +1648,24 @@ pub fn clear_motion(id: &str) -> Result<(), String> {
 /// Writes the character as a folder inside `into`, ready to share or
 /// re-import. Returns the folder written.
 pub fn export(c: &Character, into: &Path) -> Result<PathBuf, String> {
-    let folder = c
-        .folder
-        .as_ref()
-        .ok_or("Yohta can be exported once his art moves to the pack format")?;
+    let Some(folder) = c.folder.as_ref() else {
+        let m = bundled_manifest();
+        let target = free_folder(into, &m.id);
+        fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+        let result = write_bundled(&target, &m).and_then(|()| {
+            let text = serde_json::to_string_pretty(&m.to_json()).map_err(|e| e.to_string())?;
+            fs::write(target.join(MANIFEST), text).map_err(|e| e.to_string())
+        });
+        return match result {
+            Ok(()) => Ok(target),
+            Err(e) => {
+                let _ = fs::remove_dir_all(&target);
+                Err(e)
+            }
+        };
+    };
     let m = read_manifest(folder)?;
-    let mut target = into.join(&m.id);
-    let mut n = 2;
-    while target.exists() {
-        target = into.join(format!("{}-{n}", m.id));
-        n += 1;
-    }
+    let target = free_folder(into, &m.id);
     fs::create_dir_all(&target).map_err(|e| e.to_string())?;
     let result = (|| {
         let assets: Vec<String> = m
@@ -1587,9 +1687,52 @@ pub fn export(c: &Character, into: &Path) -> Result<PathBuf, String> {
     }
 }
 
+/// `into/<id>`, or `into/<id>-2` and so on if that exists.
+fn free_folder(into: &Path, id: &str) -> PathBuf {
+    let mut target = into.join(id);
+    let mut n = 2;
+    while target.exists() {
+        target = into.join(format!("{id}-{n}"));
+        n += 1;
+    }
+    target
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundled_yohta_is_an_ordinary_pack_that_exports_and_copies() {
+        let dir = scratch("bundled");
+        let rig = bundled_rig();
+        assert_eq!(rig.motion_parts().len(), 2, "head and tail");
+        assert!(rig.eye_point().is_some(), "his eyes still track the cursor");
+        assert!(Character::builtin().thumbnail().is_some());
+        // Export writes a folder Import folder accepts as another character.
+        let out = dir.join("out");
+        fs::create_dir_all(&out).unwrap();
+        let folder = export(&Character::builtin(), &out).unwrap();
+        assert!(folder.join("sit/eye-2-blink.png").exists());
+        let root = dir.join("characters");
+        // His ID is the built-in one, so importing asks first.
+        assert!(matches!(
+            import_folder_into(&root, &folder, &[], OnDuplicate::Ask).unwrap(),
+            Imported::Duplicate { .. }
+        ));
+        let Imported::Installed(imported) =
+            import_folder_into(&root, &folder, &[], OnDuplicate::Replace).unwrap()
+        else {
+            panic!("installed");
+        };
+        assert_ne!(imported.id, BUILTIN, "an import never replaces the built-in Yohta");
+        // An editable copy is an installed pack with its own ID.
+        let copy = copy_builtin_into(&root, &[imported.id]).unwrap();
+        assert!(!copy.is_builtin() && copy.id != imported.id);
+        assert_eq!(copy.name, "Yohta (copy)");
+        assert_eq!(copy.rig().unwrap().motion_parts().len(), 2);
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let dir =

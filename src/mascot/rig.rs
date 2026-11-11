@@ -1,15 +1,12 @@
-//! Character renderer. Bundled Yohta is cut from the approved concept sheet
-//! (the source stays untouched; regions are decoded once and small masked eye
-//! frames are cached). An imported character is one whole image, or layered:
-//! a body plus moving parts and eyes, all registered on one canvas.
+//! Character renderer. A character is one whole image, or layered: a body
+//! plus moving parts and eyes, all registered on one canvas. Bundled Yohta
+//! is an ordinary layered pack (see `yohta_pack`).
 use super::motion::{Expression, MotionSpec, PartMotion, PartType, Pose, Preset};
 use iced::advanced::image::Handle;
 use iced::widget::canvas::{self, Frame};
 use iced::{Point, Rectangle, Size, Vector};
 use image::{Rgba, RgbaImage};
-use std::collections::VecDeque;
 
-const SOURCE: &[u8] = include_bytes!("../../assets/mascot/yohta/source/approved.png");
 /// Yohta's rig canvas.
 pub const WIDTH: f32 = 620.0;
 pub const HEIGHT: f32 = 860.0;
@@ -18,10 +15,6 @@ const STEPS: i32 = 3;
 /// little, covering the small idle rotations of head and tail.
 const CELL: f32 = 6.0;
 
-// Where each sprite is drawn, in rig coordinates.
-const TAIL_AT: (Point, Size) = (Point::new(302.0, 452.0), Size::new(308.0, 312.0));
-const BODY_AT: (Point, Size) = (Point::new(91.0, 457.0), Size::new(410.0, 350.0));
-const HEAD_AT: (Point, Size) = (Point::new(0.0, 0.0), Size::new(544.0, 520.0));
 
 #[derive(Debug, Clone)]
 pub struct Rig {
@@ -37,12 +30,6 @@ pub struct Rig {
 
 #[derive(Debug, Clone)]
 enum Kind {
-    Yohta {
-        head: Handle,
-        body: Handle,
-        tail: Handle,
-        eyes: Vec<Eye>,
-    },
     /// One whole image: it moves as one piece.
     Sprite(Handle),
     Layered {
@@ -255,54 +242,14 @@ impl Silhouette {
     }
 }
 
-#[derive(Debug, Clone)]
-struct Eye {
-    at: Point,
-    size: Size,
-    frames: Vec<Handle>,
-    closed: Handle,
-}
-
 fn handle(pixels: RgbaImage) -> Handle {
     Handle::from_rgba(pixels.width(), pixels.height(), pixels.into_raw())
 }
 
 impl Rig {
+    /// Bundled Yohta, from his embedded character pack.
     pub fn load() -> Self {
-        let sheet = image::load_from_memory(SOURCE)
-            .expect("embedded Yohta PNG")
-            .to_rgba8();
-        let crop = |x, y, w, h| image::imageops::crop_imm(&sheet, x, y, w, h).to_image();
-        let mut head = crop(688, 60, 544, 520);
-        isolate(&mut head, (250, 200));
-        // Seed points select only the connected white eye sockets, preserving
-        // the original outline, muzzle and highlights outside the socket.
-        let eyes = vec![
-            Eye::new(&head, (98, 355), (70, 317, 57, 73)),
-            Eye::new(&head, (245, 355), (177, 309, 164, 90)),
-        ];
-        let body = crop(720, 638, 410, 350);
-        let tail = crop(1138, 600, 385, 390);
-        let size = Size::new(WIDTH, HEIGHT);
-        let mut silhouette = Silhouette::new(size);
-        silhouette.stamp(&tail, TAIL_AT);
-        silhouette.stamp(&body, BODY_AT);
-        silhouette.stamp(&head, HEAD_AT);
-        Self {
-            anchor: Point::new(WIDTH * 0.5, silhouette.ground),
-            kind: Kind::Yohta {
-                head: handle(head),
-                body: handle(body),
-                tail: handle(tail),
-                eyes,
-            },
-            size,
-            silhouette,
-            motion: vec![
-                MotionSpec::of(Preset::Tilt),
-                MotionSpec::of(Preset::Sway),
-            ],
-        }
+        super::pack::bundled_rig()
     }
 
     /// A character drawn from one image, standing at `ground` (fractions of
@@ -376,7 +323,6 @@ impl Rig {
     /// The parts the animator moves, in the order of `Pose::angles`.
     pub fn motion_parts(&self) -> Vec<PartMotion> {
         let (kinds, parents): (Vec<PartType>, Vec<Option<usize>>) = match &self.kind {
-            Kind::Yohta { .. } => (vec![PartType::Head, PartType::Tail], vec![None, None]),
             Kind::Sprite(_) => (vec![PartType::Head], vec![None]),
             Kind::Layered { parts, .. } => parts.iter().map(|p| (p.kind, p.parent)).unzip(),
         };
@@ -395,7 +341,6 @@ impl Rig {
     /// What the Motion tab calls each moving part, in `motion_parts` order.
     pub fn motion_labels(&self) -> Vec<String> {
         match &self.kind {
-            Kind::Yohta { .. } => vec!["Head".into(), "Tail".into()],
             Kind::Sprite(_) => vec!["Whole character".into()],
             Kind::Layered { parts, .. } => parts
                 .iter()
@@ -436,7 +381,6 @@ impl Rig {
     /// The point between the eyes, in rig pixels, for gaze.
     pub fn eye_point(&self) -> Option<Point> {
         match &self.kind {
-            Kind::Yohta { .. } => Some(Point::new(232.0, 360.0)),
             Kind::Sprite(_) => None,
             Kind::Layered { eyes, .. } if !eyes.is_empty() => {
                 let n = eyes.len() as f32;
@@ -452,7 +396,6 @@ impl Rig {
     /// The head's rotation in `pose`, which the gaze is counter-rotated by.
     pub fn head_angle(&self, pose: &Pose) -> f32 {
         let index = match &self.kind {
-            Kind::Yohta { .. } => Some(0),
             Kind::Sprite(_) => None,
             Kind::Layered { parts, .. } => parts.iter().position(|p| p.kind == PartType::Head),
         };
@@ -467,12 +410,15 @@ impl Rig {
     pub fn draw_pose(&self, frame: &mut Frame, pose: &Pose) {
         let angle = |i: usize| pose.angles.get(i).copied().unwrap_or_default();
         match &self.kind {
-            Kind::Yohta { .. } | Kind::Sprite(_) => self.draw(
+            // One piece: a gentle sway around the feet stands in for the
+            // head's idle tilt.
+            Kind::Sprite(image) => sprite(
                 frame,
-                pose.gaze,
-                angle(0),
-                angle(1),
-                pose.expression == Expression::Blink,
+                image,
+                Point::ORIGIN,
+                self.size,
+                self.anchor,
+                angle(0) * 0.5,
             ),
             Kind::Layered { body, parts, eyes } => {
                 let ctx = Layered { parts, eyes, pose };
@@ -491,22 +437,6 @@ impl Rig {
         }
     }
 
-    /// Yohta's head, small, for character lists.
-    pub fn yohta_thumbnail(side: u32) -> RgbaImage {
-        let sheet = image::load_from_memory(SOURCE)
-            .expect("embedded Yohta PNG")
-            .to_rgba8();
-        let mut head = image::imageops::crop_imm(&sheet, 688, 60, 544, 520).to_image();
-        isolate(&mut head, (250, 200));
-        let scale = side as f32 / head.width().max(head.height()) as f32;
-        image::imageops::resize(
-            &head,
-            ((head.width() as f32 * scale).round() as u32).max(1),
-            ((head.height() as f32 * scale).round() as u32).max(1),
-            image::imageops::FilterType::Triangle,
-        )
-    }
-
     /// Whether a rig-space point lies on visible artwork.
     pub fn opaque(&self, p: Point) -> bool {
         self.silhouette.contains(p)
@@ -520,78 +450,6 @@ impl Rig {
     /// Where the feet meet the ground, in rig pixels.
     pub fn anchor(&self) -> Point {
         self.anchor
-    }
-
-    /// All positions are in rig coordinates. Rotation is around attachment
-    /// points, rather than the centre of the source sprite rectangle.
-    pub fn draw(
-        &self,
-        frame: &mut Frame,
-        gaze: Vector,
-        head_angle: f32,
-        tail_angle: f32,
-        blink: bool,
-    ) {
-        let (head, body, tail, eyes) = match &self.kind {
-            Kind::Yohta {
-                head,
-                body,
-                tail,
-                eyes,
-            } => (head, body, tail, eyes),
-            // One piece: a gentle sway around the feet stands in for the
-            // head's idle tilt.
-            Kind::Layered { .. } => return,
-            Kind::Sprite(image) => {
-                sprite(
-                    frame,
-                    image,
-                    Point::ORIGIN,
-                    self.size,
-                    self.anchor,
-                    head_angle * 0.5,
-                );
-                return;
-            }
-        };
-        sprite(
-            frame,
-            tail,
-            TAIL_AT.0,
-            TAIL_AT.1,
-            Point::new(345.0, 510.0),
-            tail_angle,
-        );
-        sprite(
-            frame,
-            body,
-            BODY_AT.0,
-            BODY_AT.1,
-            Point::new(295.0, 820.0),
-            0.0,
-        );
-        frame.with_save(|f| {
-            let pivot = Point::new(269.0, 532.0);
-            f.translate(Vector::new(pivot.x, pivot.y));
-            f.rotate(head_angle);
-            f.translate(Vector::new(-pivot.x, -pivot.y));
-            f.draw_image(
-                Rectangle::new(HEAD_AT.0, HEAD_AT.1),
-                canvas::Image::new(head.clone()),
-            );
-            for eye in eyes {
-                let index = gaze_index(gaze);
-                let image = if blink {
-                    &eye.closed
-                } else {
-                    &eye.frames[index]
-                };
-                f.draw_image(
-                    Rectangle::new(eye.at, eye.size),
-                    canvas::Image::new(image.clone()),
-                );
-            }
-        });
     }
 }
 
@@ -654,35 +512,6 @@ impl Layered<'_> {
     }
 }
 
-/// A source rectangle can include a few pixels from a neighbouring part.
-/// Keep only the connected sprite under the seed, including its soft edge.
-fn isolate(pixels: &mut RgbaImage, seed: (u32, u32)) {
-    let (w, h) = pixels.dimensions();
-    let mut keep = vec![false; (w * h) as usize];
-    let mut queue = VecDeque::from([seed]);
-    while let Some((x, y)) = queue.pop_front() {
-        if x >= w || y >= h {
-            continue;
-        }
-        let index = (y * w + x) as usize;
-        if keep[index] || pixels.get_pixel(x, y)[3] < 8 {
-            continue;
-        }
-        keep[index] = true;
-        if x > 0 {
-            queue.push_back((x - 1, y));
-        }
-        if y > 0 {
-            queue.push_back((x, y - 1));
-        }
-        queue.extend([(x + 1, y), (x, y + 1)]);
-    }
-    for (index, pixel) in pixels.pixels_mut().enumerate() {
-        if !keep[index] {
-            *pixel = Rgba([0, 0, 0, 0]);
-        }
-    }
-}
 
 fn sprite(frame: &mut Frame, image: &Handle, at: Point, size: Size, pivot: Point, angle: f32) {
     frame.with_save(|f| {
@@ -698,77 +527,6 @@ pub fn gaze_index(gaze: Vector) -> usize {
     (quantize(gaze.y) * (STEPS * 2 + 1) + quantize(gaze.x)) as usize
 }
 
-impl Eye {
-    fn new(head: &RgbaImage, seed: (u32, u32), region: (u32, u32, u32, u32)) -> Self {
-        let (rx, ry, w, h) = region;
-        let mut mask = vec![false; (w * h) as usize];
-        let mut queue = VecDeque::from([seed]);
-        while let Some((x, y)) = queue.pop_front() {
-            if x < rx || y < ry || x >= rx + w || y >= ry + h {
-                continue;
-            }
-            let index = ((y - ry) * w + x - rx) as usize;
-            let p = head.get_pixel(x, y);
-            if mask[index] || p[3] < 100 || p[0].min(p[1]).min(p[2]) < 185 {
-                continue;
-            }
-            mask[index] = true;
-            queue.extend([(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]);
-        }
-        assert!(
-            mask.iter().filter(|&&v| v).count() > 300,
-            "Yohta eye mask is empty"
-        );
-        let make = |gx: f32, gy: f32, closed: bool| {
-            RgbaImage::from_fn(w, h, |x, y| {
-                if !mask[(y * w + x) as usize] {
-                    return Rgba([0, 0, 0, 0]);
-                }
-                let px = x as f32;
-                let py = y as f32;
-                if closed {
-                    let curve = h as f32 * (0.60 + 0.10 * ((px / w as f32 - 0.5) * 2.0).powi(2));
-                    return if (py - curve).abs() < 2.5 {
-                        Rgba([12, 17, 48, 254])
-                    } else {
-                        Rgba([28, 36, 104, 254])
-                    };
-                }
-                let cx = w as f32 * (0.50 + gx * 0.13);
-                let cy = h as f32 * (0.48 + gy * 0.10);
-                let dx = (px - cx) / (w as f32 * 0.31);
-                let dy = (py - cy) / (h as f32 * 0.74);
-                if dx * dx + dy * dy < 1.0 {
-                    let pupil = ((px - cx) / (w as f32 * 0.085)).powi(2)
-                        + ((py - cy) / (h as f32 * 0.49)).powi(2);
-                    if pupil < 1.0 {
-                        Rgba([8, 16, 28, 254])
-                    } else {
-                        Rgba([0, 229, 229, 254])
-                    }
-                } else {
-                    *head.get_pixel(rx + x, ry + y)
-                }
-            })
-        };
-        let mut frames = Vec::new();
-        for y in -STEPS..=STEPS {
-            for x in -STEPS..=STEPS {
-                frames.push(handle(make(
-                    x as f32 / STEPS as f32,
-                    y as f32 / STEPS as f32,
-                    false,
-                )));
-            }
-        }
-        Self {
-            at: Point::new(rx as f32, ry as f32),
-            size: Size::new(w as f32, h as f32),
-            frames,
-            closed: handle(make(0.0, 0.0, true)),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -782,11 +540,13 @@ mod tests {
     #[test]
     fn approved_sheet_has_valid_regions_and_eye_masks() {
         let rig = Rig::load();
-        let Kind::Yohta { eyes, .. } = &rig.kind else {
-            panic!("Yohta rig");
+        let Kind::Layered { eyes, parts, .. } = &rig.kind else {
+            panic!("Yohta is a layered pack");
         };
         assert_eq!(eyes.len(), 2);
-        assert!(eyes.iter().all(|eye| eye.frames.len() == 49));
+        assert_eq!(parts.len(), 2, "head and tail");
+        assert!(eyes.iter().all(|eye| eye.frames.len() == 49 && eye.closed.is_some()));
+        assert_eq!(rig.size(), Size::new(WIDTH, HEIGHT));
         assert!(rig.eye_point().is_some());
     }
 

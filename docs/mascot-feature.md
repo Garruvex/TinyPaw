@@ -416,8 +416,15 @@ as shorthand for parts. Limits: 16 parts, 4 eyes, 32 images per pack.
   at once. **Reset to pack** returns to the pack's own motion. Saved motion
   that no longer fits the parts is ignored. The preview runs only while the
   page is open.
-- **Not yet.** Yohta as a pack folder (2d). Until then his art comes from the
-  concept sheet and he can't be edited or exported.
+- **Yohta as a pack (2d).** Bundled Yohta is an ordinary layered pack in
+  `assets/mascot/yohta/pack/` (head, body, tail, and white, pupil, mask and
+  blink images per eye), embedded in the executable and loaded through the
+  same parsing and checks as any installed pack. `src/mascot/yohta_pack.rs`
+  regenerates it from the approved sheet (`cargo test generate_yohta_pack --
+  --ignored`), reproducing the earlier hand-built rig's crops, socket masks
+  and procedural pupils exactly; the special-case rig is gone and the sheet
+  is no longer embedded. **Export…** works for him, and **Edit a copy**
+  installs "Yohta (copy)" for editing, since the built-in Yohta never changes.
 
 Completion checks:
 

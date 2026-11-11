@@ -1438,7 +1438,22 @@ impl App {
                 self.prepared_character = None;
             }
             UiMsg::EditArt => {
-                let c = self.current_character().clone();
+                let mut c = self.current_character().clone();
+                // Bundled Yohta stays built in: edit an installed copy of him.
+                if c.is_builtin() {
+                    let taken: Vec<&str> = self.characters.iter().map(|c| c.id).collect();
+                    match characters::copy_builtin(&taken) {
+                        Ok(copy) => {
+                            out.sets.push((character::CHARACTER, Value::Choice(copy.id)));
+                            self.add_character(copy.clone());
+                            c = copy;
+                        }
+                        Err(e) => {
+                            self.notice = Some(format!("Could not copy Yohta to edit: {e}"));
+                            return Task::none();
+                        }
+                    }
+                }
                 let id = self.begin_character_job();
                 self.character_draft = None;
                 return character_work(id, move || {

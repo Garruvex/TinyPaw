@@ -1533,12 +1533,13 @@ fn character_page<'a>(
         button("Import folder")
             .style(theme::secondary)
             .on_press(Message::Ui(UiMsg::ImportCharacter)),
-        button("Edit art")
+        // Yohta is built in, so editing him starts from a copy.
+        button(if custom.is_some() { "Edit art" } else { "Edit a copy" })
             .style(theme::secondary)
-            .on_press_maybe(custom.map(|_| Message::Ui(UiMsg::EditArt))),
+            .on_press_maybe(selected.map(|_| Message::Ui(UiMsg::EditArt))),
         button("Export…")
             .style(theme::secondary)
-            .on_press_maybe(custom.map(|_| Message::Ui(UiMsg::ExportCharacter))),
+            .on_press_maybe(selected.map(|_| Message::Ui(UiMsg::ExportCharacter))),
         button("Remove")
             .style(theme::secondary)
             .on_press_maybe(custom.map(|_| Message::Ui(UiMsg::RemoveCharacter))),

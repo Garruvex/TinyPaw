@@ -143,7 +143,7 @@ mod tests {
     #[test]
     fn editing_marks_changes_and_reset_returns_to_the_pack() {
         let mut p = yohta();
-        assert_eq!(p.labels, ["Head", "Tail"]);
+        assert_eq!(p.labels, ["1 Head", "2 Tail"]);
         assert!(!p.dirty() && !p.customised());
         p.set(
             1,
