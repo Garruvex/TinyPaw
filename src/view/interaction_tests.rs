@@ -76,6 +76,7 @@ fn overlay_buttons_receive_complete_clicks_above_the_annotation_canvas() {
             still: None,
             notice: None,
             pack: None,
+            spotlight: None,
         }),
         Size::new(1100.0, 900.0),
     );
@@ -179,8 +180,9 @@ fn settings_navigation_and_page_actions_receive_clicks() {
             Page::Character,
             vec!["AddCharacter", "ArtFromParts", "ImportCharacter"],
         ),
-        (Page::Annotation, vec!["RefreshSources"]),
-        (Page::Controls, vec!["ResetShortcuts"]),
+        (Page::Ink, vec![]),
+        (Page::Tools, vec!["RefreshSources"]),
+        (Page::Shortcuts, vec!["ResetShortcuts"]),
         (Page::Display, vec![]),
         (Page::Sound, vec!["PreviewSound", "ImportWav"]),
     ] {
@@ -191,11 +193,12 @@ fn settings_navigation_and_page_actions_receive_clicks() {
         assert_ui(&messages, &expected);
         for target in [
             Page::Pointer,
+            Page::Ink,
+            Page::Tools,
             Page::Character,
-            Page::Annotation,
-            Page::Controls,
-            Page::Display,
+            Page::Shortcuts,
             Page::Sound,
+            Page::Display,
         ] {
             assert!(
                 messages
@@ -227,14 +230,19 @@ fn character_tabs_show_the_selected_controls_and_keep_the_preview_interactive() 
         Default::default(),
         Default::default(),
     );
-    let tabs = [CharacterTab::Home, CharacterTab::Behavior];
+    let tabs = [
+        CharacterTab::Library,
+        CharacterTab::Desktop,
+        CharacterTab::Behavior,
+    ];
     for tab in tabs {
         let mut view = settings_view(&registry, &session, &[], settings::Page::Character);
         view.motion = Some(&preview);
         view.character_tab = tab;
         let messages = click_layout(settings::view(view), Size::new(1040.0, 4000.0));
         for target in [
-            CharacterTab::Home,
+            CharacterTab::Library,
+            CharacterTab::Desktop,
             CharacterTab::Artwork,
             CharacterTab::Behavior,
             CharacterTab::Advanced,
@@ -247,11 +255,17 @@ fn character_tabs_show_the_selected_controls_and_keep_the_preview_interactive() 
         }
         // Behavior has a row for every line trigger, each with Try.
         for t in crate::mascot::lines::Trigger::ALL {
-            let row = messages.iter().any(|m| matches!(m, Message::Ui(UiMsg::LineAdd(x)) if *x == t));
+            let row = messages
+                .iter()
+                .any(|m| matches!(m, Message::Ui(UiMsg::LineAdd(x)) if *x == t));
             let try_ = messages.iter().any(|m| {
                 matches!(m, Message::Ui(UiMsg::MotionTest(crate::mascot::preview::Test::Say(x))) if *x == t)
             });
-            assert_eq!((row, try_), (tab == CharacterTab::Behavior, tab == CharacterTab::Behavior), "{t:?}");
+            assert_eq!(
+                (row, try_),
+                (tab == CharacterTab::Behavior, tab == CharacterTab::Behavior),
+                "{t:?}"
+            );
         }
         assert!(
             messages
@@ -259,7 +273,7 @@ fn character_tabs_show_the_selected_controls_and_keep_the_preview_interactive() 
                 .any(|m| matches!(m, Message::Ui(UiMsg::MotionTest(_))))
         );
         for (id, owner) in [
-            (mascot::ENABLED, CharacterTab::Home),
+            (mascot::ENABLED, CharacterTab::Desktop),
             (mascot::LINES, CharacterTab::Behavior),
             (mascot::MUSIC, CharacterTab::Behavior),
         ] {
@@ -282,7 +296,16 @@ fn one_save_and_the_leave_prompt_appear_only_with_unsaved_work() {
     let session = pointing(&registry);
     let rig = Rig::load();
     let defaults = rig.motion().to_vec();
-    let preview = MotionPreview::new("yohta", rig, defaults, Default::default(), Default::default(), Default::default(), Default::default(), Default::default());
+    let preview = MotionPreview::new(
+        "yohta",
+        rig,
+        defaults,
+        Default::default(),
+        Default::default(),
+        Default::default(),
+        Default::default(),
+        Default::default(),
+    );
     let messages = |unsaved: bool, leaving: bool| {
         let mut view = settings_view(&registry, &session, &[], settings::Page::Character);
         view.motion = Some(&preview);
@@ -295,7 +318,10 @@ fn one_save_and_the_leave_prompt_appear_only_with_unsaved_work() {
         m.iter().any(|m| matches!(m, Message::Ui(u) if f(u)))
     };
     let clean = messages(false, false);
-    assert!(!has(&clean, &|u| matches!(u, UiMsg::CharacterSave | UiMsg::CharacterDiscard)));
+    assert!(!has(&clean, &|u| matches!(
+        u,
+        UiMsg::CharacterSave | UiMsg::CharacterDiscard
+    )));
     assert!(!has(&clean, &|u| matches!(u, UiMsg::Leave(_))));
     let dirty = messages(true, false);
     assert!(has(&dirty, &|u| matches!(u, UiMsg::CharacterSave)));
@@ -303,7 +329,10 @@ fn one_save_and_the_leave_prompt_appear_only_with_unsaved_work() {
     assert!(!has(&dirty, &|u| matches!(u, UiMsg::Leave(_))));
     let leaving = messages(true, true);
     for c in [LeaveChoice::Save, LeaveChoice::Discard, LeaveChoice::Stay] {
-        assert!(has(&leaving, &|u| matches!(u, UiMsg::Leave(x) if *x == c)), "{c:?}");
+        assert!(
+            has(&leaving, &|u| matches!(u, UiMsg::Leave(x) if *x == c)),
+            "{c:?}"
+        );
     }
 }
 
@@ -400,12 +429,18 @@ fn transition(prev: Element<'_, Message>, mut next: Element<'_, Message>, size: 
     let renderer = Renderer::new(iced::Font::DEFAULT, 14.0.into());
     let mut prev = prev;
     let mut tree = Tree::new(prev.as_widget());
-    let _ = prev.as_widget_mut().layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, size));
+    let _ =
+        prev.as_widget_mut()
+            .layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, size));
     tree.diff(next.as_widget());
-    let node = next.as_widget_mut().layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, size));
+    let node =
+        next.as_widget_mut()
+            .layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, size));
     let viewport = Rectangle::with_size(size);
     let mut messages = Vec::new();
-    let event = mouse::Event::CursorMoved { position: Point::new(200.0, 200.0) };
+    let event = mouse::Event::CursorMoved {
+        position: Point::new(200.0, 200.0),
+    };
     next.as_widget_mut().update(
         &mut tree,
         &iced::Event::Mouse(event),
@@ -426,24 +461,39 @@ fn character_screens_switch_without_mismatched_widget_state() {
     let session = pointing(&registry);
     let rig = Rig::load();
     let defaults = rig.motion().to_vec();
-    let preview = MotionPreview::new("yohta", rig, defaults, Default::default(), Default::default(), Default::default(), Default::default(), Default::default());
+    let preview = MotionPreview::new(
+        "yohta",
+        rig,
+        defaults,
+        Default::default(),
+        Default::default(),
+        Default::default(),
+        Default::default(),
+        Default::default(),
+    );
     let mut request = Request::new("ref.png".into());
     let thumb = image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]);
     request.tail = true;
     request.add_results(vec!["body.png".into(), "tail.png".into()]);
-    let tabs = [CharacterTab::Home, CharacterTab::Artwork, CharacterTab::Behavior, CharacterTab::Advanced];
+    let tabs = [
+        CharacterTab::Library,
+        CharacterTab::Desktop,
+        CharacterTab::Artwork,
+        CharacterTab::Behavior,
+        CharacterTab::Advanced,
+    ];
     let screen = |n: usize| {
         let mut v = settings_view(&registry, &session, &[], settings::Page::Character);
         v.motion = Some(&preview);
         match n {
-            0..=3 => v.character_tab = tabs[n],
-            4 => v.reference = Some((&request, None)),
+            0..=4 => v.character_tab = tabs[n],
+            5 => v.reference = Some((&request, None)),
             _ => v.reference = Some((&request, Some(&thumb))),
         }
         settings::view(v)
     };
-    for a in 0..6 {
-        for b in 0..6 {
+    for a in 0..7 {
+        for b in 0..7 {
             transition(screen(a), screen(b), Size::new(1040.0, 2000.0));
         }
     }

@@ -8,6 +8,14 @@
 
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EyeLayer {
+    White,
+    Pupil,
+    Mask,
+    Blink,
+}
+
 /// A file the brief asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {
@@ -23,6 +31,7 @@ pub enum Role {
     RightEye,
     LeftBrow,
     RightBrow,
+    Tracking(bool, EyeLayer),
     /// Head faces that replace the head: eyes closed (blinking), pressed
     /// (clicked) and being carried. They need painted-in eyes.
     HeadBlink,
@@ -42,6 +51,14 @@ impl Role {
             Role::RightEye => "right_eye.png",
             Role::LeftBrow => "left_eyebrow.png",
             Role::RightBrow => "right_eyebrow.png",
+            Role::Tracking(false, EyeLayer::White) => "left_eye_white.png",
+            Role::Tracking(false, EyeLayer::Pupil) => "left_eye_pupil.png",
+            Role::Tracking(false, EyeLayer::Mask) => "left_eye_mask.png",
+            Role::Tracking(false, EyeLayer::Blink) => "left_eye_blink.png",
+            Role::Tracking(true, EyeLayer::White) => "right_eye_white.png",
+            Role::Tracking(true, EyeLayer::Pupil) => "right_eye_pupil.png",
+            Role::Tracking(true, EyeLayer::Mask) => "right_eye_mask.png",
+            Role::Tracking(true, EyeLayer::Blink) => "right_eye_blink.png",
             Role::HeadBlink => "head_eyes_closed.png",
             Role::HeadPressed => "head_pressed.png",
             Role::HeadCarried => "head_carried.png",
@@ -68,6 +85,14 @@ impl Role {
             Role::RightEye => "Right eye",
             Role::LeftBrow => "Left eyebrow",
             Role::RightBrow => "Right eyebrow",
+            Role::Tracking(false, EyeLayer::White) => "Left eye background",
+            Role::Tracking(false, EyeLayer::Pupil) => "Left pupil",
+            Role::Tracking(false, EyeLayer::Mask) => "Left eye mask",
+            Role::Tracking(false, EyeLayer::Blink) => "Left eye closed",
+            Role::Tracking(true, EyeLayer::White) => "Right eye background",
+            Role::Tracking(true, EyeLayer::Pupil) => "Right pupil",
+            Role::Tracking(true, EyeLayer::Mask) => "Right eye mask",
+            Role::Tracking(true, EyeLayer::Blink) => "Right eye closed",
             Role::HeadBlink => "Head, eyes closed",
             Role::HeadPressed => "Head, pressed",
             Role::HeadCarried => "Head, being carried",
@@ -77,13 +102,29 @@ impl Role {
 
     /// Eyes and eyebrows: still layers that move with the head.
     pub fn is_face(self) -> bool {
-        matches!(self, Role::LeftEye | Role::RightEye | Role::LeftBrow | Role::RightBrow)
+        matches!(
+            self,
+            Role::LeftEye | Role::RightEye | Role::LeftBrow | Role::RightBrow
+        )
     }
 
     /// The role a returned file's name suggests. Eyebrows are checked
     /// before eyes, since "eyebrow" contains "eye".
     pub fn guess(path: &Path) -> Option<Role> {
         let name = path.file_stem()?.to_str()?.to_lowercase();
+        for right in [false, true] {
+            for layer in [
+                EyeLayer::White,
+                EyeLayer::Pupil,
+                EyeLayer::Mask,
+                EyeLayer::Blink,
+            ] {
+                let role = Role::Tracking(right, layer);
+                if name == role.file().trim_end_matches(".png") {
+                    return Some(role);
+                }
+            }
+        }
         // Head faces before eyes and the held pose: "head_eyes_closed" and
         // "head_carried" name those words too.
         if name.contains("head") {
@@ -147,6 +188,7 @@ pub struct Request {
     pub tail: bool,
     /// Separate eye and eyebrow images instead of painted-in ones.
     pub eyes: bool,
+    pub tracking: bool,
     pub brows: bool,
     /// Head faces: eyes closed for blinking, and pressed and carried
     /// reactions. Only with a separate head and painted-in eyes.
@@ -166,6 +208,7 @@ impl Request {
             head: false,
             tail: false,
             eyes: false,
+            tracking: false,
             brows: false,
             blink: false,
             faces: false,
@@ -178,16 +221,35 @@ impl Request {
     pub fn roles(&self) -> Vec<Role> {
         let mut out = vec![Role::Body];
         for (on, roles) in [
-            (self.head, &[Role::Head][..]),
+            (self.needs_head(), &[Role::Head][..]),
             (self.tail, &[Role::Tail][..]),
-            (self.eyes, &[Role::LeftEye, Role::RightEye][..]),
+            (
+                self.eyes && !self.tracking,
+                &[Role::LeftEye, Role::RightEye][..],
+            ),
             (self.brows, &[Role::LeftBrow, Role::RightBrow][..]),
-            (self.blink && self.faces_possible(), &[Role::HeadBlink][..]),
-            (self.faces && self.faces_possible(), &[Role::HeadPressed, Role::HeadCarried][..]),
+            (
+                self.blink && self.faces_possible() && !self.tracking,
+                &[Role::HeadBlink][..],
+            ),
+            (
+                self.faces && self.faces_possible(),
+                &[Role::HeadPressed, Role::HeadCarried][..],
+            ),
             (self.held, &[Role::Held][..]),
         ] {
             if on {
                 out.extend_from_slice(roles);
+            }
+        }
+        if self.tracking {
+            for right in [false, true] {
+                for layer in [EyeLayer::White, EyeLayer::Pupil, EyeLayer::Mask] {
+                    out.push(Role::Tracking(right, layer));
+                }
+                if self.blink {
+                    out.push(Role::Tracking(right, EyeLayer::Blink));
+                }
             }
         }
         out
@@ -196,7 +258,11 @@ impl Request {
     /// Head faces replace the head art, so they need a separate head with
     /// its eyes painted in: separate eye layers would stay open on top.
     pub fn faces_possible(&self) -> bool {
-        self.head && !self.eyes
+        self.needs_head() && (!self.eyes || self.tracking)
+    }
+
+    fn needs_head(&self) -> bool {
+        self.head || self.tracking || self.blink || self.faces
     }
 
     fn style(&self) -> String {
@@ -211,11 +277,17 @@ impl Request {
     /// What the face carries painted in, given the separate layers asked
     /// for.
     fn painted_face(&self) -> &'static str {
-        match (self.eyes, self.brows) {
+        match (self.eyes || self.tracking, self.brows) {
             (false, false) => "with the eyes and eyebrows painted in",
-            (true, false) => "with the eyebrows painted in but the eyes left out: paint plain skin or fur where the eyes sit, since they come as separate files",
-            (false, true) => "with the eyes painted in but the eyebrows left out: paint plain skin or fur where they sit, since they come as separate files",
-            (true, true) => "with the eyes and eyebrows left out: paint plain skin or fur where they sit, since they come as separate files",
+            (true, false) => {
+                "with the eyebrows painted in but the eyes left out: paint plain skin or fur where the eyes sit, since they come as separate files"
+            }
+            (false, true) => {
+                "with the eyes painted in but the eyebrows left out: paint plain skin or fur where they sit, since they come as separate files"
+            }
+            (true, true) => {
+                "with the eyes and eyebrows left out: paint plain skin or fur where they sit, since they come as separate files"
+            }
         }
     }
 
@@ -223,8 +295,10 @@ impl Request {
     fn describe(&self, role: Role) -> String {
         let face = self.painted_face();
         let mut removed = Vec::new();
-        if self.head {
-            removed.push("the head (keep the neck, with a little painted overlap where the head joins)");
+        if self.needs_head() {
+            removed.push(
+                "the head (keep the neck, with a little painted overlap where the head joins)",
+            );
         }
         if self.tail {
             removed.push("the tail (keep a little painted overlap where it joins)");
@@ -236,7 +310,7 @@ impl Request {
         };
         match role {
             Role::Body if removed.is_empty() => format!("the whole character standing or sitting at rest, {face}"),
-            Role::Body if self.head => format!(
+            Role::Body if self.needs_head() => format!(
                 "the character's body at rest with {} left out entirely, so nothing of the face is in this file",
                 removed.join(" and ")
             ),
@@ -252,6 +326,16 @@ impl Request {
             Role::RightEye => facial("eye", "right"),
             Role::LeftBrow => facial("eyebrow", "left"),
             Role::RightBrow => facial("eyebrow", "right"),
+            Role::Tracking(right, layer) => {
+                let side = if right { "right" } else { "left" };
+                let content = match layer {
+                    EyeLayer::White => "the eye socket and background, with the pupil and iris removed",
+                    EyeLayer::Pupil => "only the pupil and iris at their neutral gaze position",
+                    EyeLayer::Mask => "an alpha mask for the visible eye opening, opaque white inside the opening and fully transparent outside it; alpha controls clipping",
+                    EyeLayer::Blink => "the closed eyelid replacing the entire eye, with the same alignment",
+                };
+                format!("the {side} eye as the viewer sees it: {content}, at its exact location on the head")
+            }
             Role::HeadBlink => "only the head, identical to head.png in position, size and outline, with the eyes gently closed as in a blink".into(),
             Role::HeadPressed => "only the head, identical to head.png in position, size and outline, with a surprised or delighted expression, as when poked".into(),
             Role::HeadCarried => "only the head, identical to head.png in position, size and outline, with a startled or excited expression, as when being picked up".into(),
@@ -268,18 +352,193 @@ impl Request {
         )
     }
 
-    /// One brief covering every requested file.
+    fn manifest(&self) -> serde_json::Value {
+        use super::motion::{MotionSpec, PartType};
+        use super::pack::{EyeDef, PartDef, Pose, slug};
+        use serde_json::json;
+
+        let roles = self.roles();
+        let mut parts = Vec::new();
+        for role in &roles {
+            let kind = match role {
+                Role::Head => PartType::Head,
+                Role::Tail => PartType::Tail,
+                role if role.is_face() => PartType::Other,
+                _ => continue,
+            };
+            let mut faces = [None, None, None];
+            if kind == PartType::Head {
+                for face in &roles {
+                    if let Some(slot) = face.face_slot() {
+                        faces[slot] = Some(face.file().to_owned());
+                    }
+                }
+            }
+            parts.push(PartDef {
+                kind,
+                image: role.file().to_owned(),
+                pivot: (0.5, 0.5),
+                parent: (role.is_face() && self.needs_head()).then_some(0),
+                behind: kind.behind_by_default(),
+                motion: MotionSpec::default_for(kind),
+                faces,
+            });
+        }
+        let pose = Pose {
+            name: "sit".into(),
+            ground: (0.5, 0.9),
+            body: Role::Body.file().into(),
+            parts,
+            eyes: if self.tracking {
+                [false, true]
+                    .into_iter()
+                    .map(|right| EyeDef {
+                        white: Role::Tracking(right, EyeLayer::White).file().into(),
+                        pupil: Role::Tracking(right, EyeLayer::Pupil).file().into(),
+                        mask: Role::Tracking(right, EyeLayer::Mask).file().into(),
+                        blink: self
+                            .blink
+                            .then(|| Role::Tracking(right, EyeLayer::Blink).file().into()),
+                        max_offset: (0.012, 0.009),
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            whole: None,
+        };
+        let name: String = self
+            .reference
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Character")
+            .chars()
+            .take(60)
+            .collect();
+        let mut manifest = json!({
+            "schema_version": 1, "id": format!("{}-pet", slug(&name)), "name": name,
+            "canvas": [self.canvas, self.canvas], "default_pose": pose.name,
+            "poses": {(&pose.name): pose.to_json()}
+        });
+        if self.held {
+            manifest["reactions"] =
+                json!({"pickup": {"held_pose": {"image": Role::Held.file(), "place": [0, 0, 1]}}});
+        }
+        if self.head {
+            manifest["music"] = json!({"bop": "nod"});
+        }
+        manifest
+    }
+
+    /// Refuse a completed folder that silently omits a selected feature.
+    pub fn validate_folder(&self, folder: &Path) -> Result<(), String> {
+        use super::pack::read_manifest;
+        let manifest = read_manifest(folder)?;
+        if manifest.canvas != (self.canvas, self.canvas) {
+            return Err(format!(
+                "The requested feature artwork uses a {} × {} canvas.",
+                self.canvas, self.canvas
+            ));
+        }
+        let pose = manifest.default_pose();
+        let mapped = manifest.files();
+        let missing: Vec<_> = self
+            .roles()
+            .into_iter()
+            .filter(|role| !mapped.iter().any(|file| file == role.file()))
+            .map(|role| role.file())
+            .collect();
+        if !missing.is_empty() {
+            return Err(format!(
+                "The selected features need these mapped files: {}. Ask your art tool to finish the folder.",
+                missing.join(", ")
+            ));
+        }
+        let expected = self.manifest();
+        let actual = pose.to_json();
+        let expected_pose = &expected["poses"]["sit"];
+        // Match the layer relationships, preserving the creator's measured coordinates.
+        for key in ["body", "parts", "eyes"] {
+            if !mapping_contains(&actual[key], &expected_pose[key]) {
+                return Err(format!(
+                    "character.json has an incomplete {key} mapping for the selected features."
+                ));
+            }
+        }
+        if self.held
+            && manifest.reactions.to_json()["pickup"]["held_pose"]["image"] != Role::Held.file()
+        {
+            return Err("character.json must map held.png to the pickup held pose.".into());
+        }
+        if self.head && manifest.bop != Some(super::motion::Bop::Nod) {
+            return Err("character.json must include the selected head bop in music.bop.".into());
+        }
+        manifest.validate_files(folder)
+    }
+
+    pub fn fits_canvas(&self) -> bool {
+        u64::from(self.canvas) * u64::from(self.canvas) * 4 * self.roles().len() as u64
+            <= 128 * 1024 * 1024
+    }
+
+    /// One brief covering the complete folder and its import manifest.
     pub fn brief(&self) -> String {
         let roles = self.roles();
         let mut out = format!(
-            "Create {} for a desktop character.\n\n{}\n\nFiles:\n",
-            if roles.len() == 1 { "one image".to_owned() } else { format!("{} images", roles.len()) },
+            "Create a TinyPaw character folder containing character.json and {}. Return the finished folder, or a downloadable ZIP of it. Put all files together at the folder root.\n\n{}\n\nArtwork files:\n",
+            if roles.len() == 1 {
+                "one image".to_owned()
+            } else {
+                format!("{} images", roles.len())
+            },
             self.rules()
         );
         for role in roles {
             out.push_str(&format!("- {}: {}.\n", role.file(), self.describe(role)));
         }
+        out.push_str(&format!(
+            "\nSelected features to complete: {}.\n",
+            self.features().join(", ")
+        ));
+        out.push_str("\nDeliver an actual character.json file inside the downloadable folder. Measure placement from the finished artwork and write the final numeric coordinates yourself. Each PNG must retain the full shared canvas, so its x/y placement is already encoded by transparent padding. Never trim or centre individual layers. Measure ground_anchor at the feet, each head pivot at the neck joint, each tail pivot at its attachment, and eye max_offset from the safe pupil travel inside its mask. Coordinates [x, y] are canvas fractions from the top left: divide pixel x by canvas width and pixel y by canvas height. For held_pose, include place: [0, 0, 1] for shared-canvas alignment, or measured [x_offset, y_offset, scale] if needed. Replace the example anchor, pivot and eye travel numbers below with measured values. Keep every selected feature and all filename mappings. Stack the resting layers to verify alignment, confirm eyes have a background/pupil/alpha mask each, and confirm each expression and held pose is mapped. Deliver every required file together.\n\n");
+        out.push_str(&serde_json::to_string_pretty(&self.manifest()).unwrap());
         out
+    }
+
+    pub fn features(&self) -> Vec<&'static str> {
+        let mut features = vec!["resting character"];
+        for (enabled, label) in [
+            (
+                self.tracking,
+                "cursor-tracking eyes (two backgrounds, pupils and masks; separate head required)",
+            ),
+            (
+                self.head,
+                "head bop to music (separate head, neck pivot and music nod mapping)",
+            ),
+            (
+                self.tail,
+                "moving tail (separate tail and attachment pivot)",
+            ),
+            (self.eyes && !self.tracking, "separate complete eyes"),
+            (self.brows, "separate eyebrows"),
+            (self.blink && self.faces_possible(), "blinking"),
+            (
+                self.faces && self.faces_possible(),
+                "pressed and carried expressions with eyes painted in",
+            ),
+            (
+                self.held,
+                "held pose (complete hanging character and pickup mapping)",
+            ),
+        ] {
+            if enabled {
+                features.push(label);
+            }
+        }
+        features
     }
 
     /// A prompt for one file, for tools that return one image at a time.
@@ -327,7 +586,27 @@ impl Request {
 
     /// Requested roles no returned file fills yet.
     pub fn missing(&self) -> Vec<Role> {
-        self.roles().into_iter().filter(|r| self.file_for(*r).is_none()).collect()
+        self.roles()
+            .into_iter()
+            .filter(|r| self.file_for(*r).is_none())
+            .collect()
+    }
+}
+
+fn mapping_contains(actual: &serde_json::Value, expected: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    match expected {
+        Value::Null => true,
+        Value::Object(fields) => fields
+            .iter()
+            .filter(|(key, _)| !["pivot", "ground_anchor", "max_offset"].contains(&key.as_str()))
+            .all(|(key, value)| mapping_contains(&actual[key], value)),
+        Value::Array(items) => actual.as_array().is_some_and(|values| {
+            items
+                .iter()
+                .all(|item| values.iter().any(|value| mapping_contains(value, item)))
+        }),
+        _ => actual == expected,
     }
 }
 
@@ -341,7 +620,11 @@ mod tests {
         r.style = "soft watercolour".into();
         assert_eq!(r.roles(), [Role::Body]);
         let brief = r.brief();
-        assert!(brief.contains("one image") && brief.contains("body.png") && brief.contains("soft watercolour"));
+        assert!(
+            brief.contains("one image")
+                && brief.contains("body.png")
+                && brief.contains("soft watercolour")
+        );
         assert!(brief.contains("1024×1024") && !brief.contains("tail.png"));
     }
 
@@ -353,7 +636,16 @@ mod tests {
         r.canvas = 2048;
         assert_eq!(r.roles(), [Role::Body, Role::Tail, Role::Held]);
         let brief = r.brief();
-        for f in ["body.png", "tail.png", "held.png", "2048×2048", "the tail (keep", "left out entirely", "scruff of the neck", "hanging straight down"] {
+        for f in [
+            "body.png",
+            "tail.png",
+            "held.png",
+            "2048×2048",
+            "the tail (keep",
+            "left out entirely",
+            "scruff of the neck",
+            "hanging straight down",
+        ] {
             assert!(brief.contains(f), "{f}");
         }
         assert!(r.prompt(Role::Tail).contains("named tail.png"));
@@ -367,13 +659,29 @@ mod tests {
         r.brows = true;
         assert_eq!(
             r.roles(),
-            [Role::Body, Role::Head, Role::LeftEye, Role::RightEye, Role::LeftBrow, Role::RightBrow]
+            [
+                Role::Body,
+                Role::Head,
+                Role::LeftEye,
+                Role::RightEye,
+                Role::LeftBrow,
+                Role::RightBrow
+            ]
         );
         let brief = r.brief();
-        for f in ["head.png", "left_eye.png", "right_eye.png", "left_eyebrow.png", "right_eyebrow.png"] {
+        for f in [
+            "head.png",
+            "left_eye.png",
+            "right_eye.png",
+            "left_eyebrow.png",
+            "right_eyebrow.png",
+        ] {
             assert!(brief.contains(f), "{f}");
         }
-        assert!(brief.contains("eyes and eyebrows left out"), "the head leaves room for them");
+        assert!(
+            brief.contains("eyes and eyebrows left out"),
+            "the head leaves room for them"
+        );
         assert!(!brief.contains("eyes and eyebrows painted in\n"));
         // Without separate eyes, the face keeps them painted in.
         let plain = Request::new("ref.png".into());
@@ -385,15 +693,36 @@ mod tests {
         let mut r = Request::new("ref.png".into());
         r.blink = true;
         r.faces = true;
-        assert_eq!(r.roles(), [Role::Body], "no head, no faces");
+        assert_eq!(
+            r.roles(),
+            [
+                Role::Body,
+                Role::Head,
+                Role::HeadBlink,
+                Role::HeadPressed,
+                Role::HeadCarried
+            ],
+            "expression features automatically include the required head"
+        );
         r.head = true;
         assert_eq!(
             r.roles(),
-            [Role::Body, Role::Head, Role::HeadBlink, Role::HeadPressed, Role::HeadCarried]
+            [
+                Role::Body,
+                Role::Head,
+                Role::HeadBlink,
+                Role::HeadPressed,
+                Role::HeadCarried
+            ]
         );
-        assert!(r.brief().contains("head_eyes_closed.png") && r.brief().contains("eyes gently closed"));
+        assert!(
+            r.brief().contains("head_eyes_closed.png") && r.brief().contains("eyes gently closed")
+        );
         r.eyes = true;
-        assert!(!r.roles().contains(&Role::HeadBlink), "separate eyes would stay open on top");
+        assert!(
+            !r.roles().contains(&Role::HeadBlink),
+            "separate eyes would stay open on top"
+        );
         for (name, role) in [
             ("head_eyes_closed.png", Role::HeadBlink),
             ("Head-Blink.png", Role::HeadBlink),
@@ -423,7 +752,11 @@ mod tests {
     fn returned_files_match_by_name_and_can_be_reassigned() {
         let mut r = Request::new("ref.png".into());
         r.tail = true;
-        r.add_results(vec!["cat_body.png".into(), "Cat Tail.PNG".into(), "extra.png".into()]);
+        r.add_results(vec![
+            "cat_body.png".into(),
+            "Cat Tail.PNG".into(),
+            "extra.png".into(),
+        ]);
         assert_eq!(r.file_for(Role::Body), Some(Path::new("cat_body.png")));
         assert_eq!(r.file_for(Role::Tail), Some(Path::new("Cat Tail.PNG")));
         assert!(r.missing().is_empty());

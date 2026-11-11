@@ -48,7 +48,10 @@ impl Trigger {
     }
 
     fn index(self) -> usize {
-        Self::ALL.iter().position(|t| *t == self).expect("listed trigger")
+        Self::ALL
+            .iter()
+            .position(|t| *t == self)
+            .expect("listed trigger")
     }
 
     /// Lines nobody asked for, which Quiet lines turns off.
@@ -161,7 +164,8 @@ impl Lines {
         }
         if let Json::Object(_) = bubble {
             if let Some(c) = bubble["background"].as_str() {
-                out.bubble.background = parse_color(c).ok_or("bubble background must be #RRGGBB")?;
+                out.bubble.background =
+                    parse_color(c).ok_or("bubble background must be #RRGGBB")?;
             }
             if let Some(c) = bubble["text"].as_str() {
                 out.bubble.text = parse_color(c).ok_or("bubble text colour must be #RRGGBB")?;
@@ -169,9 +173,7 @@ impl Lines {
             if let Some(w) = bubble["max_width"].as_f64() {
                 let w = w as f32;
                 if !(MIN_WIDTH..=MAX_WIDTH).contains(&w) {
-                    return Err(format!(
-                        "bubble max_width must be {MIN_WIDTH}–{MAX_WIDTH}"
-                    ));
+                    return Err(format!("bubble max_width must be {MIN_WIDTH}–{MAX_WIDTH}"));
                 }
                 out.bubble.max_width = w;
             }
@@ -227,7 +229,11 @@ fn parse_line(v: &Json, allow_user: bool) -> Result<Line, String> {
             Some(file) if allow_user && valid_user_sound(file) => SoundRef::User(file.to_owned()),
             Some(_) => return Err(format!("`{s}` isn't a sound in this pack")),
             None if valid_pack_sound(s) => SoundRef::Pack(s.to_owned()),
-            None => return Err(format!("line sound `{s}` must be a WAV inside the pack folder")),
+            None => {
+                return Err(format!(
+                    "line sound `{s}` must be a WAV inside the pack folder"
+                ));
+            }
         }),
     };
     Ok(Line {
@@ -382,7 +388,10 @@ mod tests {
             "idle": [{ "text": "…", "sound": "user:a1b2.wav" }],
         });
         let bubble = json!({ "background": "#202020", "max_width": 260 });
-        assert!(Lines::parse(&lines, &bubble, false).is_err(), "packs can't name user sounds");
+        assert!(
+            Lines::parse(&lines, &bubble, false).is_err(),
+            "packs can't name user sounds"
+        );
         let l = Lines::parse(&lines, &bubble, true).unwrap();
         assert_eq!(l.get(Trigger::Click).len(), 2);
         assert_eq!(l.sounds().len(), 2);

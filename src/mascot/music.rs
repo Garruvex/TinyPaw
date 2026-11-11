@@ -240,7 +240,10 @@ mod tests {
         }
         // At most a normal frame's advance plus a small nudge.
         assert!(biggest < 0.06, "{biggest}");
-        assert!((c.bpm() - STEADY_BPM).abs() < 1.0, "back to the steady pace");
+        assert!(
+            (c.bpm() - STEADY_BPM).abs() < 1.0,
+            "back to the steady pace"
+        );
     }
 
     #[test]

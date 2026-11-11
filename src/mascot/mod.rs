@@ -1,9 +1,9 @@
 //! Yohta, the optional desktop character. `desktop` is the resident app's
 //! character window; `run` is the standalone `--mascot-preview` window, which
 //! starts no hooks, capture, tray or audio device. Both share the rig.
+pub mod beat;
 #[cfg(windows)]
 pub mod desktop;
-pub mod beat;
 pub mod editor;
 pub mod lines;
 pub mod motion;

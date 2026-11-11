@@ -75,3 +75,27 @@ Still required before advertising the Discord workflow, per the build order:
 - Clicking a slide hyperlink while active, then opening it normally after exit.
 - Mixed-DPI and negative monitor origins. Phase 1 covers the primary display only.
 - Repeating the slice on Niri.
+
+## Annotation smoothness pass, 12 November 2026
+
+CPU draw time per frame with the production renderer and damage tracking, release build, same machine. `cargo test --release render_cost -- --ignored --nocapture`. The "before" column is the 11 November commit (`a07aa7f`) running the same benchmark. Times are medians; the machine was in use, so expect ±30% noise.
+
+| Scenario | Before | After |
+| --- | --- | --- |
+| Spotlight following the pointer over 24 long strokes, 1920×1080 | 18.4 ms, 100% repainted | 3.6 ms, 10% repainted |
+| Same, 2560×1440 | 21.1 ms, 100% repainted | 3.0 ms, 5% repainted |
+| Spotlight alone, 2560×1440 | 10.0 ms | 2.3 ms |
+| Drawing a 600-point stroke over that ink, 2560×1440 | 8.2 ms, 25% repainted | 0.28 ms, 1% repainted |
+| Stretch Paw moving, 2560×1440 | 2.3 ms | 1.4 ms |
+| Furry Paw moving, 2560×1440 | 0.13 ms | 0.04 ms |
+
+What changed:
+
+- **Renderer** (vendored `iced_tiny_skia`, see `vendor/iced_tiny_skia/TINYPAW.md`): damaged regions render into their own small pixmap, live shapes are diffed one by one, strokes are outlined once, and only damaged rectangles are presented. Before, the full window (about 15 MB at 1440p) was copied to the screen every frame.
+- **Spotlight** dims the screen with fixed 128 px tiles, so moving it repaints only around the old and new hole. The soft edge is a cached radial image, which also replaces eight visible opacity bands with a smooth ramp. The mask is its own layer below the ink.
+- **Strokes** are smoothed (pointer positions arrive in whole pixels, so slow strokes followed a pixel staircase) and drawn as a centripetal Catmull-Rom curve through every sample, instead of straight segments between samples. Opaque strokes are drawn in short runs so a repaint touches only nearby runs, and only the growing end of a stroke being drawn repaints.
+- **Timing.** Windows rounds timed waits up to its 15.6 ms tick: a 16 ms wait measured 31 ms and a 33 ms wait 47 ms on this machine. The desktop lens moved on a 16 ms `WM_TIMER` (about 32 fps, lowest message priority), Spotlight anywhere tracked the cursor on a 16 ms timer, and the character polled at 16/33 ms. The lens and Spotlight anywhere now follow the compositor's refresh (`DwmFlush`), overlay animation uses the same refresh ticks instead of `window::frames()` (which fired once per open window and ran uncapped), and TinyPaw asks for 1 ms timer resolution only while something is live on screen.
+
+`cargo test stroke_quality_snapshot -- --ignored` with `TINYPAW_STROKE_PNG` set writes the old and new rendering of the same pointer-like stroke for comparison.
+
+**Not yet measured on screen:** presented frame rate, input-to-photon latency, and the desktop lens at 144/160 Hz. These are CPU draw times only.

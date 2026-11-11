@@ -148,7 +148,10 @@ pub fn register(r: &mut Registrar) {
             group: "Character",
             order,
             default: Value::Float(default),
-            constraint: Constraint::Range { min: 1.0, max: 30.0 },
+            constraint: Constraint::Range {
+                min: 1.0,
+                max: 30.0,
+            },
         });
     }
     r.setting(SettingDef {

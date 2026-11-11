@@ -186,6 +186,10 @@ pub fn present(
         })
         .unwrap_or_else(|| vec![Rectangle::with_size(viewport.logical_size())]);
 
+    // TinyPaw patch: present only what was redrawn. Upstream copied the
+    // whole window to the screen every frame (about 15 MB at 2560x1440) even
+    // when a few pixels changed, and presented an unchanged frame in full.
+    let mut presented = Vec::new();
     if damage.is_empty() {
         if let Some(last_layers) = last_layers {
             surface.layer_stack.push_front(last_layers.clone());
@@ -213,10 +217,30 @@ pub fn present(
             &damage,
             background_color,
         );
+
+        let scale = viewport.scale_factor();
+        let (width, height) = (physical_size.width, physical_size.height);
+        presented.extend(damage.iter().filter_map(|region| {
+            let region = *region * scale;
+            let x0 = (region.x.floor().max(0.0) as u32).min(width);
+            let y0 = (region.y.floor().max(0.0) as u32).min(height);
+            let x1 = ((region.x + region.width).ceil().max(0.0) as u32)
+                .min(width);
+            let y1 = ((region.y + region.height).ceil().max(0.0) as u32)
+                .min(height);
+            Some(softbuffer::Rect {
+                x: x0,
+                y: y0,
+                width: NonZeroU32::new(x1.saturating_sub(x0))?,
+                height: NonZeroU32::new(y1.saturating_sub(y0))?,
+            })
+        }));
     }
 
     on_pre_present();
-    buffer.present().map_err(|_| compositor::SurfaceError::Lost)
+    buffer
+        .present_with_damage(&presented)
+        .map_err(|_| compositor::SurfaceError::Lost)
 }
 
 pub fn screenshot(

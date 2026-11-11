@@ -301,7 +301,9 @@ impl ToolState for PointTool {
                             kind,
                             color: Rgba(cx.settings.color(INK_COLOR)),
                             size: 28.0 * cx.settings.float(SIZE) as f32 / BASE_SIZE,
-                            angle: -(cx.settings.float(ANGLE) as f32).to_radians(),
+                            angle: ev
+                                .paw_angle
+                                .unwrap_or_else(|| -(cx.settings.float(ANGLE) as f32).to_radians()),
                             born: cx.now,
                         }));
                     }

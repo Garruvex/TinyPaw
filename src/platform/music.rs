@@ -77,7 +77,9 @@ impl Meter {
                 .ok()
         };
         if thread.is_none() {
-            shared.state.store(State::Unavailable as u8, Ordering::Relaxed);
+            shared
+                .state
+                .store(State::Unavailable as u8, Ordering::Relaxed);
         }
         Self { shared, thread }
     }
@@ -211,7 +213,9 @@ fn run(shared: &Shared) {
             .as_ref()
             .map_or(0.0, |list| list.iter().fold(0.0f32, |m, (_, p)| m.max(*p)));
         shown_all = fall(shown_all, all, dt);
-        shared.all.store(meter(shown_all).to_bits(), Ordering::Relaxed);
+        shared
+            .all
+            .store(meter(shown_all).to_bits(), Ordering::Relaxed);
         let peak = match &source {
             Source::All => apps.map(|list| list.iter().fold(0.0f32, |m, (_, p)| m.max(*p))),
             Source::App(_) => apps.map(|list| {
@@ -222,13 +226,19 @@ fn run(shared: &Shared) {
             Source::Input(_) => input.as_ref().map(|(_, p)| p.take()),
         };
         shown_heard = fall(shown_heard, peak.unwrap_or(0.0), dt);
-        shared.heard.store(meter(shown_heard).to_bits(), Ordering::Relaxed);
+        shared
+            .heard
+            .store(meter(shown_heard).to_bits(), Ordering::Relaxed);
         match peak {
             Some(p) => {
                 if envelope.step(p, dt) {
                     shared.started.store(true, Ordering::Relaxed);
                 }
-                let s = if envelope.playing() { State::Playing } else { State::Silent };
+                let s = if envelope.playing() {
+                    State::Playing
+                } else {
+                    State::Silent
+                };
                 shared.state.store(s as u8, Ordering::Relaxed);
             }
             None => {
@@ -236,10 +246,14 @@ fn run(shared: &Shared) {
                 if !matches!(source, Source::Input(_)) {
                     sessions = None;
                 }
-                shared.state.store(State::Unavailable as u8, Ordering::Relaxed);
+                shared
+                    .state
+                    .store(State::Unavailable as u8, Ordering::Relaxed);
             }
         }
-        shared.level.store(envelope.level().to_bits(), Ordering::Relaxed);
+        shared
+            .level
+            .store(envelope.level().to_bits(), Ordering::Relaxed);
         std::thread::sleep(TICK);
     }
     shared.level.store(0f32.to_bits(), Ordering::Relaxed);
@@ -263,7 +277,9 @@ fn session_manager() -> Option<::windows::Win32::Media::Audio::IAudioSessionMana
         let devices: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
         let device = devices.GetDefaultAudioEndpoint(eRender, eConsole).ok()?;
-        device.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None).ok()
+        device
+            .Activate::<IAudioSessionManager2>(CLSCTX_ALL, None)
+            .ok()
     }
 }
 
@@ -283,12 +299,18 @@ fn peaks(
     unsafe {
         let list = manager.GetSessionEnumerator().ok()?;
         for i in 0..list.GetCount().ok()? {
-            let Ok(session) = list.GetSession(i) else { continue };
+            let Ok(session) = list.GetSession(i) else {
+                continue;
+            };
             if session.GetState().ok() != Some(AudioSessionStateActive) {
                 continue;
             }
-            let Ok(control) = session.cast::<IAudioSessionControl2>() else { continue };
-            let Ok(pid) = control.GetProcessId() else { continue };
+            let Ok(control) = session.cast::<IAudioSessionControl2>() else {
+                continue;
+            };
+            let Ok(pid) = control.GetProcessId() else {
+                continue;
+            };
             // 0 is the system sounds session.
             if pid == own || pid == 0 {
                 continue;
@@ -302,7 +324,10 @@ fn peaks(
             if exe.eq_ignore_ascii_case("tinypaw.exe") {
                 continue;
             }
-            match out.iter_mut().find(|(a, _)| a.exe.eq_ignore_ascii_case(&exe)) {
+            match out
+                .iter_mut()
+                .find(|(a, _)| a.exe.eq_ignore_ascii_case(&exe))
+            {
                 Some((a, p)) => {
                     if !a.pids.contains(&pid) {
                         a.pids.push(pid);
@@ -358,13 +383,17 @@ fn exe_name(pid: u32) -> Option<String> {
         }
         let mut buf = [0u16; 1024];
         let mut len = buf.len() as u32;
-        let ok = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len);
+        let ok =
+            QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len);
         CloseHandle(process);
         if ok == 0 {
             return None;
         }
         let path = String::from_utf16_lossy(&buf[..len as usize]);
-        path.rsplit(['\\', '/']).next().filter(|s| !s.is_empty()).map(str::to_owned)
+        path.rsplit(['\\', '/'])
+            .next()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
     }
 }
 

@@ -66,7 +66,9 @@ fn decode(v: u8) -> Sensitivity {
 impl Follower {
     pub fn start(sensitivity: Sensitivity, target: Target) -> Self {
         let shared = Arc::new(Shared::default());
-        shared.sensitivity.store(encode(sensitivity), Ordering::Relaxed);
+        shared
+            .sensitivity
+            .store(encode(sensitivity), Ordering::Relaxed);
         let stop = Arc::new(AtomicBool::new(false));
         let thread = {
             let (shared, stop, target) = (shared.clone(), stop.clone(), target.clone());
@@ -94,7 +96,11 @@ impl Follower {
     /// Ignore onsets while TinyPaw plays a sound of this length.
     pub fn hold_off(&self, seconds: f32) {
         let until = Instant::now() + Duration::from_secs_f32(seconds.clamp(0.0, 10.0) + 0.05);
-        let mut h = self.shared.hold_until.lock().unwrap_or_else(|e| e.into_inner());
+        let mut h = self
+            .shared
+            .hold_until
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         *h = Some(h.map_or(until, |current| current.max(until)));
     }
 
@@ -111,7 +117,11 @@ impl Follower {
     /// seconds; `None` while no beat is being followed.
     pub fn phase(&self, offset: f32) -> Option<f32> {
         let period = f32::from_bits(self.shared.period.load(Ordering::Relaxed));
-        let last = (*self.shared.last_beat.lock().unwrap_or_else(|e| e.into_inner()))?;
+        let last = (*self
+            .shared
+            .last_beat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()))?;
         if period <= 0.0 {
             return None;
         }
@@ -145,7 +155,9 @@ fn run(shared: &Shared, stop: &AtomicBool, target: &Target) {
         let (tx, rx) = sync_channel(64);
         let opened = match target {
             Target::Output => open_loopback(tx).map(|(s, rate)| (Capture::Cpal(s), rate)),
-            Target::Input(name) => open_input_chunks(name, tx).map(|(s, rate)| (Capture::Cpal(s), rate)),
+            Target::Input(name) => {
+                open_input_chunks(name, tx).map(|(s, rate)| (Capture::Cpal(s), rate))
+            }
             Target::Process(pid) => {
                 ProcessLoopback::start(*pid, tx).map(|p| (Capture::Process(p), PROCESS_RATE))
             }
@@ -178,7 +190,9 @@ fn follow(shared: &Shared, stop: &AtomicBool, rx: &Receiver<Vec<f32>>, rate: u32
         heard = Instant::now();
         tracker.set_sensitivity(decode(shared.sensitivity.load(Ordering::Relaxed)));
         if let Some(until) = *shared.hold_until.lock().unwrap_or_else(|e| e.into_inner()) {
-            let left = until.saturating_duration_since(Instant::now()).as_secs_f64();
+            let left = until
+                .saturating_duration_since(Instant::now())
+                .as_secs_f64();
             if left > 0.0 {
                 tracker.hold_off(left);
             }
@@ -210,7 +224,10 @@ fn build_mono(
                 config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     mono.clear();
-                    mono.extend(data.chunks(channels).map(|f| f.iter().sum::<f32>() / channels as f32));
+                    mono.extend(
+                        data.chunks(channels)
+                            .map(|f| f.iter().sum::<f32>() / channels as f32),
+                    );
                     sink(&mono);
                 },
                 err,
@@ -265,7 +282,10 @@ fn input_device(name: &str) -> Option<cpal::Device> {
 
 /// A mono stream from the input device called `name`, not started yet.
 /// Also used by the playback meter for its level.
-pub(super) fn open_input(name: &str, sink: impl FnMut(&[f32]) + Send + 'static) -> Option<cpal::Stream> {
+pub(super) fn open_input(
+    name: &str,
+    sink: impl FnMut(&[f32]) + Send + 'static,
+) -> Option<cpal::Stream> {
     use cpal::traits::DeviceTrait;
     let device = input_device(name)?;
     let supported = device.default_input_config().ok()?;
@@ -274,7 +294,10 @@ pub(super) fn open_input(name: &str, sink: impl FnMut(&[f32]) + Send + 'static) 
 
 fn open_input_chunks(name: &str, tx: SyncSender<Vec<f32>>) -> Option<(cpal::Stream, u32)> {
     use cpal::traits::{DeviceTrait, StreamTrait};
-    let rate = input_device(name)?.default_input_config().ok()?.sample_rate();
+    let rate = input_device(name)?
+        .default_input_config()
+        .ok()?
+        .sample_rate();
     let stream = open_input(name, to_channel(tx))?;
     stream.play().ok()?;
     Some((stream, rate))
@@ -353,7 +376,12 @@ mod handler {
     impl IAgileObject_Impl for Activated_Impl {}
 }
 
-fn process_capture(pid: u32, tx: &SyncSender<Vec<f32>>, stop: &AtomicBool, ready: &SyncSender<bool>) {
+fn process_capture(
+    pid: u32,
+    tx: &SyncSender<Vec<f32>>,
+    stop: &AtomicBool,
+    ready: &SyncSender<bool>,
+) {
     use ::windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
     // SAFETY: this thread owns its COM apartment for its whole life.
     let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
@@ -450,7 +478,14 @@ fn start_client(
     unsafe {
         // A 200 ms buffer, read every 10 ms.
         client
-            .Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 2_000_000, 0, &format, None)
+            .Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_LOOPBACK,
+                2_000_000,
+                0,
+                &format,
+                None,
+            )
             .ok()?;
         let capture: IAudioCaptureClient = client.GetService().ok()?;
         client.Start().ok()?;
@@ -476,14 +511,19 @@ fn capture_loop(
         // the client was initialised with.
         unsafe {
             loop {
-                let Ok(size) = capture.GetNextPacketSize() else { return };
+                let Ok(size) = capture.GetNextPacketSize() else {
+                    return;
+                };
                 if size == 0 {
                     break;
                 }
                 let mut data = std::ptr::null_mut();
                 let mut frames = 0u32;
                 let mut flags = 0u32;
-                if capture.GetBuffer(&mut data, &mut frames, &mut flags, None, None).is_err() {
+                if capture
+                    .GetBuffer(&mut data, &mut frames, &mut flags, None, None)
+                    .is_err()
+                {
                     return;
                 }
                 let n = frames as usize;
@@ -491,7 +531,11 @@ fn capture_loop(
                     mono.extend(std::iter::repeat_n(0.0, n));
                 } else {
                     let samples = std::slice::from_raw_parts(data.cast::<f32>(), n * channels);
-                    mono.extend(samples.chunks(channels).map(|f| f.iter().sum::<f32>() / channels as f32));
+                    mono.extend(
+                        samples
+                            .chunks(channels)
+                            .map(|f| f.iter().sum::<f32>() / channels as f32),
+                    );
                 }
                 let _ = capture.ReleaseBuffer(frames);
             }

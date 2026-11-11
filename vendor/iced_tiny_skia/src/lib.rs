@@ -50,6 +50,8 @@ pub struct Renderer {
     default_text_size: Pixels,
     layers: layer::Stack,
     engine: Engine, // TODO: Shared engine
+    scratch: Vec<u32>,
+    scratch_mask: Option<tiny_skia::Mask>,
 }
 
 impl Renderer {
@@ -59,6 +61,8 @@ impl Renderer {
             default_text_size,
             layers: layer::Stack::new(),
             engine: Engine::new(),
+            scratch: Vec::new(),
+            scratch_mask: None,
         }
     }
 
@@ -70,7 +74,7 @@ impl Renderer {
     pub fn draw(
         &mut self,
         pixels: &mut tiny_skia::PixmapMut<'_>,
-        clip_mask: &mut tiny_skia::Mask,
+        _clip_mask: &mut tiny_skia::Mask,
         viewport: &Viewport,
         damage: &[Rectangle],
         background_color: Color,
@@ -79,126 +83,151 @@ impl Renderer {
 
         self.layers.flush();
 
+        // TinyPaw patch: render each damaged region into a scratch pixmap the
+        // size of that region and copy it back. Upstream drew into the whole
+        // window with a window-sized clip mask, so every path was rasterized
+        // across its full extent and the mask (a full-screen memset) was
+        // cleared several times per layer, even for a few damaged pixels.
+        let (width, height) = (pixels.width(), pixels.height());
         for &damage_bounds in damage {
-            let damage_bounds = damage_bounds * scale_factor;
-
-            let path = tiny_skia::PathBuilder::from_rect(
-                tiny_skia::Rect::from_xywh(
-                    damage_bounds.x,
-                    damage_bounds.y,
-                    damage_bounds.width,
-                    damage_bounds.height,
-                )
-                .expect("Create damage rectangle"),
+            let physical = damage_bounds * scale_factor;
+            let x0 = (physical.x.floor().max(0.0) as u32).min(width);
+            let y0 = (physical.y.floor().max(0.0) as u32).min(height);
+            let x1 = ((physical.x + physical.width).ceil().max(0.0) as u32).min(width);
+            let y1 = ((physical.y + physical.height).ceil().max(0.0) as u32).min(height);
+            if x1 <= x0 || y1 <= y0 {
+                continue;
+            }
+            let (w, h) = (x1 - x0, y1 - y0);
+            self.scratch.clear();
+            self.scratch.resize(w as usize * h as usize, 0);
+            if self
+                .scratch_mask
+                .as_ref()
+                .is_none_or(|m| m.width() != w || m.height() != h)
+            {
+                self.scratch_mask = tiny_skia::Mask::new(w, h);
+            }
+            let Some(clip_mask) = self.scratch_mask.as_mut() else {
+                continue;
+            };
+            let Some(mut region) =
+                tiny_skia::PixmapMut::from_bytes(bytemuck::cast_slice_mut(&mut self.scratch), w, h)
+            else {
+                continue;
+            };
+            region.fill(engine::into_color(background_color));
+            Self::draw_region(
+                &mut self.engine,
+                &self.layers,
+                &mut region,
+                clip_mask,
+                scale_factor,
+                Transformation::translate(-(x0 as f32), -(y0 as f32)),
+                Rectangle::new(Point::ORIGIN, Size::new(w as f32, h as f32)),
             );
-
-            pixels.fill_path(
-                &path,
-                &tiny_skia::Paint {
-                    shader: tiny_skia::Shader::SolidColor(engine::into_color(
-                        background_color,
-                    )),
-                    anti_alias: false,
-                    blend_mode: tiny_skia::BlendMode::Source,
-                    ..Default::default()
-                },
-                tiny_skia::FillRule::default(),
-                tiny_skia::Transform::identity(),
-                None,
-            );
-
-            for layer in self.layers.iter() {
-                let Some(layer_bounds) =
-                    damage_bounds.intersection(&(layer.bounds * scale_factor))
-                else {
-                    continue;
-                };
-
-                engine::adjust_clip_mask(clip_mask, layer_bounds);
-
-                if !layer.quads.is_empty() {
-                    let render_span = debug::render(debug::Primitive::Quad);
-                    for (quad, background) in &layer.quads {
-                        self.engine.draw_quad(
-                            quad,
-                            background,
-                            Transformation::scale(scale_factor),
-                            pixels,
-                            clip_mask,
-                            layer_bounds,
-                        );
-                    }
-                    render_span.finish();
-                }
-
-                if !layer.primitives.is_empty() {
-                    let render_span = debug::render(debug::Primitive::Triangle);
-
-                    for group in &layer.primitives {
-                        let Some(group_bounds) = (group.clip_bounds()
-                            * scale_factor)
-                            .intersection(&layer_bounds)
-                        else {
-                            continue;
-                        };
-
-                        engine::adjust_clip_mask(clip_mask, group_bounds);
-
-                        for primitive in group.as_slice() {
-                            self.engine.draw_primitive(
-                                primitive,
-                                Transformation::scale(scale_factor)
-                                    * group.transformation(),
-                                pixels,
-                                clip_mask,
-                                group_bounds,
-                            );
-                        }
-
-                        engine::adjust_clip_mask(clip_mask, layer_bounds);
-                    }
-
-                    render_span.finish();
-                }
-
-                if !layer.images.is_empty() {
-                    let render_span = debug::render(debug::Primitive::Image);
-
-                    for image in &layer.images {
-                        self.engine.draw_image(
-                            image,
-                            Transformation::scale(scale_factor),
-                            pixels,
-                            clip_mask,
-                            layer_bounds,
-                        );
-                    }
-
-                    render_span.finish();
-                }
-
-                if !layer.text.is_empty() {
-                    let render_span = debug::render(debug::Primitive::Image);
-
-                    for group in &layer.text {
-                        for text in group.as_slice() {
-                            self.engine.draw_text(
-                                text,
-                                Transformation::scale(scale_factor)
-                                    * group.transformation(),
-                                pixels,
-                                clip_mask,
-                                layer_bounds,
-                            );
-                        }
-                    }
-
-                    render_span.finish();
-                }
+            let stride = width as usize * 4;
+            let row = w as usize * 4;
+            let src: &[u8] = bytemuck::cast_slice(&self.scratch);
+            let dst = pixels.data_mut();
+            for y in 0..h as usize {
+                let at = (y0 as usize + y) * stride + x0 as usize * 4;
+                dst[at..at + row].copy_from_slice(&src[y * row..(y + 1) * row]);
             }
         }
 
         self.engine.trim();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_region(
+        engine: &mut Engine,
+        layers: &layer::Stack,
+        pixels: &mut tiny_skia::PixmapMut<'_>,
+        clip_mask: &mut tiny_skia::Mask,
+        scale_factor: f32,
+        offset: Transformation,
+        damage_bounds: Rectangle,
+    ) {
+        let base = offset * Transformation::scale(scale_factor);
+        for layer in layers.iter() {
+            let Some(layer_bounds) = damage_bounds.intersection(&(layer.bounds * base)) else {
+                continue;
+            };
+
+            engine::adjust_clip_mask(clip_mask, layer_bounds);
+            // TinyPaw patch: refill the mask only when the clip changes; canvas
+            // frames usually share their layer's bounds.
+            let mut mask_bounds = layer_bounds;
+
+            if !layer.quads.is_empty() {
+                let render_span = debug::render(debug::Primitive::Quad);
+                for (quad, background) in &layer.quads {
+                    engine.draw_quad(quad, background, base, pixels, clip_mask, layer_bounds);
+                }
+                render_span.finish();
+            }
+
+            if !layer.primitives.is_empty() {
+                let render_span = debug::render(debug::Primitive::Triangle);
+
+                for group in &layer.primitives {
+                    let Some(group_bounds) =
+                        (group.clip_bounds() * base).intersection(&layer_bounds)
+                    else {
+                        continue;
+                    };
+
+                    if group_bounds != mask_bounds {
+                        engine::adjust_clip_mask(clip_mask, group_bounds);
+                        mask_bounds = group_bounds;
+                    }
+
+                    for primitive in group.as_slice() {
+                        engine.draw_primitive(
+                            primitive,
+                            base * group.transformation(),
+                            pixels,
+                            clip_mask,
+                            group_bounds,
+                        );
+                    }
+                }
+                if mask_bounds != layer_bounds {
+                    engine::adjust_clip_mask(clip_mask, layer_bounds);
+                }
+
+                render_span.finish();
+            }
+
+            if !layer.images.is_empty() {
+                let render_span = debug::render(debug::Primitive::Image);
+
+                for image in &layer.images {
+                    engine.draw_image(image, base, pixels, clip_mask, layer_bounds);
+                }
+
+                render_span.finish();
+            }
+
+            if !layer.text.is_empty() {
+                let render_span = debug::render(debug::Primitive::Image);
+
+                for group in &layer.text {
+                    for text in group.as_slice() {
+                        engine.draw_text(
+                            text,
+                            base * group.transformation(),
+                            pixels,
+                            clip_mask,
+                            layer_bounds,
+                        );
+                    }
+                }
+
+                render_span.finish();
+            }
+        }
     }
 }
 

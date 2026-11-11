@@ -77,6 +77,26 @@ pub fn release_own_console() {
     }
 }
 
+/// Asks for 1 ms timer resolution while TinyPaw has something live on
+/// screen, and gives it back when idle. Windows rounds timed waits up to its
+/// 15.6 ms tick by default, so a 16 ms animation timer fired every 31 ms and
+/// a 33 ms one every 47 ms. Since Windows 10 2004 this affects only this
+/// process.
+pub fn fine_timers(on: bool) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use windows_sys::Win32::Media::{timeBeginPeriod, timeEndPeriod};
+    static ON: AtomicBool = AtomicBool::new(false);
+    if ON.swap(on, Ordering::Relaxed) != on {
+        unsafe {
+            if on {
+                timeBeginPeriod(1);
+            } else {
+                timeEndPeriod(1);
+            }
+        }
+    }
+}
+
 pub fn reduced_motion() -> bool {
     let mut enabled = 1i32;
     unsafe {
@@ -264,171 +284,263 @@ impl Drop for Lens {
 
 /// Magnifies the desktop under the cursor, whichever app is there. It is a
 /// small round click-through window that never activates, holding a Windows
-/// Magnifier control. It follows the cursor across monitors on its own timer,
+/// Magnifier control, and it follows the cursor across monitors by itself,
 /// so it works with annotation on or off. TinyPaw's own surfaces are filtered
 /// out of the magnified image only, so a monitor share still shows the paw
 /// and ink.
+///
+/// The lens windows live on a thread of their own with their own message
+/// loop. Magnifying captures the screen every frame; on the UI thread its
+/// ticks were handled ahead of input and repaints, so with a slow capture
+/// TinyPaw stopped taking clicks and animating. The windows are made once and
+/// hidden while no lens is shown; dropping this hides the lens.
 pub struct DesktopLens {
-    host: isize,
-    state: Box<LensState>,
-    excluded: Vec<isize>,
+    shared: &'static LensShared,
 }
 
-/// What the lens window's timer reads each frame.
+/// The app's side of the lens thread.
+struct LensShared {
+    thread: u32,
+    want: std::sync::Mutex<LensWant>,
+}
+
+/// What the app asks the lens thread to show.
+#[derive(Clone, Default)]
+struct LensWant {
+    active: bool,
+    /// Logical diameter and zoom.
+    size: f32,
+    zoom: f32,
+    /// TinyPaw windows to leave out of the magnified image.
+    exclude: Vec<isize>,
+    /// Why the exclusion list could not be applied, for `configure`.
+    error: Option<String>,
+}
+
+impl LensShared {
+    fn want(&self) -> std::sync::MutexGuard<'_, LensWant> {
+        self.want.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Wakes the lens thread if it is waiting for work.
+    fn wake(&self) {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_NULL};
+        unsafe {
+            PostThreadMessageW(self.thread, WM_NULL, 0, 0);
+        }
+    }
+}
+
+/// The lens thread's per-frame state.
 struct LensState {
     magnifier: isize,
-    /// Logical diameter and zoom, set by the app.
     size: f32,
     zoom: f32,
     /// What the native control currently has, to skip redundant calls.
     applied_zoom: f32,
     shaped: i32,
+    /// Host position and size last given to Windows, and ticks since the
+    /// z-order was last asserted.
+    placed: Option<(i32, i32, i32)>,
+    since_raise: u32,
 }
 
 /// Lens frame thickness in logical pixels, drawn by the host's background.
 const LENS_BORDER: f32 = 2.0;
 /// Gap between the cursor and the lens, in logical pixels.
 const LENS_GAP: f32 = 24.0;
-const LENS_TIMER: usize = 1;
-/// Refresh period: the magnifier only repaints when invalidated.
-const LENS_FRAME_MS: u32 = 16;
+/// Ticks between re-asserting the lens above other topmost windows while it
+/// stands still.
+const LENS_RAISE_TICKS: u32 = 15;
 
 impl DesktopLens {
-    pub fn new(size: f32, zoom: f32) -> Result<Self, String> {
-        use std::sync::OnceLock;
-        use windows_sys::Win32::Graphics::Gdi::CreateSolidBrush;
-        use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-        use windows_sys::Win32::UI::Magnification::{MagInitialize, WC_MAGNIFIER};
-        use windows_sys::Win32::UI::WindowsAndMessaging::*;
-        const CLASS: windows_sys::core::PCWSTR = windows_sys::core::w!("TinyPawDesktopLens");
-        // Initialised once per process; the windows below are per activation.
-        static READY: OnceLock<Result<(), String>> = OnceLock::new();
-        READY
-            .get_or_init(|| unsafe {
-                if MagInitialize() == 0 {
-                    return Err("the Windows magnifier could not start".into());
-                }
-                let class = WNDCLASSW {
-                    lpfnWndProc: Some(lens_proc),
-                    hInstance: GetModuleHandleW(std::ptr::null()),
-                    lpszClassName: CLASS,
-                    // The frame colour shows as a ring around the magnifier.
-                    hbrBackground: CreateSolidBrush(0x0050_4A46),
-                    ..std::mem::zeroed()
-                };
-                if RegisterClassW(&class) == 0 {
-                    return Err("the lens window class could not be registered".into());
-                }
-                Ok(())
-            })
-            .clone()?;
-        unsafe {
-            let instance = GetModuleHandleW(std::ptr::null());
-            let host = CreateWindowExW(
-                WS_EX_TOPMOST
-                    | WS_EX_LAYERED
-                    | WS_EX_TRANSPARENT
-                    | WS_EX_TOOLWINDOW
-                    | WS_EX_NOACTIVATE,
-                CLASS,
-                std::ptr::null(),
-                WS_POPUP,
-                0,
-                0,
-                1,
-                1,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                instance,
-                std::ptr::null(),
-            );
-            if host.is_null() {
-                return Err("the lens window could not be created".into());
-            }
-            // The magnifier needs a layered host; fully opaque.
-            SetLayeredWindowAttributes(host, 0, 255, LWA_ALPHA);
-            let magnifier = CreateWindowExW(
-                0,
-                WC_MAGNIFIER,
-                std::ptr::null(),
-                WS_CHILD | WS_VISIBLE,
-                0,
-                0,
-                1,
-                1,
-                host,
-                std::ptr::null_mut(),
-                instance,
-                std::ptr::null(),
-            );
-            if magnifier.is_null() {
-                DestroyWindow(host);
-                return Err("the magnifier control could not be created".into());
-            }
-            let mut state = Box::new(LensState {
-                magnifier: magnifier as isize,
-                size,
-                zoom,
-                applied_zoom: 0.0,
-                shaped: 0,
-            });
-            SetWindowLongPtrW(host, GWLP_USERDATA, &mut *state as *mut LensState as isize);
-            let mut lens = Self {
-                host: host as isize,
-                state,
-                excluded: Vec::new(),
-            };
-            lens.set_excluded(&[])?;
-            lens_tick(host, &mut lens.state);
-            SetTimer(host, LENS_TIMER, LENS_FRAME_MS, None);
-            Ok(lens)
+    pub fn new(size: f32, zoom: f32, exclude: &[isize]) -> Result<Self, String> {
+        let shared = lens_thread()?;
+        {
+            let mut want = shared.want();
+            want.active = true;
+            want.size = size;
+            want.zoom = zoom;
+            want.exclude = exclude.to_vec();
+            want.error = None;
         }
+        shared.wake();
+        Ok(Self { shared })
     }
 
     /// Updates size and zoom, and the TinyPaw windows to leave out of the
     /// magnified image. Placement follows the cursor by itself.
     pub fn configure(&mut self, size: f32, zoom: f32, exclude: &[isize]) -> Result<(), String> {
-        self.state.size = size;
-        self.state.zoom = zoom;
-        if exclude != self.excluded.as_slice() {
-            self.set_excluded(exclude)?;
+        let mut want = self.shared.want();
+        if let Some(why) = want.error.take() {
+            return Err(why);
         }
-        Ok(())
-    }
-
-    fn set_excluded(&mut self, exclude: &[isize]) -> Result<(), String> {
-        use windows_sys::Win32::Foundation::HWND;
-        use windows_sys::Win32::UI::Magnification::*;
-        let mut list: Vec<HWND> = exclude
-            .iter()
-            .chain(std::iter::once(&self.host))
-            .map(|&h| h as HWND)
-            .collect();
-        let ok = unsafe {
-            MagSetWindowFilterList(
-                self.state.magnifier as HWND,
-                MW_FILTERMODE_EXCLUDE,
-                list.len() as i32,
-                list.as_mut_ptr(),
-            )
-        };
-        if ok == 0 {
-            return Err("TinyPaw could not keep itself out of the lens".into());
+        want.size = size;
+        want.zoom = zoom;
+        if want.exclude != exclude {
+            want.exclude = exclude.to_vec();
         }
-        self.excluded = exclude.to_vec();
         Ok(())
     }
 }
 
 impl Drop for DesktopLens {
     fn drop(&mut self) {
-        use windows_sys::Win32::UI::WindowsAndMessaging::*;
-        unsafe {
-            KillTimer(self.host as _, LENS_TIMER);
-            // The timer no longer reads the state once this is cleared.
-            SetWindowLongPtrW(self.host as _, GWLP_USERDATA, 0);
-            // Destroys the magnifier child with it.
-            DestroyWindow(self.host as _);
+        self.shared.want().active = false;
+        self.shared.wake();
+    }
+}
+
+/// Starts the lens thread on first use; it lives as long as the process.
+fn lens_thread() -> Result<&'static LensShared, String> {
+    use std::sync::OnceLock;
+    static THREAD: OnceLock<Result<&'static LensShared, String>> = OnceLock::new();
+    THREAD
+        .get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::Builder::new()
+                .name("tinypaw-lens".into())
+                .spawn(move || run_lens(tx))
+                .map_err(|_| "the lens thread could not start".to_string())?;
+            rx.recv()
+                .map_err(|_| "the lens thread stopped".to_string())?
+        })
+        .clone()
+}
+
+/// The lens thread: makes the windows, then shows a frame after each one
+/// the desktop compositor presents while a lens is wanted, and sleeps in its
+/// message loop otherwise.
+fn run_lens(ready: std::sync::mpsc::Sender<Result<&'static LensShared, String>>) {
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::Graphics::Dwm::DwmFlush;
+    use windows_sys::Win32::Graphics::Gdi::{CreateSolidBrush, UpdateWindow};
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::System::Threading::{GetCurrentThreadId, INFINITE};
+    use windows_sys::Win32::UI::Magnification::*;
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+    const CLASS: windows_sys::core::PCWSTR = windows_sys::core::w!("TinyPawDesktopLens");
+    unsafe {
+        if MagInitialize() == 0 {
+            let _ = ready.send(Err("the Windows magnifier could not start".into()));
+            return;
+        }
+        let instance = GetModuleHandleW(std::ptr::null());
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(lens_proc),
+            hInstance: instance,
+            lpszClassName: CLASS,
+            // The frame colour shows as a ring around the magnifier.
+            hbrBackground: CreateSolidBrush(0x0050_4A46),
+            ..std::mem::zeroed()
+        };
+        if RegisterClassW(&class) == 0 {
+            let _ = ready.send(Err("the lens window class could not be registered".into()));
+            return;
+        }
+        let host = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            CLASS,
+            std::ptr::null(),
+            WS_POPUP,
+            0,
+            0,
+            1,
+            1,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            instance,
+            std::ptr::null(),
+        );
+        if host.is_null() {
+            let _ = ready.send(Err("the lens window could not be created".into()));
+            return;
+        }
+        // The magnifier needs a layered host; fully opaque.
+        SetLayeredWindowAttributes(host, 0, 255, LWA_ALPHA);
+        let magnifier = CreateWindowExW(
+            0,
+            WC_MAGNIFIER,
+            std::ptr::null(),
+            WS_CHILD | WS_VISIBLE,
+            0,
+            0,
+            1,
+            1,
+            host,
+            std::ptr::null_mut(),
+            instance,
+            std::ptr::null(),
+        );
+        if magnifier.is_null() {
+            DestroyWindow(host);
+            let _ = ready.send(Err("the magnifier control could not be created".into()));
+            return;
+        }
+        // The thread has a message queue now, so wakes cannot be lost.
+        let shared: &'static LensShared = Box::leak(Box::new(LensShared {
+            thread: GetCurrentThreadId(),
+            want: std::sync::Mutex::new(LensWant::default()),
+        }));
+        let _ = ready.send(Ok(shared));
+        drop(ready);
+
+        let mut state = LensState {
+            magnifier: magnifier as isize,
+            size: 0.0,
+            zoom: 1.0,
+            applied_zoom: 0.0,
+            shaped: 0,
+            placed: None,
+            since_raise: 0,
+        };
+        let mut filtered: Option<Vec<isize>> = None;
+        let mut shown = false;
+        loop {
+            let mut msg: MSG = std::mem::zeroed();
+            while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            let want = shared.want().clone();
+            if !want.active {
+                if shown {
+                    ShowWindow(host, SW_HIDE);
+                    state.placed = None;
+                    shown = false;
+                }
+                // Until the app posts a wake (or any other message arrives).
+                MsgWaitForMultipleObjects(0, std::ptr::null(), 0, INFINITE, QS_ALLINPUT);
+                continue;
+            }
+            if filtered.as_ref() != Some(&want.exclude) {
+                let mut list: Vec<HWND> = want
+                    .exclude
+                    .iter()
+                    .chain(std::iter::once(&(host as isize)))
+                    .map(|&h| h as HWND)
+                    .collect();
+                let ok = MagSetWindowFilterList(
+                    magnifier,
+                    MW_FILTERMODE_EXCLUDE,
+                    list.len() as i32,
+                    list.as_mut_ptr(),
+                );
+                if ok == 0 {
+                    shared.want().error =
+                        Some("TinyPaw could not keep itself out of the lens".into());
+                }
+                filtered = Some(want.exclude);
+            }
+            state.size = want.size;
+            state.zoom = want.zoom;
+            lens_tick(host, &mut state);
+            // Paint now rather than when the queue next empties.
+            UpdateWindow(magnifier);
+            shown = true;
+            if DwmFlush() < 0 {
+                std::thread::sleep(std::time::Duration::from_millis(8));
+            }
         }
     }
 }
@@ -475,24 +587,33 @@ fn lens_tick(host: windows_sys::Win32::Foundation::HWND, state: &mut LensState) 
         }
         .clamp(area.top, (area.bottom - side).max(area.top));
         let magnifier = state.magnifier as HWND;
-        SetWindowPos(
-            host,
-            HWND_TOPMOST,
-            x,
-            y,
-            side,
-            side,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW,
-        );
-        SetWindowPos(
-            magnifier,
-            std::ptr::null_mut(),
-            border,
-            border,
-            inner,
-            inner,
-            SWP_NOACTIVATE | SWP_NOZORDER,
-        );
+        // Moving a window costs a recomposition; skip it while the cursor
+        // rests, but keep the lens above other topmost windows.
+        state.since_raise += 1;
+        if state.placed != Some((x, y, side)) || state.since_raise >= LENS_RAISE_TICKS {
+            SetWindowPos(
+                host,
+                HWND_TOPMOST,
+                x,
+                y,
+                side,
+                side,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            );
+            state.since_raise = 0;
+        }
+        if state.placed.is_none_or(|(.., s)| s != side) {
+            SetWindowPos(
+                magnifier,
+                std::ptr::null_mut(),
+                border,
+                border,
+                inner,
+                inner,
+                SWP_NOACTIVATE | SWP_NOZORDER,
+            );
+        }
+        state.placed = Some((x, y, side));
         // Round: the host is clipped to a circle and the magnifier to a
         // smaller one, so the host's background shows as a ring. Each window
         // owns the region it is given.
@@ -535,13 +656,6 @@ unsafe extern "system" fn lens_proc(
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
     unsafe {
         match msg {
-            WM_TIMER if w == LENS_TIMER => {
-                let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut LensState;
-                if let Some(state) = state.as_mut() {
-                    lens_tick(hwnd, state);
-                }
-                0
-            }
             WM_MOUSEACTIVATE => MA_NOACTIVATE as isize,
             WM_NCHITTEST => HTTRANSPARENT as isize,
             _ => DefWindowProcW(hwnd, msg, w, l),

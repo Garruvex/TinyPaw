@@ -265,34 +265,54 @@ impl Layer {
             },
         );
 
-        let primitives = damage::list(
+        let item_bounds = |item: &Item<Primitive>| match item {
+            Item::Live(primitive) => vec![primitive.visible_bounds()],
+            Item::Group(primitives, group_bounds, transformation) => primitives
+                .as_slice()
+                .iter()
+                .map(Primitive::visible_bounds)
+                .map(|bounds| bounds * *transformation)
+                .filter_map(|bounds| bounds.intersection(group_bounds))
+                .collect(),
+            Item::Cached(_primitives, bounds, _transformation) => vec![*bounds],
+        };
+        // TinyPaw patch: compare live canvas frames primitive by primitive.
+        // Upstream treated every live group as changed, so a frame holding
+        // one moving shape (the spotlight mask, the paw) repainted the full
+        // extent of every shape in it, every frame.
+        let primitives = damage::diff(
             &previous.primitives,
             &current.primitives,
-            |item| match item {
-                Item::Live(primitive) => vec![primitive.visible_bounds()],
-                Item::Group(primitives, group_bounds, transformation) => {
-                    primitives
-                        .as_slice()
-                        .iter()
-                        .map(Primitive::visible_bounds)
-                        .map(|bounds| bounds * *transformation)
-                        .filter_map(|bounds| bounds.intersection(group_bounds))
-                        .collect()
+            item_bounds,
+            |a, b| match (a, b) {
+                (
+                    Item::Group(group_a, bounds_a, transformation_a),
+                    Item::Group(group_b, bounds_b, transformation_b),
+                ) if bounds_a == bounds_b
+                    && transformation_a == transformation_b =>
+                {
+                    damage::list(
+                        group_a.as_slice(),
+                        group_b.as_slice(),
+                        |primitive| {
+                            (primitive.visible_bounds() * *transformation_a)
+                                .intersection(bounds_a)
+                                .into_iter()
+                                .collect()
+                        },
+                        PartialEq::eq,
+                    )
                 }
-                Item::Cached(_primitives, bounds, _transformation) => {
-                    vec![*bounds]
-                }
-            },
-            |primitive_a, primitive_b| match (primitive_a, primitive_b) {
                 (
                     Item::Cached(cache_a, bounds_a, transformation_a),
                     Item::Cached(cache_b, bounds_b, transformation_b),
-                ) => {
-                    Arc::ptr_eq(cache_a, cache_b)
-                        && bounds_a == bounds_b
-                        && transformation_a == transformation_b
+                ) if Arc::ptr_eq(cache_a, cache_b)
+                    && bounds_a == bounds_b
+                    && transformation_a == transformation_b =>
+                {
+                    vec![]
                 }
-                _ => false,
+                _ => item_bounds(a).into_iter().chain(item_bounds(b)).collect(),
             },
         );
 

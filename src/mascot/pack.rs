@@ -29,18 +29,54 @@ pub const BUILTIN: &str = "yohta";
 /// Bundled Yohta's pack (see `yohta_pack`), embedded so the release needs no
 /// asset folder. It goes through the same parsing and checks as any pack.
 const YOHTA_FILES: &[(&str, &[u8])] = &[
-    ("character.json", include_bytes!("../../assets/mascot/yohta/pack/character.json")),
-    ("sit/body.png", include_bytes!("../../assets/mascot/yohta/pack/sit/body.png")),
-    ("sit/head.png", include_bytes!("../../assets/mascot/yohta/pack/sit/head.png")),
-    ("sit/tail.png", include_bytes!("../../assets/mascot/yohta/pack/sit/tail.png")),
-    ("sit/eye-1-white.png", include_bytes!("../../assets/mascot/yohta/pack/sit/eye-1-white.png")),
-    ("sit/eye-1-pupil.png", include_bytes!("../../assets/mascot/yohta/pack/sit/eye-1-pupil.png")),
-    ("sit/eye-1-mask.png", include_bytes!("../../assets/mascot/yohta/pack/sit/eye-1-mask.png")),
-    ("sit/eye-1-blink.png", include_bytes!("../../assets/mascot/yohta/pack/sit/eye-1-blink.png")),
-    ("sit/eye-2-white.png", include_bytes!("../../assets/mascot/yohta/pack/sit/eye-2-white.png")),
-    ("sit/eye-2-pupil.png", include_bytes!("../../assets/mascot/yohta/pack/sit/eye-2-pupil.png")),
-    ("sit/eye-2-mask.png", include_bytes!("../../assets/mascot/yohta/pack/sit/eye-2-mask.png")),
-    ("sit/eye-2-blink.png", include_bytes!("../../assets/mascot/yohta/pack/sit/eye-2-blink.png")),
+    (
+        "character.json",
+        include_bytes!("../../assets/mascot/yohta/pack/character.json"),
+    ),
+    (
+        "sit/body.png",
+        include_bytes!("../../assets/mascot/yohta/pack/sit/body.png"),
+    ),
+    (
+        "sit/head.png",
+        include_bytes!("../../assets/mascot/yohta/pack/sit/head.png"),
+    ),
+    (
+        "sit/tail.png",
+        include_bytes!("../../assets/mascot/yohta/pack/sit/tail.png"),
+    ),
+    (
+        "sit/eye-1-white.png",
+        include_bytes!("../../assets/mascot/yohta/pack/sit/eye-1-white.png"),
+    ),
+    (
+        "sit/eye-1-pupil.png",
+        include_bytes!("../../assets/mascot/yohta/pack/sit/eye-1-pupil.png"),
+    ),
+    (
+        "sit/eye-1-mask.png",
+        include_bytes!("../../assets/mascot/yohta/pack/sit/eye-1-mask.png"),
+    ),
+    (
+        "sit/eye-1-blink.png",
+        include_bytes!("../../assets/mascot/yohta/pack/sit/eye-1-blink.png"),
+    ),
+    (
+        "sit/eye-2-white.png",
+        include_bytes!("../../assets/mascot/yohta/pack/sit/eye-2-white.png"),
+    ),
+    (
+        "sit/eye-2-pupil.png",
+        include_bytes!("../../assets/mascot/yohta/pack/sit/eye-2-pupil.png"),
+    ),
+    (
+        "sit/eye-2-mask.png",
+        include_bytes!("../../assets/mascot/yohta/pack/sit/eye-2-mask.png"),
+    ),
+    (
+        "sit/eye-2-blink.png",
+        include_bytes!("../../assets/mascot/yohta/pack/sit/eye-2-blink.png"),
+    ),
 ];
 pub(super) const MANIFEST: &str = "character.json";
 const THUMB: &str = "thumb.png";
@@ -133,7 +169,9 @@ impl Character {
     pub fn pack_reactions(&self) -> super::reactions::Config {
         match &self.folder {
             None => bundled_manifest().reactions,
-            Some(folder) => read_manifest(folder).map(|m| m.reactions).unwrap_or_default(),
+            Some(folder) => read_manifest(folder)
+                .map(|m| m.reactions)
+                .unwrap_or_default(),
         }
     }
 
@@ -193,7 +231,9 @@ impl Character {
 
     /// How the character bops: the user's choice, else the pack's.
     pub fn bop(&self) -> Bop {
-        load_overrides(self.id).bop.unwrap_or_else(|| self.pack_bop())
+        load_overrides(self.id)
+            .bop
+            .unwrap_or_else(|| self.pack_bop())
     }
 
     /// Decodes the art for the desktop. Done when shown, released when hidden.
@@ -419,7 +459,7 @@ impl Pose {
         out
     }
 
-    fn to_json(&self) -> Json {
+    pub(super) fn to_json(&self) -> Json {
         let mut pose = json!({
             "ground_anchor": [self.ground.0, self.ground.1],
             "body": self.body,
@@ -607,12 +647,16 @@ fn parse_whole(v: &Json, pose_name: &str) -> Result<Option<MotionSpec>, String> 
     if let Some(name) = v["preset"].as_str() {
         spec.preset = Preset::parse(name)
             .filter(|p| PartType::Head.presets().contains(p))
-            .ok_or(format!("the {pose_name} pose can't use the `{name}` motion"))?;
+            .ok_or(format!(
+                "the {pose_name} pose can't use the `{name}` motion"
+            ))?;
     }
     for (field, value) in [("strength", &mut spec.strength), ("speed", &mut spec.speed)] {
         if let Some(x) = v[field].as_f64() {
             if !(0.0..=2.0).contains(&x) {
-                return Err(format!("the {pose_name} pose's {field} must be between 0 and 2"));
+                return Err(format!(
+                    "the {pose_name} pose's {field} must be between 0 and 2"
+                ));
             }
             *value = x as f32;
         }
@@ -718,7 +762,12 @@ impl Manifest {
     /// Line sounds inside the pack, each once.
     pub(super) fn sounds(&self) -> Vec<&str> {
         let mut out: Vec<&str> = Vec::new();
-        for s in self.lines.sounds().into_iter().chain(self.reactions.files()) {
+        for s in self
+            .lines
+            .sounds()
+            .into_iter()
+            .chain(self.reactions.files())
+        {
             if let SoundRef::Pack(p) = s
                 && !out.contains(&p.as_str())
             {
@@ -1269,7 +1318,7 @@ fn trim(art: &RgbaImage) -> Option<(RgbaImage, (u32, u32, u32, u32))> {
     Some((out, (x0, y0, w, h)))
 }
 
-fn slug(name: &str) -> String {
+pub(super) fn slug(name: &str) -> String {
     let mut s: String = name
         .to_lowercase()
         .chars()
@@ -1805,7 +1854,12 @@ fn load_overrides_in(root: &Path, id: &str) -> Overrides {
     let reactions = (!v["reactions"].is_null())
         .then(|| super::reactions::Config::parse(&v["reactions"], true).ok())
         .flatten();
-    Overrides { motion, lines, bop, reactions }
+    Overrides {
+        motion,
+        lines,
+        bop,
+        reactions,
+    }
 }
 
 pub fn save_overrides(id: &str, o: &Overrides) -> Result<(), String> {
@@ -1833,9 +1887,7 @@ fn save_overrides_in(root: &Path, id: &str, o: &Overrides) -> Result<(), String>
     }
     if let Some(lines) = &o.lines {
         // Saved even when empty: "no lines" is a choice that overrides the pack.
-        let (l, b) = lines
-            .to_json()
-            .unwrap_or_else(|| (json!({}), json!({})));
+        let (l, b) = lines.to_json().unwrap_or_else(|| (json!({}), json!({})));
         json["lines"] = l;
         json["bubble"] = b;
     }
@@ -1847,8 +1899,11 @@ fn save_overrides_in(root: &Path, id: &str, o: &Overrides) -> Result<(), String>
     }
     // Write then rename, so a crash never leaves half a file.
     let partial = path.with_extension("json.partial");
-    fs::write(&partial, serde_json::to_vec_pretty(&json).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
+    fs::write(
+        &partial,
+        serde_json::to_vec_pretty(&json).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
     fs::rename(&partial, &path).map_err(|e| e.to_string())
 }
 
@@ -1911,7 +1966,11 @@ pub fn import_reaction_sound(id: &str, from: &Path) -> Result<SoundRef, String> 
 /// storage, fitted onto the character's stage: scaled to the stage height
 /// at most, centred and standing on the stage's bottom, so it starts
 /// roughly registered with the normal pose and can be aligned from there.
-pub fn import_reaction_image(id: &str, from: &Path, canvas: (u32, u32)) -> Result<SoundRef, String> {
+pub fn import_reaction_image(
+    id: &str,
+    from: &Path,
+    canvas: (u32, u32),
+) -> Result<SoundRef, String> {
     let root = user_dir().ok_or("no per-user data folder")?;
     if fs::metadata(from).map_err(|e| e.to_string())?.len() > MAX_FILE {
         return Err("the PNG is larger than 64 MiB".into());
@@ -2019,7 +2078,11 @@ fn export_with(
             fs::copy(from, to).map_err(|e| e.to_string())?;
         }
         // Drop pack sounds the exported lines no longer use.
-        let used = m.sounds().into_iter().map(str::to_owned).collect::<Vec<_>>();
+        let used = m
+            .sounds()
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
         for f in &pack_files {
             if super::lines::valid_pack_sound(f) && !used.contains(f) {
                 let _ = fs::remove_file(target.join(f));
@@ -2182,7 +2245,10 @@ mod tests {
         else {
             panic!("installed");
         };
-        assert_ne!(imported.id, BUILTIN, "an import never replaces the built-in Yohta");
+        assert_ne!(
+            imported.id, BUILTIN,
+            "an import never replaces the built-in Yohta"
+        );
         // An editable copy is an installed pack with its own ID.
         let copy = copy_builtin_into(&root, &[imported.id]).unwrap();
         assert!(!copy.is_builtin() && copy.id != imported.id);
@@ -2197,6 +2263,63 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn reference_prompt_folders_pass_import_with_every_requested_image_mapped() {
+        use crate::mascot::reference::Request;
+        let dir = scratch("reference-prompt");
+        let source = dir.join("pack");
+        fs::create_dir(&source).unwrap();
+        let mut request = Request::new("My Cat.png".into());
+        request.canvas = 512;
+        for (layered, eyes, tracking) in [
+            (false, false, false),
+            (true, false, false),
+            (true, true, false),
+            (false, false, true),
+            (true, false, true),
+        ] {
+            request.head = layered;
+            request.tail = layered;
+            request.brows = layered;
+            request.blink = layered;
+            request.faces = layered;
+            request.held = layered;
+            request.eyes = eyes;
+            request.tracking = tracking;
+            let brief = request.brief();
+            let (_, json) = brief.rsplit_once("\n\n").unwrap();
+            let manifest = parse_manifest(json).unwrap();
+            let mut files = manifest.files();
+            files.sort();
+            let mut requested: Vec<_> = request.roles().iter().map(|r| r.file()).collect();
+            requested.sort();
+            assert_eq!(files, requested);
+            fs::write(source.join("character.json"), json).unwrap();
+            let png = RgbaImage::from_pixel(512, 512, image::Rgba([80, 120, 220, 255]));
+            for file in files {
+                png.save(source.join(file)).unwrap();
+            }
+            request.validate_folder(&source).unwrap();
+            prepare_folder_into(&dir.join("library"), &source).unwrap();
+            if tracking {
+                let mut changed: Json = serde_json::from_str(json).unwrap();
+                changed["poses"]["sit"]["eyes"][0]["mask"] = json!("body.png");
+                fs::write(source.join("character.json"), changed.to_string()).unwrap();
+                assert!(
+                    request.validate_folder(&source).is_err(),
+                    "a file in the wrong feature slot must fail"
+                );
+                fs::write(source.join("character.json"), json).unwrap();
+                fs::remove_file(source.join("right_eye_pupil.png")).unwrap();
+                assert!(
+                    request.validate_folder(&source).is_err(),
+                    "an omitted pupil must fail"
+                );
+            }
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 
     /// A 200 × 300 PNG with a 60 × 120 figure whose feet are at row 249.
@@ -2777,12 +2900,20 @@ mod tests {
         )
         .unwrap();
         let root = dir.join("characters");
-        let Imported::Installed(c) = import_folder_into(&root, &src, &[], OnDuplicate::Ask).unwrap() else {
+        let Imported::Installed(c) =
+            import_folder_into(&root, &src, &[], OnDuplicate::Ask).unwrap()
+        else {
             panic!("installed");
         };
-        assert!(root.join("booper/sounds/boop.wav").exists(), "declared sounds are copied");
+        assert!(
+            root.join("booper/sounds/boop.wav").exists(),
+            "declared sounds are copied"
+        );
         let pack = read_manifest(&root.join("booper")).unwrap().reactions;
-        assert_eq!(pack.entry(Event::Click).unwrap().visual, Some(super::super::reactions::Visual::Compress));
+        assert_eq!(
+            pack.entry(Event::Click).unwrap().visual,
+            Some(super::super::reactions::Visual::Compress)
+        );
         // The user's layer: an imported WAV on Pick up, Drop turned off.
         let user_dir = dir.join("user");
         write_wav(&user_dir.join("reaction-7.wav"));
@@ -2792,16 +2923,28 @@ mod tests {
         entry.sound.sound = Some(Sound::File(SoundRef::User("reaction-7.wav".into())));
         user.set_entry(Event::Pickup, Some(entry));
         user.set_entry(Event::Drop, Some(Default::default()));
-        let o = Overrides { reactions: Some(user), ..Overrides::default() };
+        let o = Overrides {
+            reactions: Some(user),
+            ..Overrides::default()
+        };
         let out = dir.join("out");
         fs::create_dir_all(&out).unwrap();
         let folder = export_with(&c, &out, &o, |f| Some(user_dir.join(f))).unwrap();
-        assert!(folder.join("sounds/reaction-7.wav").exists() && folder.join("sounds/boop.wav").exists());
+        assert!(
+            folder.join("sounds/reaction-7.wav").exists()
+                && folder.join("sounds/boop.wav").exists()
+        );
         // The exported folder reimports with the same effective sounds.
         let again = read_manifest(&folder).unwrap().reactions;
         let s = super::super::reactions::effective(&again, &Config::default());
-        assert_eq!(s.get(Event::Click).sound, Some(Sound::File(SoundRef::Pack("sounds/boop.wav".into()))));
-        assert_eq!(s.get(Event::Pickup).sound, Some(Sound::File(SoundRef::Pack("sounds/reaction-7.wav".into()))));
+        assert_eq!(
+            s.get(Event::Click).sound,
+            Some(Sound::File(SoundRef::Pack("sounds/boop.wav".into())))
+        );
+        assert_eq!(
+            s.get(Event::Pickup).sound,
+            Some(Sound::File(SoundRef::Pack("sounds/reaction-7.wav".into())))
+        );
         assert!(!s.get(Event::Drop).enabled);
         // A pack naming a missing reaction sound fails its import.
         fs::remove_file(src.join("sounds/boop.wav")).unwrap();
@@ -2832,7 +2975,9 @@ mod tests {
         )
         .unwrap();
         let root = dir.join("characters");
-        let Imported::Installed(c) = import_folder_into(&root, &src, &[], OnDuplicate::Ask).unwrap() else {
+        let Imported::Installed(c) =
+            import_folder_into(&root, &src, &[], OnDuplicate::Ask).unwrap()
+        else {
             panic!("installed");
         };
         assert!(root.join("dangler/reactions/held.png").exists());
@@ -2849,13 +2994,21 @@ mod tests {
             ..Default::default()
         };
         layer.set_entry(Event::Drop, Some(entry));
-        let o = Overrides { reactions: Some(layer), ..Overrides::default() };
+        let o = Overrides {
+            reactions: Some(layer),
+            ..Overrides::default()
+        };
         let out = dir.join("out");
         fs::create_dir_all(&out).unwrap();
         let folder = export_with(&c, &out, &o, |f| Some(user.join(f))).unwrap();
-        assert!(folder.join("reactions/art-5.png").exists() && folder.join("reactions/held.png").exists());
+        assert!(
+            folder.join("reactions/art-5.png").exists()
+                && folder.join("reactions/held.png").exists()
+        );
         // A held pose on another stage size is refused.
-        RgbaImage::new(50, 50).save(src.join("reactions/held.png")).unwrap();
+        RgbaImage::new(50, 50)
+            .save(src.join("reactions/held.png"))
+            .unwrap();
         assert!(import_folder_into(&root, &src, &[], OnDuplicate::KeepBoth).is_err());
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -2886,7 +3039,10 @@ mod tests {
         else {
             panic!("installed");
         };
-        assert!(root.join("talker/lines/hi.wav").exists(), "the sound was copied");
+        assert!(
+            root.join("talker/lines/hi.wav").exists(),
+            "the sound was copied"
+        );
         let lines = read_manifest(&root.join("talker")).unwrap().lines;
         assert_eq!(lines.get(super::super::lines::Trigger::Click).len(), 1);
         assert_eq!(lines.bubble.background, [255, 247, 224, 255]);
@@ -2918,12 +3074,22 @@ mod tests {
         let block = |x0: u32, y0: u32, x1: u32, y1: u32| {
             RgbaImage::from_fn(100, 100, |x, y| {
                 let on = (x0..x1).contains(&x) && (y0..y1).contains(&y);
-                image::Rgba(if on { [90, 120, 200, 255] } else { [0, 0, 0, 0] })
+                image::Rgba(if on {
+                    [90, 120, 200, 255]
+                } else {
+                    [0, 0, 0, 0]
+                })
             })
         };
-        block(30, 50, 70, 95).save(src.join("sit/body.png")).unwrap();
-        block(20, 10, 80, 55).save(src.join("sit/head.png")).unwrap();
-        block(65, 60, 95, 70).save(src.join("sit/tail.png")).unwrap();
+        block(30, 50, 70, 95)
+            .save(src.join("sit/body.png"))
+            .unwrap();
+        block(20, 10, 80, 55)
+            .save(src.join("sit/head.png"))
+            .unwrap();
+        block(65, 60, 95, 70)
+            .save(src.join("sit/tail.png"))
+            .unwrap();
         fs::write(
             src.join(MANIFEST),
             r#"{"schema_version":1,"id":"fox","name":"Fox","canvas":[100,100],"default_pose":"sit",
@@ -2946,15 +3112,30 @@ mod tests {
             sound: Some(SoundRef::User("line-1.wav".into())),
         });
         let motion = vec![
-            MotionSpec { preset: Preset::Nod, strength: 1.5, speed: 0.5 },
-            MotionSpec { preset: Preset::Wag, strength: 2.0, speed: 1.2 },
+            MotionSpec {
+                preset: Preset::Nod,
+                strength: 1.5,
+                speed: 0.5,
+            },
+            MotionSpec {
+                preset: Preset::Wag,
+                strength: 2.0,
+                speed: 1.2,
+            },
         ];
-        let o = Overrides { motion: Some(motion.clone()), lines: Some(lines), bop: Some(Bop::RubberHose), reactions: None };
+        let o = Overrides {
+            motion: Some(motion.clone()),
+            lines: Some(lines),
+            bop: Some(Bop::RubberHose),
+            reactions: None,
+        };
         let out = dir.join("out");
         fs::create_dir_all(&out).unwrap();
-        let folder =
-            export_with(&fox, &out, &o, |f| Some(sounds.join(f))).unwrap();
-        assert!(folder.join("lines/line-1.wav").exists(), "the user's sound travels");
+        let folder = export_with(&fox, &out, &o, |f| Some(sounds.join(f))).unwrap();
+        assert!(
+            folder.join("lines/line-1.wav").exists(),
+            "the user's sound travels"
+        );
 
         // "Another PC": a fresh characters folder, no overrides there.
         let other = dir.join("other-pc");
@@ -2974,7 +3155,11 @@ mod tests {
 
         // A single image's sway travels too.
         let o = Overrides {
-            motion: Some(vec![MotionSpec { preset: Preset::Nod, strength: 0.4, speed: 1.0 }]),
+            motion: Some(vec![MotionSpec {
+                preset: Preset::Nod,
+                strength: 0.4,
+                speed: 1.0,
+            }]),
             lines: None,
             bop: None,
             reactions: None,
@@ -2993,7 +3178,11 @@ mod tests {
     fn replacing_a_pack_keeps_the_users_overrides() {
         let dir = scratch("replace-keeps");
         let o = Overrides {
-            motion: Some(vec![MotionSpec { preset: Preset::Nod, strength: 1.0, speed: 1.0 }]),
+            motion: Some(vec![MotionSpec {
+                preset: Preset::Nod,
+                strength: 1.0,
+                speed: 1.0,
+            }]),
             lines: Some(Lines::default()),
             bop: None,
             reactions: None,
@@ -3007,7 +3196,11 @@ mod tests {
             panic!("installed");
         };
         assert_eq!(again.id, c.id);
-        assert_eq!(load_overrides_in(&root, c.id), o, "replace keeps what the user changed");
+        assert_eq!(
+            load_overrides_in(&root, c.id),
+            o,
+            "replace keeps what the user changed"
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 }

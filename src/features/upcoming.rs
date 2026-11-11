@@ -1,14 +1,19 @@
 //! Lens: magnifies the desktop under the pointer, or one locked window.
 //! Either way TinyPaw's own surfaces stay out of the magnified image.
+use crate::features::anywhere::{Target, ZOOM_STEPS};
+use crate::registry::Edge;
 use crate::registry::{
     CommandDef, Constraint, Outcome, Registrar, SettingDef, ShellAction, ShortcutContext, Surfaces,
     ToolDef, Value, always, when_enabled,
 };
 use crate::session::Event;
 pub const LENS: &str = "lens.select";
-/// Shows the desktop lens while held, with annotation on or off.
+/// The desktop lens with annotation on or off: tap toggles, hold shows it
+/// until release.
 pub const ANYWHERE: &str = "lens.anywhere";
-/// Hides it again; the CLI's counterpart to releasing the key.
+/// Shows it from the CLI until `lens-end`.
+pub const ANYWHERE_BEGIN: &str = "lens.anywhere_begin";
+/// Hides it again.
 pub const ANYWHERE_END: &str = "lens.anywhere_end";
 pub const TOOL: &str = "lens";
 pub const SOURCE: &str = "lens.source";
@@ -45,16 +50,29 @@ pub fn register(r: &mut Registrar) {
     });
     r.command(CommandDef {
         id: ANYWHERE,
-        label: "Hold for lens",
+        label: "Lens anywhere",
+        cli: None,
+        surfaces: Surfaces::NONE,
+        group: "tools",
+        order: 6,
+        // Left hand only, beside the other held keys (D draw, W wheel); X
+        // is Spotlight.
+        shortcut: Some((ShortcutContext::Global, "Ctrl+Alt+Z")),
+        available: always,
+        handler: |_| Outcome::Shell(ShellAction::Anywhere(Target::Lens, Edge::Press)),
+        on_release: Some(|_| Outcome::Shell(ShellAction::Anywhere(Target::Lens, Edge::Release))),
+    });
+    r.command(CommandDef {
+        id: ANYWHERE_BEGIN,
+        label: "Show lens",
         cli: Some("lens-begin"),
         surfaces: Surfaces::CLI,
         group: "tools",
         order: 6,
-        // Left hand only, beside the other held keys (D draw, W wheel).
-        shortcut: Some((ShortcutContext::Global, "Ctrl+Alt+Z")),
+        shortcut: None,
         available: always,
-        handler: |_| Outcome::Shell(ShellAction::LensShow),
-        on_release: Some(|_| Outcome::Shell(ShellAction::LensHide)),
+        handler: |_| Outcome::Shell(ShellAction::Anywhere(Target::Lens, Edge::Show)),
+        on_release: None,
     });
     r.command(CommandDef {
         id: ANYWHERE_END,
@@ -65,7 +83,7 @@ pub fn register(r: &mut Registrar) {
         order: 7,
         shortcut: None,
         available: always,
-        handler: |_| Outcome::Shell(ShellAction::LensHide),
+        handler: |_| Outcome::Shell(ShellAction::Anywhere(Target::Lens, Edge::Hide)),
         on_release: None,
     });
     r.setting(SettingDef {
@@ -82,7 +100,7 @@ pub fn register(r: &mut Registrar) {
         group: "Appearance",
         order: 40,
         default: Value::Choice("2"),
-        constraint: Constraint::Choices(&["2", "4"]),
+        constraint: Constraint::Choices(ZOOM_STEPS),
     });
     r.setting(SettingDef {
         id: SIZE,

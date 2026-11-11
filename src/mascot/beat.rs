@@ -136,7 +136,11 @@ impl Tracker {
         } else {
             self.recent.iter().sum::<f32>() / self.recent.len() as f32
         };
-        let mut onset = if energy > 1e-7 { (level - base).max(0.0) } else { 0.0 };
+        let mut onset = if energy > 1e-7 {
+            (level - base).max(0.0)
+        } else {
+            0.0
+        };
         if self.time < self.quiet_until {
             onset = 0.0;
         }
@@ -210,10 +214,7 @@ impl Tracker {
                 (lag, r, r * weight)
             })
             .collect();
-        let Some(&(lag, r, _)) = scores
-            .iter()
-            .max_by(|a, b| a.2.total_cmp(&b.2))
-        else {
+        let Some(&(lag, r, _)) = scores.iter().max_by(|a, b| a.2.total_cmp(&b.2)) else {
             return;
         };
         // Parabolic interpolation for a fractional period.
@@ -240,7 +241,8 @@ impl Tracker {
                     }
                     // Spread over neighbours, so a fractional period lines up.
                     let i = i.round() as usize;
-                    sum += o[i] + 0.5 * (o.get(i + 1).copied().unwrap_or(0.0) + o[i.saturating_sub(1)]);
+                    sum += o[i]
+                        + 0.5 * (o.get(i + 1).copied().unwrap_or(0.0) + o[i.saturating_sub(1)]);
                     k += 1.0;
                 }
                 (phase, sum)
@@ -255,7 +257,9 @@ impl Tracker {
         }
         self.next_beat = Some(match self.next_beat {
             // Small corrections ease in; a new tempo or phase re-locks.
-            Some(current) if (next - current).abs() < step * 0.2 => current + (next - current) * 0.5,
+            Some(current) if (next - current).abs() < step * 0.2 => {
+                current + (next - current) * 0.5
+            }
             _ => next,
         });
         self.period = Some(p);
@@ -384,7 +388,11 @@ pub(crate) mod trial {
             hits,
             missed: truth.len() - hits,
             extra,
-            late_ms: if hits > 0 { late / hits as f64 * 1000.0 } else { 0.0 },
+            late_ms: if hits > 0 {
+                late / hits as f64 * 1000.0
+            } else {
+                0.0
+            },
         }
     }
 
@@ -395,15 +403,27 @@ pub(crate) mod trial {
         for bpm in [80.0, 120.0, 160.0] {
             let (audio, truth) = clicks(&[(bpm, 20.0)], false);
             let s = score(&run(&audio, n), &truth, 4.0);
-            rows.push((format!("{bpm:.0} BPM clicks"), s, truth.iter().filter(|t| **t >= 4.0).count()));
+            rows.push((
+                format!("{bpm:.0} BPM clicks"),
+                s,
+                truth.iter().filter(|t| **t >= 4.0).count(),
+            ));
         }
         let (audio, truth) = clicks(&[(120.0, 20.0)], true);
         let s = score(&run(&audio, n), &truth, 4.0);
-        rows.push(("120 BPM with off-beat hats".into(), s, truth.iter().filter(|t| **t >= 4.0).count()));
+        rows.push((
+            "120 BPM with off-beat hats".into(),
+            s,
+            truth.iter().filter(|t| **t >= 4.0).count(),
+        ));
         // Tempo change at 12 s: score the second half after 4 s to re-lock.
         let (audio, truth) = clicks(&[(100.0, 12.0), (140.0, 14.0)], false);
         let s = score(&run(&audio, n), &truth, 16.0);
-        rows.push(("100 → 140 BPM change".into(), s, truth.iter().filter(|t| **t >= 16.0).count()));
+        rows.push((
+            "100 → 140 BPM change".into(),
+            s,
+            truth.iter().filter(|t| **t >= 16.0).count(),
+        ));
         let speech = run(&speech(20.0), n);
         let silence = run(&vec![0.0; 20 * RATE as usize], n);
 
@@ -415,7 +435,10 @@ pub(crate) mod trial {
                 s.hits, s.missed, s.extra, s.late_ms
             );
         }
-        println!("| Speech-like bursts, 20 s | 0 | – | – | {} | – |", speech.len());
+        println!(
+            "| Speech-like bursts, 20 s | 0 | – | – | {} | – |",
+            speech.len()
+        );
         println!("| Silence, 20 s | 0 | – | – | {} | – |", silence.len());
 
         // The bar for shipping Follow beat as a trial.
@@ -425,7 +448,11 @@ pub(crate) mod trial {
             assert!(s.late_ms.abs() <= 40.0, "{name}: {s:?}");
         }
         assert!(silence.is_empty(), "silence makes no beats");
-        assert!(speech.len() <= 2, "speech makes almost no beats: {}", speech.len());
+        assert!(
+            speech.len() <= 2,
+            "speech makes almost no beats: {}",
+            speech.len()
+        );
     }
 
     #[test]
@@ -437,5 +464,3 @@ pub(crate) mod trial {
         assert!(t.onsets.iter().all(|o| *o == 0.0));
     }
 }
-
-

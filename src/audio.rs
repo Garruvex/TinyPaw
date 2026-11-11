@@ -17,9 +17,18 @@ const RATE: u32 = 44_100;
 
 // Embedded in the executable so installed builds need no external sound folder.
 const BUNDLED: &[(&str, &[u8])] = &[
-    ("duck-toy", include_bytes!("../assets/sounds/duck-toy-sound.wav")),
-    ("mac-quack", include_bytes!("../assets/sounds/mac-quack.wav")),
-    ("bonk-clip", include_bytes!("../assets/sounds/bonk_7zPAD7C.wav")),
+    (
+        "duck-toy",
+        include_bytes!("../assets/sounds/duck-toy-sound.wav"),
+    ),
+    (
+        "mac-quack",
+        include_bytes!("../assets/sounds/mac-quack.wav"),
+    ),
+    (
+        "bonk-clip",
+        include_bytes!("../assets/sounds/bonk_7zPAD7C.wav"),
+    ),
     ("dry-fart", include_bytes!("../assets/sounds/dry-fart.wav")),
 ];
 
@@ -104,8 +113,8 @@ pub fn check_reaction_wav(path: &Path) -> Result<f32, String> {
         return Err("reaction sounds must be WAV files".into());
     }
     let file = File::open(path).map_err(|e| e.to_string())?;
-    let decoder = Decoder::try_from(BufReader::new(file))
-        .map_err(|e| format!("not a readable WAV ({e})"))?;
+    let decoder =
+        Decoder::try_from(BufReader::new(file)).map_err(|e| format!("not a readable WAV ({e})"))?;
     let channels = decoder.channels().get();
     let rate = decoder.sample_rate().get();
     if !(1..=2).contains(&channels) {
@@ -388,11 +397,23 @@ mod tests {
         };
         let ok = check_reaction_wav(&write("ok.wav", 1.0, 22_050)).unwrap();
         assert!((ok - 1.0).abs() < 0.01);
-        assert!(check_reaction_wav(&write("long.wav", 6.0, 8_000)).unwrap_err().contains("five seconds"));
-        assert!(check_reaction_wav(&write("slow.wav", 0.5, 4_000)).unwrap_err().contains("sample rate"));
+        assert!(
+            check_reaction_wav(&write("long.wav", 6.0, 8_000))
+                .unwrap_err()
+                .contains("five seconds")
+        );
+        assert!(
+            check_reaction_wav(&write("slow.wav", 0.5, 4_000))
+                .unwrap_err()
+                .contains("sample rate")
+        );
         std::fs::write(dir.join("junk.wav"), b"not audio").unwrap();
         assert!(check_reaction_wav(&dir.join("junk.wav")).is_err());
-        assert!(check_reaction_wav(&write("x.mp3", 0.5, 8_000)).unwrap_err().contains("WAV"));
+        assert!(
+            check_reaction_wav(&write("x.mp3", 0.5, 8_000))
+                .unwrap_err()
+                .contains("WAV")
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -402,7 +423,10 @@ mod tests {
             let clip = decode_clip(Decoder::try_from(std::io::Cursor::new(bytes)).unwrap())
                 .unwrap_or_else(|e| panic!("{id}: {e}"));
             assert!(clip.samples.iter().all(|s| s.is_finite()), "{id}");
-            assert!(clip.samples.iter().any(|s| s.abs() > 0.001), "{id} is silent");
+            assert!(
+                clip.samples.iter().any(|s| s.abs() > 0.001),
+                "{id} is silent"
+            );
             assert!(crate::features::sound::CHOICES.contains(&id));
             assert_ne!(crate::features::sound::label(id), "Unknown");
         }

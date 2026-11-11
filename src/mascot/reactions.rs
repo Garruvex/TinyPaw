@@ -44,7 +44,6 @@ impl Event {
     fn index(self) -> usize {
         self as usize
     }
-
 }
 
 /// A sound a trigger plays: an exact bundled clip or a managed file.
@@ -115,7 +114,6 @@ impl Sounds {
     pub fn get_mut(&mut self, e: Event) -> &mut TriggerSound {
         &mut self.triggers[e.index()]
     }
-
 }
 
 /// The bundled clips a character may use, by exact ID.
@@ -170,7 +168,10 @@ pub struct Art {
 
 impl Art {
     pub fn new(image: SoundRef) -> Self {
-        Self { image, place: [0.0, 0.0, 1.0] }
+        Self {
+            image,
+            place: [0.0, 0.0, 1.0],
+        }
     }
 
     fn to_json(&self) -> Json {
@@ -193,24 +194,39 @@ pub fn valid_pack_image(path: &str) -> bool {
 
 /// A file name TinyPaw gave an imported reaction picture.
 pub fn valid_user_image(file: &str) -> bool {
-    file.strip_suffix(".png").is_some_and(|stem| valid_user_sound(&format!("{stem}.wav")))
+    file.strip_suffix(".png")
+        .is_some_and(|stem| valid_user_sound(&format!("{stem}.wav")))
 }
 
 fn parse_art(v: &Json, user: bool) -> Result<Art, String> {
-    let image = v["image"].as_str().ok_or("a reaction picture needs an image")?;
+    let image = v["image"]
+        .as_str()
+        .ok_or("a reaction picture needs an image")?;
     let image = match image.strip_prefix("user:") {
         Some(file) if user && valid_user_image(file) => SoundRef::User(file.into()),
         Some(_) => return Err(format!("`{image}` isn't a picture in this pack")),
         None if valid_pack_image(image) => SoundRef::Pack(image.into()),
-        None => return Err(format!("reaction picture `{image}` must be a PNG inside the pack folder")),
+        None => {
+            return Err(format!(
+                "reaction picture `{image}` must be a PNG inside the pack folder"
+            ));
+        }
     };
     let place = match v["place"].as_array().map(Vec::as_slice) {
         None if v["place"].is_null() => [0.0, 0.0, 1.0],
         Some([x, y, k]) => {
             let n = |j: &Json| j.as_f64().filter(|n| n.is_finite()).map(|n| n as f32);
             match (n(x), n(y), n(k)) {
-                (Some(x), Some(y), Some(k)) if x.abs() <= 1.0 && y.abs() <= 1.0 && (0.1..=4.0).contains(&k) => [x, y, k],
-                _ => return Err("a reaction picture's place must be [x, y, scale] within the stage".into()),
+                (Some(x), Some(y), Some(k))
+                    if x.abs() <= 1.0 && y.abs() <= 1.0 && (0.1..=4.0).contains(&k) =>
+                {
+                    [x, y, k]
+                }
+                _ => {
+                    return Err(
+                        "a reaction picture's place must be [x, y, scale] within the stage".into(),
+                    );
+                }
             }
         }
         _ => return Err("a reaction picture's place must be [x, y, scale]".into()),
@@ -238,7 +254,10 @@ pub struct Entry {
 impl Entry {
     /// A new character's explicit "nothing": no visual, no sound.
     pub fn none() -> Self {
-        Self { visual: Some(Visual::None), ..Self::default() }
+        Self {
+            visual: Some(Visual::None),
+            ..Self::default()
+        }
     }
 }
 
@@ -389,7 +408,10 @@ impl Config {
                     v.insert("held_pose".into(), held.to_json());
                 }
                 if let Some(fall) = entry.fall {
-                    v.insert("after_release".into(), json!(if fall { "fall" } else { "stay" }));
+                    v.insert(
+                        "after_release".into(),
+                        json!(if fall { "fall" } else { "stay" }),
+                    );
                 }
                 let t = &entry.sound;
                 v.insert("enabled".into(), json!(t.enabled));
@@ -472,7 +494,11 @@ fn parse_entry(v: &Json, user: bool) -> Result<Entry, String> {
     let cooldown_ms = match v["cooldown_ms"].as_u64() {
         None if v["cooldown_ms"].is_null() => DEFAULT_COOLDOWN_MS,
         Some(n) if n <= u64::from(MAX_COOLDOWN_MS) => n as u32,
-        _ => return Err(format!("a reaction's cooldown_ms must be 0–{MAX_COOLDOWN_MS}")),
+        _ => {
+            return Err(format!(
+                "a reaction's cooldown_ms must be 0–{MAX_COOLDOWN_MS}"
+            ));
+        }
     };
     let (visual, art) = match &v["visual"] {
         Json::Null => (None, None),
@@ -498,7 +524,15 @@ fn parse_entry(v: &Json, user: bool) -> Result<Entry, String> {
         _ => return Err("after_release must be stay or fall".into()),
     };
     let mut other = map.clone();
-    for key in ["enabled", "sound", "gain", "cooldown_ms", "visual", "held_pose", "after_release"] {
+    for key in [
+        "enabled",
+        "sound",
+        "gain",
+        "cooldown_ms",
+        "visual",
+        "held_pose",
+        "after_release",
+    ] {
         other.remove(key);
     }
     Ok(Entry {
@@ -530,7 +564,9 @@ fn parse_sound(v: &Json, user: bool) -> Result<Sound, String> {
             }
             Some(_) => Err(format!("`{f}` isn't a sound in this pack")),
             None if valid_pack_sound(f) => Ok(Sound::File(SoundRef::Pack(f.into()))),
-            None => Err(format!("reaction sound `{f}` must be a WAV inside the pack folder")),
+            None => Err(format!(
+                "reaction sound `{f}` must be a WAV inside the pack folder"
+            )),
         },
         _ => Err("a reaction sound names exactly one of builtin or file".into()),
     }
@@ -553,7 +589,11 @@ pub fn art(pack: &Config, user: &Config, e: Event) -> Option<Art> {
     if visual(pack, user, e) != Visual::Artwork {
         return None;
     }
-    let set = |c: &Config| c.entry(e).filter(|x| x.visual.is_some()).and_then(|x| x.art.clone());
+    let set = |c: &Config| {
+        c.entry(e)
+            .filter(|x| x.visual.is_some())
+            .and_then(|x| x.art.clone())
+    };
     set(user).or_else(|| set(pack))
 }
 
@@ -653,7 +693,13 @@ impl Voice {
     /// Decides whether `e` plays now. Cooldown starts only once playback is
     /// accepted; muted, unassigned, suppressed or rejected events don't
     /// consume it.
-    pub fn accept(&mut self, e: Event, sounds: &Sounds, quiet: Quiet, now: f64) -> Result<Play, Skip> {
+    pub fn accept(
+        &mut self,
+        e: Event,
+        sounds: &Sounds,
+        quiet: Quiet,
+        now: f64,
+    ) -> Result<Play, Skip> {
         if quiet.mute_all || quiet.annotating || quiet.hidden {
             return Err(Skip::Muted);
         }
@@ -701,8 +747,17 @@ impl Voice {
     /// Whether an idle event is due. Schedules the first deadline when
     /// idle sounds become eligible, and nothing at all while they aren't.
     /// `pick` returns 0–1 for the random interval.
-    pub fn idle_due(&mut self, sounds: &Sounds, eligible: bool, now: f64, pick: impl FnOnce() -> f32) -> bool {
-        let wanted = eligible && sounds.idle_enabled && sounds.enabled && sounds.get(Event::Idle).sound.is_some();
+    pub fn idle_due(
+        &mut self,
+        sounds: &Sounds,
+        eligible: bool,
+        now: f64,
+        pick: impl FnOnce() -> f32,
+    ) -> bool {
+        let wanted = eligible
+            && sounds.idle_enabled
+            && sounds.enabled
+            && sounds.get(Event::Idle).sound.is_some();
         if !wanted {
             self.next_idle = None;
             return false;
@@ -752,7 +807,10 @@ mod tests {
     fn nothing_assigned_is_silent() {
         let mut v = Voice::default();
         for e in Event::ALL {
-            assert_eq!(v.accept(e, &Sounds::default(), Quiet::default(), 1.0), Err(Skip::Unassigned));
+            assert_eq!(
+                v.accept(e, &Sounds::default(), Quiet::default(), 1.0),
+                Err(Skip::Unassigned)
+            );
         }
     }
 
@@ -761,12 +819,18 @@ mod tests {
         let s = assigned();
         let mut v = Voice::default();
         // A muted click does not start the cooldown.
-        let muted = Quiet { mute_all: true, ..Quiet::default() };
+        let muted = Quiet {
+            mute_all: true,
+            ..Quiet::default()
+        };
         assert_eq!(v.accept(Event::Click, &s, muted, 0.0), Err(Skip::Muted));
         let play = v.accept(Event::Click, &s, Quiet::default(), 0.1).unwrap();
         assert_eq!(play.volume, DEFAULT_VOLUME * 0.5);
         // Boundaries: just inside the cooldown is discarded, at it plays.
-        assert_eq!(v.accept(Event::Click, &s, Quiet::default(), 0.349), Err(Skip::Cooldown));
+        assert_eq!(
+            v.accept(Event::Click, &s, Quiet::default(), 0.349),
+            Err(Skip::Cooldown)
+        );
         assert!(v.accept(Event::Click, &s, Quiet::default(), 0.35).is_ok());
         // Cooldowns are per trigger.
         assert!(v.accept(Event::Pickup, &s, Quiet::default(), 0.36).is_ok());
@@ -779,13 +843,23 @@ mod tests {
         let first = v.accept(Event::Click, &s, Quiet::default(), 0.0).unwrap();
         assert!(!first.interrupt);
         v.started(0.0, 2.0);
-        assert_eq!(v.accept(Event::Idle, &s, Quiet::default(), 1.0), Err(Skip::Busy));
+        assert_eq!(
+            v.accept(Event::Idle, &s, Quiet::default(), 1.0),
+            Err(Skip::Busy)
+        );
         let pickup = v.accept(Event::Pickup, &s, Quiet::default(), 1.0).unwrap();
         assert!(pickup.interrupt, "stops the old voice first");
         // Rapid clicks never pile up: each is accepted or discarded now.
         let mut accepted = 0;
         for i in 0..40 {
-            if v.accept(Event::Click, &s, Quiet::default(), 3.0 + f64::from(i) * 0.05).is_ok() {
+            if v.accept(
+                Event::Click,
+                &s,
+                Quiet::default(),
+                3.0 + f64::from(i) * 0.05,
+            )
+            .is_ok()
+            {
                 accepted += 1;
             }
         }
@@ -797,16 +871,28 @@ mod tests {
         let mut s = assigned();
         let mut v = Voice::default();
         for q in [
-            Quiet { annotating: true, ..Quiet::default() },
-            Quiet { hidden: true, ..Quiet::default() },
+            Quiet {
+                annotating: true,
+                ..Quiet::default()
+            },
+            Quiet {
+                hidden: true,
+                ..Quiet::default()
+            },
         ] {
             assert_eq!(v.accept(Event::Click, &s, q, 0.0), Err(Skip::Muted));
         }
         s.enabled = false;
-        assert_eq!(v.accept(Event::Click, &s, Quiet::default(), 0.0), Err(Skip::CharacterOff));
+        assert_eq!(
+            v.accept(Event::Click, &s, Quiet::default(), 0.0),
+            Err(Skip::CharacterOff)
+        );
         s.enabled = true;
         s.get_mut(Event::Drop).enabled = false;
-        assert_eq!(v.accept(Event::Drop, &s, Quiet::default(), 0.0), Err(Skip::Unassigned));
+        assert_eq!(
+            v.accept(Event::Drop, &s, Quiet::default(), 0.0),
+            Err(Skip::Unassigned)
+        );
     }
 
     #[test]
@@ -841,8 +927,14 @@ mod tests {
             "idle": { "enabled": false }
         });
         let c = Config::parse(&v, true).unwrap();
-        assert_eq!(c.entry(Event::Click).unwrap().visual, Some(Visual::Compress));
-        assert!(c.entry(Event::Drop).unwrap().sound.enabled, "a sound with no flag is on");
+        assert_eq!(
+            c.entry(Event::Click).unwrap().visual,
+            Some(Visual::Compress)
+        );
+        assert!(
+            c.entry(Event::Drop).unwrap().sound.enabled,
+            "a sound with no flag is on"
+        );
         assert_eq!(c.files().len(), 1);
         let again = Config::parse(&c.to_json(), true).unwrap();
         assert_eq!(again, c);
@@ -867,29 +959,43 @@ mod tests {
             "click": { "sound": { "file": "a.wav" } }, "pickup": { "sound": { "file": "b.wav" } },
             "drop": { "sound": { "file": "c.wav" } }, "idle": { "sound": { "file": "d.wav" } },
         });
-        assert!(Config::parse(&four, false).is_ok(), "four files is the limit");
+        assert!(
+            Config::parse(&four, false).is_ok(),
+            "four files is the limit"
+        );
     }
 
     #[test]
     fn the_users_layer_wins_and_the_pack_never_enables_idle() {
-        let pack = Config::parse(&json!({
-            "sound": { "volume": 0.4, "idle_enabled": true },
-            "click": { "sound": { "builtin": "duck-toy" } },
-            "idle": { "sound": { "builtin": "mac-quack" } }
-        }), false).unwrap();
+        let pack = Config::parse(
+            &json!({
+                "sound": { "volume": 0.4, "idle_enabled": true },
+                "click": { "sound": { "builtin": "duck-toy" } },
+                "idle": { "sound": { "builtin": "mac-quack" } }
+            }),
+            false,
+        )
+        .unwrap();
         let s = effective(&pack, &Config::default());
         assert_eq!((s.volume, s.idle_enabled), (0.4, false));
         assert_eq!(s.get(Event::Click).sound, Some(Sound::Builtin("duck-toy")));
         let user = Config::parse(&json!({ "click": { "enabled": false } }), true).unwrap();
         let s = effective(&pack, &user);
-        assert!(!s.get(Event::Click).enabled, "the user's entry replaces the pack's");
+        assert!(
+            !s.get(Event::Click).enabled,
+            "the user's entry replaces the pack's"
+        );
         assert_eq!(s.get(Event::Idle).sound, Some(Sound::Builtin("mac-quack")));
     }
 
     #[test]
     fn visuals_default_to_legacy_only_when_unset() {
         let empty = Config::default();
-        assert_eq!(visual(&empty, &empty, Event::Click), Visual::Compress, "legacy squash");
+        assert_eq!(
+            visual(&empty, &empty, Event::Click),
+            Visual::Compress,
+            "legacy squash"
+        );
         assert_eq!(visual(&empty, &empty, Event::Drop), Visual::None);
         let fresh = new_character();
         assert_eq!(visual(&fresh, &empty, Event::Click), Visual::None);
@@ -907,7 +1013,10 @@ mod tests {
             "drop": { "visual": { "image": "user:art-1.png", "place": [0.0, 0.0, 1.0] }, "after_release": "stay" }
         });
         let c = Config::parse(&v, true).unwrap();
-        assert_eq!(held(&Config::default(), &c).unwrap().place, [0.02, -0.04, 1.0]);
+        assert_eq!(
+            held(&Config::default(), &c).unwrap().place,
+            [0.02, -0.04, 1.0]
+        );
         assert_eq!(visual(&Config::default(), &c, Event::Drop), Visual::Artwork);
         assert!(art(&Config::default(), &c, Event::Drop).is_some());
         assert_eq!(c.images().len(), 2);

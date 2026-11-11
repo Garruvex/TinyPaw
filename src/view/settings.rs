@@ -17,21 +17,28 @@ use crate::registry::{Registry, ShortcutContext, Value};
 use crate::session::{ActivationStyle, Session};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// In navigation order: Annotate, then Desktop, then App.
 pub enum Page {
     #[default]
     Pointer,
+    /// Ink and text labels.
+    Ink,
+    /// Spotlight and Lens, which also work outside annotation.
+    Tools,
     Character,
-    Annotation,
-    Controls,
-    Display,
+    /// How drawing starts, and every shortcut.
+    Shortcuts,
     Sound,
+    Display,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CharacterTab {
-    /// The library and desktop preferences.
+    /// Pick, add, export or remove characters.
     #[default]
-    Home,
+    Library,
+    /// The selected character on the desktop: shown, size, eyes, idle.
+    Desktop,
     /// Customize → Artwork: arrange layers in the Arrange preview.
     Artwork,
     /// Customize → Behavior: reactions, lines, moving parts and music,
@@ -116,7 +123,10 @@ pub struct SettingsView<'a> {
     /// The Motion tab's live preview, on the Character page.
     pub motion: Option<&'a crate::mascot::preview::MotionPreview>,
     /// Create from reference in progress, with the reference's thumbnail.
-    pub reference: Option<(&'a crate::mascot::reference::Request, Option<&'a iced::advanced::image::Handle>)>,
+    pub reference: Option<(
+        &'a crate::mascot::reference::Request,
+        Option<&'a iced::advanced::image::Handle>,
+    )>,
     /// The character draft has changes Save would write.
     pub unsaved: bool,
     /// Save / Discard / Stay is waiting for an answer.
@@ -152,6 +162,23 @@ fn h2<'a>(label: &'a str) -> Element<'a, Message> {
         .into()
 }
 
+/// How to use and adjust a Lens or Spotlight anywhere shortcut, with its
+/// current binding.
+fn anywhere_hint(
+    registry: &crate::registry::Registry,
+    id: &str,
+    fallback: &str,
+    size: &str,
+    more: &str,
+) -> String {
+    let key = registry
+        .shortcut_label(id)
+        .unwrap_or_else(|| fallback.to_owned());
+    format!(
+        "Anywhere: tap {key} to toggle, or hold it to show until release.          While holding, Up/Down change the {size} and +/− the {more}.          In annotation, scroll for {size}, Shift+scroll for {more}."
+    )
+}
+
 fn hint<'a>(label: impl text::IntoFragment<'a>) -> Element<'a, Message> {
     text(label).size(12).color(theme::MUTED).into()
 }
@@ -165,6 +192,45 @@ fn keycap<'a>(label: String) -> Element<'a, Message> {
 
 fn section<'a>(children: Vec<Element<'a, Message>>) -> Element<'a, Message> {
     Column::with_children(children).spacing(10).into()
+}
+
+/// An inline jump to the place a related setting lives.
+fn link<'a>(label: &'a str, msg: Message) -> Element<'a, Message> {
+    button(text(label).size(12).color(theme::CYAN_TEXT))
+        .padding([2, 4])
+        .style(theme::tool_button(theme::Tone::Plain))
+        .on_press(msg)
+        .into()
+}
+
+/// A hint followed by a link, on one line.
+fn hint_link<'a>(
+    label: impl text::IntoFragment<'a>,
+    link_label: &'a str,
+    msg: Message,
+) -> Element<'a, Message> {
+    row![hint(label), link(link_label, msg)]
+        .spacing(6)
+        .align_y(Alignment::Center)
+        .wrap()
+        .into()
+}
+
+/// When ink and tap stamps fade; one setting shared by both.
+fn fade_picker<'a>(s: &crate::registry::SettingValues) -> Element<'a, Message> {
+    pick_list(
+        [FadeChoice::Keep, FadeChoice::ThreeSeconds],
+        Some(if s.choice(system::INK_FADE) == "3s" {
+            FadeChoice::ThreeSeconds
+        } else {
+            FadeChoice::Keep
+        }),
+        |f| Message::Set(system::INK_FADE, Value::Choice(f.id())),
+    )
+    .text_size(13)
+    .padding([8, 10])
+    .style(theme::select)
+    .into()
 }
 
 fn later<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
@@ -318,15 +384,18 @@ fn nav<'a>(page: Page) -> Element<'a, Message> {
     };
     container(
         column![
-            hint("Annotation"),
+            hint("Annotate"),
             item(Page::Pointer, Glyph::Pointer, "Pointer"),
-            item(Page::Annotation, Glyph::Pen, "Drawing tools"),
-            item(Page::Sound, Glyph::Sound, "Tap sounds"),
+            item(Page::Ink, Glyph::Pen, "Ink & text"),
+            item(Page::Tools, Glyph::Lens, "Spotlight & lens"),
             space().height(10),
-            hint("Desktop & input"),
+            hint("Desktop"),
             item(Page::Character, Glyph::Head, "Character"),
+            space().height(10),
+            hint("App"),
+            item(Page::Shortcuts, Glyph::Controls, "Shortcuts"),
+            item(Page::Sound, Glyph::Sound, "Sound"),
             item(Page::Display, Glyph::Display, "Display & motion"),
-            item(Page::Controls, Glyph::Controls, "Drawing shortcuts"),
         ]
         .spacing(4),
     )
@@ -349,8 +418,9 @@ fn main<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     }
     let (body, side) = match v.page {
         Page::Pointer => pointer_page(v),
-        Page::Annotation => (annotation_page(v), None),
-        Page::Controls => (controls(v), None),
+        Page::Ink => (ink_page(v), None),
+        Page::Tools => (tools_page(v), None),
+        Page::Shortcuts => (controls(v), None),
         Page::Display => (display_page(v), None),
         Page::Sound => (sound_page(v), None),
         Page::Character => character_page(v),
@@ -548,8 +618,22 @@ fn pointer_page<'a>(v: &SettingsView<'a>) -> (Element<'a, Message>, Option<Eleme
             appearance = appearance.push(forearm_colors(s, v.pack.and_then(|p| p.accent)));
         }
         left = left.push(appearance).push(section(vec![
-            h2("Tap stamp"), stamps.into(),
-            hint("Each tap leaves a paw print in your ink colour. Set its fade time in Drawing tools."),
+            h2("Tap stamp"),
+            row![
+                stamps,
+                row![hint("Fade"), fade_picker(s)]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+            ]
+            .spacing(16)
+            .align_y(Alignment::Center)
+            .wrap()
+            .into(),
+            hint_link(
+                "Each tap leaves a paw print in your ink colour. Fade is shared with ink.",
+                "Ink settings",
+                Message::Ui(UiMsg::Nav(Page::Ink)),
+            ),
         ]));
     }
     let mut actions = row![
@@ -682,8 +766,8 @@ fn forearm_colors<'a>(
     section(vec![controls.into()])
 }
 
-/// Ink, then each tool's options: what the quick bar's tools draw with.
-fn annotation_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
+/// Ink and text labels: what the quick bar's drawing tools draw with.
+fn ink_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     let s = v.session.settings();
     let current_ink = s.color(system::INK_COLOR);
     let width = s.float(system::INK_WIDTH);
@@ -707,23 +791,74 @@ fn annotation_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     )
     .padding(4)
     .style(theme::fill(theme::WELL, 10.0));
-    let fade = pick_list(
-        [FadeChoice::Keep, FadeChoice::ThreeSeconds],
-        Some(if s.choice(system::INK_FADE) == "3s" {
-            FadeChoice::ThreeSeconds
-        } else {
-            FadeChoice::Keep
-        }),
-        |f| Message::Set(system::INK_FADE, Value::Choice(f.id())),
-    )
-    .text_size(13)
-    .padding([8, 10])
-    .style(theme::select);
-
     let mut ink_row = row![swatches].spacing(12).align_y(Alignment::Center);
     if let Some(accent) = v.pack.and_then(|p| p.accent) {
         ink_row = ink_row.push(super::match_pointer(accent, current_ink));
     }
+    let label_swatches = row([
+        [255, 255, 255, 255],
+        [34, 211, 238, 255],
+        [255, 210, 80, 255],
+        [255, 90, 100, 255],
+        [0, 0, 0, 255],
+    ]
+    .into_iter()
+    .map(|c| {
+        button(space().width(28).height(28))
+            .style(theme::swatch(
+                theme::rgba(c),
+                s.color(crate::features::text::COLOR) == c,
+            ))
+            .on_press(Message::Set(crate::features::text::COLOR, Value::Color(c)))
+            .into()
+    }))
+    .spacing(8);
+    column![
+        h1("Ink & text"),
+        section(vec![
+            h2("Ink"),
+            ink_row.into(),
+            row![
+                widths,
+                row![hint("Fade"), fade_picker(s)]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+            ]
+            .spacing(16)
+            .align_y(Alignment::Center)
+            .wrap()
+            .into(),
+            hint("The quick bar's ink button edits these same values. Pointer tap stamps share the fade."),
+        ]),
+        section(vec![
+            h2("Text labels"),
+            hint("Size"),
+            slider(
+                v.registry.range(crate::features::text::SIZE),
+                s.float(crate::features::text::SIZE),
+                |x| { Message::Set(crate::features::text::SIZE, Value::Float(x)) }
+            )
+            .step(1.0)
+            .style(theme::range)
+            .into(),
+            hint("Colour"),
+            label_swatches.into(),
+            check(
+                "Dark label backing",
+                s.bool(crate::features::text::BACKING),
+                crate::features::text::BACKING,
+            ),
+        ]),
+    ]
+    .spacing(22)
+    .max_width(640)
+    .into()
+}
+
+/// Spotlight and Lens: in annotation from the quick bar, or anywhere by
+/// shortcut.
+fn tools_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
+    let s = v.session.settings();
     #[cfg(windows)]
     let source_picker: Element<'a, Message> = {
         use crate::features::upcoming::{DESKTOP, FOREGROUND, SOURCE};
@@ -736,7 +871,6 @@ fn annotation_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
                 .on_press(Message::Set(SOURCE, Value::DynamicChoice(value.to_owned())))
         };
         let mut picker = column![
-            h2("Lens source"),
             container(
                 row![
                     mode("Desktop under pointer", desktop, DESKTOP),
@@ -790,61 +924,12 @@ fn annotation_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     };
     #[cfg(not(windows))]
     let source_picker: Element<'a, Message> = hint("Lens capture is available on Windows.");
-    let label_swatches = row([
-        [255, 255, 255, 255],
-        [34, 211, 238, 255],
-        [255, 210, 80, 255],
-        [255, 90, 100, 255],
-        [0, 0, 0, 255],
-    ]
-    .into_iter()
-    .map(|c| {
-        button(space().width(28).height(28))
-            .style(theme::swatch(
-                theme::rgba(c),
-                s.color(crate::features::text::COLOR) == c,
-            ))
-            .on_press(Message::Set(crate::features::text::COLOR, Value::Color(c)))
-            .into()
-    }))
-    .spacing(8);
+    let shortcuts = || link("Change shortcuts", Message::Ui(UiMsg::Nav(Page::Shortcuts)));
     column![
-        h1("Drawing tools"),
+        h1("Spotlight & lens"),
         section(vec![
-            h2("Ink"),
-            ink_row.into(),
-            row![
-                widths,
-                row![hint("Fade"), fade]
-                    .spacing(8)
-                    .align_y(Alignment::Center)
-            ]
-            .spacing(16)
-            .align_y(Alignment::Center)
-            .into(),
-            hint("The quick bar's ink button edits these same values."),
-        ]),
-        section(vec![
-            h2("Text labels"),
+            h2("Spotlight"),
             hint("Size"),
-            slider(
-                v.registry.range(crate::features::text::SIZE),
-                s.float(crate::features::text::SIZE),
-                |x| { Message::Set(crate::features::text::SIZE, Value::Float(x)) }
-            )
-            .step(1.0)
-            .style(theme::range)
-            .into(),
-            hint("Colour"),
-            label_swatches.into(),
-            check(
-                "Dark label backing",
-                s.bool(crate::features::text::BACKING),
-                crate::features::text::BACKING,
-            ),
-        ]),
-        section(vec![
-            h2("Spotlight radius"),
             slider(
                 v.registry.range(crate::features::spotlight::RADIUS),
                 s.float(crate::features::spotlight::RADIUS),
@@ -853,6 +938,23 @@ fn annotation_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
             .step(5.0)
             .style(theme::range)
             .into(),
+            hint("Darkness"),
+            slider(
+                v.registry.range(crate::features::spotlight::DIM),
+                s.float(crate::features::spotlight::DIM),
+                |x| { Message::Set(crate::features::spotlight::DIM, Value::Float(x)) }
+            )
+            .step(0.05)
+            .style(theme::range)
+            .into(),
+            hint(anywhere_hint(
+                v.registry,
+                crate::features::spotlight::ANYWHERE,
+                "Ctrl+Alt+X",
+                "size",
+                "darkness"
+            )),
+            shortcuts(),
         ]),
         section(vec![
             h2("Lens"),
@@ -878,6 +980,15 @@ fn annotation_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
             .step(10.0)
             .style(theme::range)
             .into(),
+            hint(anywhere_hint(
+                v.registry,
+                crate::features::upcoming::ANYWHERE,
+                "Ctrl+Alt+Z",
+                "size",
+                "zoom"
+            )),
+            shortcuts(),
+            h2("Lens source"),
             source_picker,
         ]),
     ]
@@ -1251,6 +1362,7 @@ impl canvas::Program<Message> for PairPreview {
                     output: OutputId(0),
                     pos: Pt::new(p.x, p.y),
                     at: now,
+                    paw_angle: None,
                 }),
                 now,
             );
@@ -1464,7 +1576,7 @@ fn controls<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     }
 
     column![
-        h1("Drawing shortcuts"),
+        h1("Shortcuts"),
         section(vec![h2("How drawing starts"), styles.into()]),
         section(vec![
             h2("Shortcuts"),
@@ -1622,9 +1734,9 @@ fn sound_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     .style(theme::select);
     let volume = s.float(sound::VOLUME);
     column![
-        h1("Tap sounds"),
+        h1("Sound"),
         section(vec![
-            h2("Sound selection"),
+            h2("Tap sound"),
             row![
                 picker,
                 button(text("Play").font(theme::MEDIUM).size(13))
@@ -1646,10 +1758,8 @@ fn sound_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
             .style(theme::tool_button(theme::Tone::Plain))
             .on_press(Message::Ui(UiMsg::ImportWav))
             .into(),
-        ]),
-        section(vec![
             row![
-                h2("Volume"),
+                hint("Volume"),
                 space().width(Length::Fill),
                 text(format!("{:.0}%", volume * 100.0)).size(13)
             ]
@@ -1662,12 +1772,19 @@ fn sound_page<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
             .style(theme::range)
             .into(),
             check("Mute tap sounds", s.bool(sound::MUTE), sound::MUTE),
-            check("Mute all sounds", s.bool(sound::MUTE_ALL), sound::MUTE_ALL),
-            hint("Mute all sounds also silences the desktop character's reactions and line sounds; Mute tap sounds is pointer-only."),
             check(
                 "Play a sound when tapping with the laser",
                 s.bool(sound::LASER),
                 sound::LASER
+            ),
+        ]),
+        section(vec![
+            h2("All sounds"),
+            check("Mute all sounds", s.bool(sound::MUTE_ALL), sound::MUTE_ALL),
+            hint_link(
+                "Also silences the desktop character's reactions and line sounds.",
+                "Character sounds",
+                Message::Ui(UiMsg::CharacterTab(CharacterTab::Behavior)),
             ),
         ]),
     ]

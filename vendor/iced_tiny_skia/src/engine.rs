@@ -136,7 +136,8 @@ impl Engine {
         if !body_visible {
             return;
         }
-        let clip_mask = (!physical_bounds.is_within(&clip_bounds))
+        let clip_mask = (!physical_bounds.is_within(&clip_bounds)
+                && !covers(clip_bounds, pixels))
             .then_some(clip_mask as &_);
         let path = rounded_rectangle(quad.bounds, fill_border_radius);
         pixels.fill_path(
@@ -462,7 +463,8 @@ impl Engine {
                     return;
                 }
 
-                let clip_mask = (!physical_bounds.is_within(&clip_bounds))
+                let clip_mask = (!physical_bounds.is_within(&clip_bounds)
+                        && !covers(clip_bounds, pixels))
                     .then_some(clip_mask as &_);
 
                 self.text_pipeline.draw_raw(
@@ -502,7 +504,8 @@ impl Engine {
                     return;
                 }
 
-                let clip_mask = (!physical_bounds.is_within(&clip_bounds))
+                let clip_mask = (!physical_bounds.is_within(&clip_bounds)
+                        && !covers(clip_bounds, pixels))
                     .then_some(clip_mask as &_);
 
                 pixels.fill_path(
@@ -533,7 +536,8 @@ impl Engine {
                     return;
                 }
 
-                let clip_mask = (!physical_bounds.is_within(&clip_bounds))
+                let clip_mask = (!physical_bounds.is_within(&clip_bounds)
+                        && !covers(clip_bounds, pixels))
                     .then_some(clip_mask as &_);
 
                 pixels.stroke_path(
@@ -826,6 +830,15 @@ fn rounded_box_sdf(
     let y = (to_center.y.abs() - size.height() + radius).max(0.0);
 
     (x.powf(2.0) + y.powf(2.0)).sqrt() - radius
+}
+
+/// TinyPaw patch: a clip covering the whole target needs no mask, since
+/// drawing already stops at the pixmap's edges, and masked drawing is slower.
+fn covers(clip_bounds: Rectangle, pixels: &tiny_skia::PixmapMut<'_>) -> bool {
+    clip_bounds.x <= 0.0
+        && clip_bounds.y <= 0.0
+        && clip_bounds.x + clip_bounds.width >= pixels.width() as f32
+        && clip_bounds.y + clip_bounds.height >= pixels.height() as f32
 }
 
 pub fn adjust_clip_mask(clip_mask: &mut tiny_skia::Mask, bounds: Rectangle) {

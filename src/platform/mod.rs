@@ -3,14 +3,14 @@
 //! they forward into one channel that the Iced subscription drains, so the UI
 //! thread stays the only writer of session state and idles without polling.
 
+#[cfg(windows)]
+pub mod beat;
 pub mod capture;
 pub mod displays;
 pub mod hotkeys;
 pub mod ipc;
 #[cfg(windows)]
 pub mod lens;
-#[cfg(windows)]
-pub mod beat;
 #[cfg(windows)]
 pub mod music;
 pub mod tray;
@@ -83,6 +83,38 @@ pub fn external_stream() -> BoxStream<'static, External> {
     match RX.lock().expect("bridge lock").take() {
         Some(rx) => rx.boxed(),
         None => stream::pending().boxed(),
+    }
+}
+
+/// One item per composed display frame (DWM's refresh on Windows), for
+/// following the cursor smoothly. A 16 ms `iced::time::every` fires about
+/// every 31 ms on Windows, whose timers round up to the 15.6 ms tick. The
+/// pacing thread ends when the subscription is dropped.
+pub fn refresh_ticks() -> BoxStream<'static, ()> {
+    let (tx, rx) = iced::futures::channel::mpsc::channel::<()>(1);
+    let spawned = std::thread::Builder::new()
+        .name("tinypaw-refresh".into())
+        .spawn(move || {
+            let mut tx = tx;
+            loop {
+                #[cfg(windows)]
+                let waited = unsafe { windows_sys::Win32::Graphics::Dwm::DwmFlush() } >= 0;
+                #[cfg(not(windows))]
+                let waited = false;
+                if !waited {
+                    std::thread::sleep(std::time::Duration::from_millis(8));
+                }
+                match tx.try_send(()) {
+                    // Full: the UI has not taken the last tick yet.
+                    Ok(()) => {}
+                    Err(e) if e.is_full() => {}
+                    Err(_) => return,
+                }
+            }
+        });
+    match spawned {
+        Ok(_) => rx.boxed(),
+        Err(_) => stream::pending().boxed(),
     }
 }
 

@@ -59,9 +59,18 @@ pub enum ShellAction {
     OpenSettings,
     WheelOpen,
     WheelClose,
-    /// Show or hide the lens anywhere, independent of annotation.
-    LensShow,
-    LensHide,
+    /// The Lens or Spotlight anywhere shortcut, independent of annotation.
+    Anywhere(crate::features::anywhere::Target, Edge),
+}
+
+/// What happened to an "anywhere" shortcut: the key went down or up (tap
+/// toggles, hold is momentary), or the CLI asked for it on or off outright.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    Press,
+    Release,
+    Show,
+    Hide,
 }
 
 pub type Handler = fn(&Session) -> Outcome;
@@ -570,7 +579,7 @@ impl Registry {
     /// Shared by dispatch, menus, wheel, tray and shortcuts, before mutation.
     pub fn availability(&self, id: &str, session: &Session) -> Result<(), Unavailable> {
         use crate::features::upcoming;
-        if id == upcoming::ANYWHERE && !self.host.desktop_lens {
+        if matches!(id, upcoming::ANYWHERE | upcoming::ANYWHERE_BEGIN) && !self.host.desktop_lens {
             return Err(Unavailable("Desktop Lens is unavailable on this platform"));
         }
         if id == upcoming::LENS && !self.host.window_lens && !self.host.desktop_lens {

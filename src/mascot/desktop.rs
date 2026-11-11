@@ -104,7 +104,14 @@ const BUBBLE_BAND: f32 = 104.0;
 /// `canvas` the rig's size and `feet` where it meets the ground, both in rig
 /// pixels; `rows` the number of menu entries; `top` room kept above the
 /// character for its bubble.
-pub fn layout(height: f32, visible: f32, canvas: Size, feet: Point, rows: usize, top: f32) -> Layout {
+pub fn layout(
+    height: f32,
+    visible: f32,
+    canvas: Size,
+    feet: Point,
+    rows: usize,
+    top: f32,
+) -> Layout {
     let scale = height / visible.max(1.0);
     let size = Size::new(canvas.width * scale, canvas.height * scale);
     let below = (canvas.height - feet.y).max(0.0) * scale;
@@ -344,7 +351,14 @@ impl Desktop {
         rows: usize,
         hidden: bool,
     ) -> (Self, Task<window::Id>) {
-        let layout = layout(size, rig.visible_height(), rig.size(), rig.anchor(), rows, 0.0);
+        let layout = layout(
+            size,
+            rig.visible_height(),
+            rig.size(),
+            rig.anchor(),
+            rows,
+            0.0,
+        );
         let parts = rig.motion_parts();
         let (id, task) = window::open(window::Settings {
             size: layout.window,
@@ -420,13 +434,23 @@ impl Desktop {
     pub fn set_lines(&mut self, lines: Lines, o: &Options) {
         self.lines = lines;
         self.speech = None;
-        self.layout = layout(self.size, self.rig.visible_height(), self.rig.size(), self.rig.anchor(), self.rows, self.band());
+        self.layout = layout(
+            self.size,
+            self.rig.visible_height(),
+            self.rig.size(),
+            self.rig.anchor(),
+            self.rows,
+            self.band(),
+        );
         self.schedule_idle(o);
         self.place();
     }
 
     fn schedule_idle(&mut self, o: &Options) {
-        let (min, max) = (o.idle_every.0.min(o.idle_every.1), o.idle_every.0.max(o.idle_every.1));
+        let (min, max) = (
+            o.idle_every.0.min(o.idle_every.1),
+            o.idle_every.0.max(o.idle_every.1),
+        );
         let span = ((max - min) * 1000.0) as usize + 1;
         self.next_idle = self.now + min + self.picker.below(span) as f32 / 1000.0;
     }
@@ -515,7 +539,14 @@ impl Desktop {
         self.rig = rig;
         self.menu = None;
         self.press = None;
-        self.layout = layout(self.size, self.rig.visible_height(), self.rig.size(), self.rig.anchor(), self.rows, self.band());
+        self.layout = layout(
+            self.size,
+            self.rig.visible_height(),
+            self.rig.size(),
+            self.rig.anchor(),
+            self.rows,
+            self.band(),
+        );
         self.place();
     }
 
@@ -606,7 +637,9 @@ impl Desktop {
         self.left_down = left;
         self.right_down = right;
         let mut save = None;
-        if self.press.is_none() && let Some(landed) = self.step_fall(k) {
+        if self.press.is_none()
+            && let Some(landed) = self.step_fall(k)
+        {
             save = Some(landed);
         }
 
@@ -665,7 +698,8 @@ impl Desktop {
 
         self.target = match self.rig.eye_point() {
             Some(eye) if o.eyes => {
-                let eyes = self.layout.character.position() + Vector::new(eye.x, eye.y) * self.layout.scale;
+                let eyes = self.layout.character.position()
+                    + Vector::new(eye.x, eye.y) * self.layout.scale;
                 gaze_toward(local, eyes, GAZE_REACH * self.layout.character.height)
             }
             _ => Vector::ZERO,
@@ -706,7 +740,10 @@ impl Desktop {
     fn step_motion(&mut self, o: &Options, k: f32) {
         let dt = (self.now - self.stepped).max(0.0);
         self.stepped = self.now;
-        let moved = (self.anchor.0 - self.last_anchor.0, self.anchor.1 - self.last_anchor.1);
+        let moved = (
+            self.anchor.0 - self.last_anchor.0,
+            self.anchor.1 - self.last_anchor.1,
+        );
         self.last_anchor = self.anchor;
         let velocity = if dt > 0.0 {
             Vector::new(moved.0 / k / dt, moved.1 / k / dt)
@@ -749,9 +786,15 @@ impl Desktop {
                         self.rig.visible_middle(),
                     )) * self.layout.scale)
                         .max(20.0);
-                    let accel = if dt > 0.0 { (velocity.x - press.last_vx) / dt } else { 0.0 };
+                    let accel = if dt > 0.0 {
+                        (velocity.x - press.last_vx) / dt
+                    } else {
+                        0.0
+                    };
                     let a = press.lean;
-                    let alpha = (accel.clamp(-20_000.0, 20_000.0) * a.cos() - HANG_GRAVITY * a.sin()) / length
+                    let alpha = (accel.clamp(-20_000.0, 20_000.0) * a.cos()
+                        - HANG_GRAVITY * a.sin())
+                        / length
                         - 4.0 * press.swing;
                     let swing = press.swing + alpha * dt;
                     ((a + swing * dt).clamp(-HANG_SWING, HANG_SWING), swing)
@@ -761,13 +804,20 @@ impl Desktop {
                     let hanging = press.pivot.y < self.rig.visible_middle();
                     let sign = if hanging { 1.0 } else { -1.0 };
                     let want = (sign * velocity.x * 0.0005).clamp(-CARRY_LEAN, CARRY_LEAN);
-                    (press.lean + (want - press.lean) * (1.0 - (-dt * 10.0).exp()), 0.0)
+                    (
+                        press.lean + (want - press.lean) * (1.0 - (-dt * 10.0).exp()),
+                        0.0,
+                    )
                 };
                 let lean = self.fit_carry(press.grab, press.pivot, lean);
                 pose.carry = Some((press.pivot, lean));
                 if let Some(p) = &mut self.press {
                     p.lean = lean;
-                    p.swing = if lean == 0.0 && swing != 0.0 { 0.0 } else { swing };
+                    p.swing = if lean == 0.0 && swing != 0.0 {
+                        0.0
+                    } else {
+                        swing
+                    };
                     p.last_vx = velocity.x;
                 }
             }
@@ -806,8 +856,12 @@ impl Desktop {
     /// it hangs from.
     fn grab_chain(&self, grab: Point) -> (Point, Vec<bool>) {
         let l = &self.layout;
-        let pivot = Point::new((grab.x - l.character.x) / l.scale, (grab.y - l.character.y) / l.scale);
-        let local = super::motion::unplaced(&self.pose, self.rig.anchor(), self.rig.size().height, pivot);
+        let pivot = Point::new(
+            (grab.x - l.character.x) / l.scale,
+            (grab.y - l.character.y) / l.scale,
+        );
+        let local =
+            super::motion::unplaced(&self.pose, self.rig.anchor(), self.rig.size().height, pivot);
         let mut protected = vec![false; self.parts.len()];
         if let Some(super::rig::Layer::Part(mut i)) = self.rig.hit(local, &self.pose) {
             loop {
@@ -863,7 +917,10 @@ impl Desktop {
             corners.iter().all(|p| {
                 let (x, y) = (p.x - grab.x, p.y - grab.y);
                 let q = Point::new(grab.x + x * co - y * s, grab.y + x * s + y * co);
-                q.x >= -0.5 && q.y >= -0.5 && q.x <= l.window.width + 0.5 && q.y <= l.window.height + 0.5
+                q.x >= -0.5
+                    && q.y >= -0.5
+                    && q.x <= l.window.width + 0.5
+                    && q.y <= l.window.height + 0.5
             })
         };
         let mut a = lean;
@@ -896,7 +953,11 @@ impl Desktop {
                 self.start_fall(o.reduced);
             }
             // The held pose ends; the drop's artwork, if any, shows briefly.
-            self.showing = self.pictures.drop.is_some().then_some((self.now + ART_TIME, Event::Drop));
+            self.showing = self
+                .pictures
+                .drop
+                .is_some()
+                .then_some((self.now + ART_TIME, Event::Drop));
             self.events.push(Event::Drop);
             self.say(Trigger::Drop, o);
             return Some((self.anchor.0 as f64, self.anchor.1 as f64));
@@ -906,7 +967,11 @@ impl Desktop {
         if self.click_compress {
             self.animator.compress(self.now);
         }
-        self.showing = self.pictures.click.is_some().then_some((self.now + ART_TIME, Event::Click));
+        self.showing = self
+            .pictures
+            .click
+            .is_some()
+            .then_some((self.now + ART_TIME, Event::Click));
         self.events.push(Event::Click);
         self.say(Trigger::Click, o);
         None
@@ -967,7 +1032,14 @@ impl Desktop {
         }
         self.size = size;
         self.rows = rows;
-        self.layout = layout(size, self.rig.visible_height(), self.rig.size(), self.rig.anchor(), rows, self.band());
+        self.layout = layout(
+            size,
+            self.rig.visible_height(),
+            self.rig.size(),
+            self.rig.anchor(),
+            rows,
+            self.band(),
+        );
         self.place();
     }
 
@@ -1063,14 +1135,16 @@ impl Desktop {
                 || self.released.is_some()
                 || self.showing.is_some_and(|(until, _)| self.now < until)
         };
-        Some(Duration::from_millis(if self.press.is_some() || self.falling.is_some() {
-            16
-        } else if self.menu.is_some() || (o.idle && !o.reduced) || settling || o.music > 0.001 {
-            33
-        } else {
-            // Still: only hit testing and new gaze targets.
-            100
-        }))
+        Some(Duration::from_millis(
+            if self.press.is_some() || self.falling.is_some() {
+                16
+            } else if self.menu.is_some() || (o.idle && !o.reduced) || settling || o.music > 0.001 {
+                33
+            } else {
+                // Still: only hit testing and new gaze targets.
+                100
+            },
+        ))
     }
 
     /// Whether a window-space point lies on visible artwork as drawn now.
@@ -1130,11 +1204,9 @@ impl Desktop {
         let b = self.lines.bubble;
         let width = b.max_width.min(l.window.width);
         let left = (l.anchor.x - width / 2.0).clamp(0.0, (l.window.width - width).max(0.0));
-        let bubble = container(
-            text(speech.text().to_owned())
-                .size(14)
-                .color(iced::Color::from_rgba8(b.text[0], b.text[1], b.text[2], 1.0)),
-        )
+        let bubble = container(text(speech.text().to_owned()).size(14).color(
+            iced::Color::from_rgba8(b.text[0], b.text[1], b.text[2], 1.0),
+        ))
         .padding([8, 12])
         .max_width(width)
         .style(move |_: &Theme| container::Style {
@@ -1149,10 +1221,13 @@ impl Desktop {
             },
             ..container::Style::default()
         });
-        let band = container(row![space().width(left), container(bubble).width(width).center_x(width)])
-            .width(Length::Fill)
-            .height(l.character.y.max(1.0))
-            .align_y(Alignment::End);
+        let band = container(row![
+            space().width(left),
+            container(bubble).width(width).center_x(width)
+        ])
+        .width(Length::Fill)
+        .height(l.character.y.max(1.0))
+        .align_y(Alignment::End);
         iced::widget::stack![body, band].into()
     }
 }
@@ -1369,7 +1444,14 @@ mod tests {
     #[test]
     fn layout_follows_a_custom_canvas_and_off_centre_feet() {
         // A wide image whose feet sit left of centre.
-        let l = layout(100.0, 200.0, Size::new(400.0, 200.0), Point::new(100.0, 190.0), 3, 0.0);
+        let l = layout(
+            100.0,
+            200.0,
+            Size::new(400.0, 200.0),
+            Point::new(100.0, 190.0),
+            3,
+            0.0,
+        );
         assert!((l.character.width - 200.0).abs() < 0.01);
         assert!((l.anchor.x - (l.character.x + 50.0)).abs() < 0.01);
         assert!((l.anchor.y - (l.character.y + 95.0)).abs() < 0.01);
@@ -1377,7 +1459,14 @@ mod tests {
 
     #[test]
     fn the_bubble_band_sits_above_the_character() {
-        let l = layout(100.0, 100.0, Size::new(100.0, 100.0), Point::new(50.0, 95.0), 3, BUBBLE_BAND);
+        let l = layout(
+            100.0,
+            100.0,
+            Size::new(100.0, 100.0),
+            Point::new(50.0, 95.0),
+            3,
+            BUBBLE_BAND,
+        );
         assert!(l.character.y >= BUBBLE_BAND - 0.01);
         assert!((l.window.height - (l.character.y + 100.0)).abs() < 1.0);
     }
@@ -1385,15 +1474,33 @@ mod tests {
     #[test]
     fn size_is_visible_height_so_padding_does_not_shrink_the_character() {
         // The same 100-pixel figure on a tight and a heavily padded canvas.
-        let tight = layout(200.0, 100.0, Size::new(60.0, 110.0), Point::new(30.0, 105.0), 3, 0.0);
-        let padded = layout(200.0, 100.0, Size::new(600.0, 1100.0), Point::new(300.0, 900.0), 3, 0.0);
+        let tight = layout(
+            200.0,
+            100.0,
+            Size::new(60.0, 110.0),
+            Point::new(30.0, 105.0),
+            3,
+            0.0,
+        );
+        let padded = layout(
+            200.0,
+            100.0,
+            Size::new(600.0, 1100.0),
+            Point::new(300.0, 900.0),
+            3,
+            0.0,
+        );
         assert_eq!(tight.scale, padded.scale);
         assert!((tight.scale * 100.0 - 200.0).abs() < 1e-3);
         // Yohta: the new range shows him exactly as the old one did.
         let r = crate::mascot::rig::Rig::load();
         let ratio = f64::from(r.visible_height() / r.size().height);
         use crate::features::mascot as m;
-        for (old, new) in [(m::MIN_SIZE, m::MIN_HEIGHT), (160.0, m::DEFAULT_HEIGHT), (m::MAX_SIZE, m::MAX_HEIGHT)] {
+        for (old, new) in [
+            (m::MIN_SIZE, m::MIN_HEIGHT),
+            (160.0, m::DEFAULT_HEIGHT),
+            (m::MAX_SIZE, m::MAX_HEIGHT),
+        ] {
             assert!((old * ratio - new).abs() < 1.0, "{old} × {ratio} vs {new}");
         }
     }
@@ -1418,9 +1525,21 @@ mod tests {
     #[test]
     fn the_grabbed_point_stays_under_the_cursor() {
         // Centre, head, tail and edge grabs, in window logical pixels.
-        let grabs = [(310.0, 450.0), (250.0, 200.0), (420.0, 700.0), (213.7, 801.3)];
+        let grabs = [
+            (310.0, 450.0),
+            (250.0, 200.0),
+            (420.0, 700.0),
+            (213.7, 801.3),
+        ];
         // A path across a negative-origin monitor and off the right edge.
-        let path = [(-1500, 300), (-3, -40), (0, 0), (960, 540), (1919, 1079), (2600, 1500)];
+        let path = [
+            (-1500, 300),
+            (-3, -40),
+            (0, 0),
+            (960, 540),
+            (1919, 1079),
+            (2600, 1500),
+        ];
         for k in [1.0, 1.25, 1.5, 2.0] {
             for g in grabs {
                 for c in path {
@@ -1463,7 +1582,11 @@ mod tests {
         let rig = Rig::load();
         let l = yohta(320.0);
         let rest = Pose::default();
-        let leaning = Pose { lean: 0.15, squash: 1.0, ..Pose::default() };
+        let leaning = Pose {
+            lean: 0.15,
+            squash: 1.0,
+            ..Pose::default()
+        };
         // A face point, drawn where the lean puts it.
         let face = Point::new(232.0, 360.0);
         let to_window = |pose: &Pose| {
@@ -1493,13 +1616,27 @@ mod tests {
         let l = d.layout;
         // Grab the head, about where the face is.
         let face = Point::new(232.0, 360.0);
-        let grab = Point::new(l.character.x + face.x * l.scale, l.character.y + face.y * l.scale);
+        let grab = Point::new(
+            l.character.x + face.x * l.scale,
+            l.character.y + face.y * l.scale,
+        );
         let (pivot, protected) = d.grab_chain(grab);
         assert!(protected.iter().any(|p| *p), "the head is protected");
         assert!(!protected.iter().all(|p| *p), "the tail may trail");
         let held = d.pose.clone();
-        d.press = Some(Press { cursor: (0, 0), grab, pose: held.clone(), dragging: true, pivot, protected: protected.clone(), lean: 0.0, swing: 0.0, last_vx: 0.0 });
-        let local = super::super::motion::unplaced(&held, d.rig.anchor(), d.rig.size().height, pivot);
+        d.press = Some(Press {
+            cursor: (0, 0),
+            grab,
+            pose: held.clone(),
+            dragging: true,
+            pivot,
+            protected: protected.clone(),
+            lean: 0.0,
+            swing: 0.0,
+            last_vx: 0.0,
+        });
+        let local =
+            super::super::motion::unplaced(&held, d.rig.anchor(), d.rig.size().height, pivot);
         let mut leaned = 0.0f32;
         for _ in 0..40 {
             d.now += 0.016;
@@ -1509,7 +1646,8 @@ mod tests {
             leaned = leaned.max(pose.carry.map_or(0.0, |(_, a)| a.abs()));
             // The grabbed point is where it was, within a hundredth of a
             // rig pixel, and the protected chain hasn't turned.
-            let drawn = super::super::motion::placed(pose, d.rig.anchor(), d.rig.size().height, local);
+            let drawn =
+                super::super::motion::placed(pose, d.rig.anchor(), d.rig.size().height, local);
             assert!(drawn.distance(pivot) < 0.01, "{drawn:?} vs {pivot:?}");
             for (i, p) in protected.iter().enumerate() {
                 if *p {
@@ -1519,14 +1657,21 @@ mod tests {
         }
         assert!(leaned > 0.01, "it leans while carried");
         let trailing = d.pose.carry.map_or(0.0, |(_, a)| a);
-        assert!(trailing > 0.0, "carried right by the head, the feet swing back to the left: {trailing}");
+        assert!(
+            trailing > 0.0,
+            "carried right by the head, the feet swing back to the left: {trailing}"
+        );
         // The lean never pushes the character out of its window.
         assert!(leaned <= CARRY_LEAN + 1e-4);
         // Release eases the lean out around the same point.
         d.release(&o);
         d.now += 0.001;
         d.step_motion(&o, 1.0);
-        assert!(d.pose.carry.is_some_and(|(at, a)| at == pivot && a.abs() <= leaned + 1e-4));
+        assert!(
+            d.pose
+                .carry
+                .is_some_and(|(at, a)| at == pivot && a.abs() <= leaned + 1e-4)
+        );
     }
 
     #[test]
@@ -1542,7 +1687,10 @@ mod tests {
             music: 0.0,
             beat: None,
         };
-        d.falling = Some(Fall { speed: 0.0, land: 700.0 });
+        d.falling = Some(Fall {
+            speed: 0.0,
+            land: 700.0,
+        });
         let mut saves = Vec::new();
         for _ in 0..200 {
             d.now += 0.016;
@@ -1554,7 +1702,10 @@ mod tests {
         assert_eq!(saves, [(500.0, 700.0)], "lands once, exactly on the edge");
         assert!(d.take_events().is_empty(), "landing is not a Drop");
         // Picking it up mid-fall stops the fall at once.
-        d.falling = Some(Fall { speed: 0.0, land: 900.0 });
+        d.falling = Some(Fall {
+            speed: 0.0,
+            land: 900.0,
+        });
         let _ = d.update(Msg::Pressed, &o);
         assert!(d.falling.is_none());
         // Off unless the character asks for it.
@@ -1583,17 +1734,37 @@ mod tests {
                 img.put_pixel(x, y, image::Rgba([90, 120, 200, 255]));
             }
         }
-        d.set_pictures(Pictures { held: Some(super::super::rig::Picture::new(&img, [0.0, 0.0, 1.0])), ..Pictures::default() });
+        d.set_pictures(Pictures {
+            held: Some(super::super::rig::Picture::new(&img, [0.0, 0.0, 1.0])),
+            ..Pictures::default()
+        });
         d.step_motion(&o, 1.0);
         let l = d.layout;
         let pivot = Point::new(size.width / 2.0, d.rig.visible_rows().0);
-        let grab = Point::new(l.character.x + pivot.x * l.scale, l.character.y + pivot.y * l.scale);
-        d.press = Some(Press { cursor: (0, 0), grab, pose: d.pose.clone(), dragging: true, pivot, protected: vec![true; 2], lean: 0.0, swing: 0.0, last_vx: 0.0 });
+        let grab = Point::new(
+            l.character.x + pivot.x * l.scale,
+            l.character.y + pivot.y * l.scale,
+        );
+        d.press = Some(Press {
+            cursor: (0, 0),
+            grab,
+            pose: d.pose.clone(),
+            dragging: true,
+            pivot,
+            protected: vec![true; 2],
+            lean: 0.0,
+            swing: 0.0,
+            last_vx: 0.0,
+        });
         let (mut most, mut least) = (0.0f32, 0.0f32);
         // Shake side to side, then hold still.
         for n in 0..120 {
             d.now += 0.016;
-            let dx = if n < 60 { if (n / 8) % 2 == 0 { 14.0 } else { -14.0 } } else { 0.0 };
+            let dx = if n < 60 {
+                if (n / 8) % 2 == 0 { 14.0 } else { -14.0 }
+            } else {
+                0.0
+            };
             d.last_anchor.0 = d.anchor.0 - dx;
             d.step_motion(&o, 1.0);
             let a = d.pose.carry.map_or(0.0, |(_, a)| a);
@@ -1601,13 +1772,19 @@ mod tests {
             least = least.min(a);
             assert!(a.abs() <= HANG_SWING + 1e-4);
         }
-        assert!(most > 0.05 && least < -0.05, "it swings both ways: {least}..{most}");
+        assert!(
+            most > 0.05 && least < -0.05,
+            "it swings both ways: {least}..{most}"
+        );
         for _ in 0..300 {
             d.now += 0.016;
             d.last_anchor = d.anchor;
             d.step_motion(&o, 1.0);
         }
-        assert!(d.pose.carry.map_or(0.0, |(_, a)| a).abs() < 0.02, "and settles hanging straight");
+        assert!(
+            d.pose.carry.map_or(0.0, |(_, a)| a).abs() < 0.02,
+            "and settles hanging straight"
+        );
     }
 
     #[test]
@@ -1690,18 +1867,31 @@ mod tests {
                 d.last_anchor.0 -= 40.0 * i as f32;
                 d.step_motion(&o, 1.0);
                 // No squash, lean, bounce or part motion while held.
-                assert_eq!((d.pose.angles.clone(), d.pose.lean, d.pose.squash, d.pose.bounce),
-                    (held.angles.clone(), held.lean, held.squash, held.bounce));
+                assert_eq!(
+                    (
+                        d.pose.angles.clone(),
+                        d.pose.lean,
+                        d.pose.squash,
+                        d.pose.bounce
+                    ),
+                    (held.angles.clone(), held.lean, held.squash, held.bounce)
+                );
                 assert!(d.pose.carry.is_none_or(|(_, a)| a == 0.0));
             }
-            let face = if dragging { Expression::Dragging } else { Expression::Pressed };
+            let face = if dragging {
+                Expression::Dragging
+            } else {
+                Expression::Pressed
+            };
             assert_eq!(d.pose.expression, face);
         }
         // Release: the first frame starts from the held geometry.
         d.release(&o);
         d.now += 0.001;
         d.step_motion(&o, 1.0);
-        assert!((d.pose.lean - held.lean).abs() < 0.01 && (d.pose.bounce - held.bounce).abs() < 0.01);
+        assert!(
+            (d.pose.lean - held.lean).abs() < 0.01 && (d.pose.bounce - held.bounce).abs() < 0.01
+        );
         for _ in 0..20 {
             d.now += 0.033;
             d.step_motion(&o, 1.0);

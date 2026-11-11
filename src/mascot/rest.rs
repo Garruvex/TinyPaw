@@ -88,7 +88,9 @@ mod tests {
 
     fn png(path: &str) -> RgbaImage {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-        image::open(&path).unwrap_or_else(|e| panic!("{path:?}: {e}")).to_rgba8()
+        image::open(&path)
+            .unwrap_or_else(|e| panic!("{path:?}: {e}"))
+            .to_rgba8()
     }
 
     /// The bundled anchor: centred, under the lowest solid row of any layer.
@@ -144,8 +146,14 @@ mod tests {
     /// The estimate stays inside the opaque box.
     fn inside(img: &RgbaImage, (x, y): (f32, f32), bbox: (u32, u32, u32, u32)) {
         let (px, py) = (x * img.width() as f32, y * img.height() as f32);
-        assert!(px >= bbox.0 as f32 && px <= (bbox.2 + 1) as f32, "{px} in {bbox:?}");
-        assert!(py >= bbox.1 as f32 && py <= (bbox.3 + 1) as f32, "{py} in {bbox:?}");
+        assert!(
+            px >= bbox.0 as f32 && px <= (bbox.2 + 1) as f32,
+            "{px} in {bbox:?}"
+        );
+        assert!(
+            py >= bbox.1 as f32 && py <= (bbox.3 + 1) as f32,
+            "{py} in {bbox:?}"
+        );
     }
 
     #[test]
@@ -157,7 +165,10 @@ mod tests {
         });
         let e = estimate(&img).unwrap();
         inside(&img, e, (50, 30, 150, 130));
-        assert!((e.0 - 0.5).abs() < 0.01 && (e.1 * 200.0 - 131.0).abs() < 1.0, "{e:?}");
+        assert!(
+            (e.0 - 0.5).abs() < 0.01 && (e.1 * 200.0 - 131.0).abs() < 1.0,
+            "{e:?}"
+        );
     }
 
     #[test]
@@ -165,8 +176,12 @@ mod tests {
         // A body 60..140 wide standing at y 160, with a thin tail curling
         // down to y 190 at the far right.
         let mut img = RgbaImage::new(220, 220);
-        fill(&mut img, |x, y| (60..140).contains(&x) && (40..160).contains(&y));
-        fill(&mut img, |x, y| (180..190).contains(&x) && (100..190).contains(&y));
+        fill(&mut img, |x, y| {
+            (60..140).contains(&x) && (40..160).contains(&y)
+        });
+        fill(&mut img, |x, y| {
+            (180..190).contains(&x) && (100..190).contains(&y)
+        });
         let e = estimate(&img).unwrap();
         inside(&img, e, (60, 40, 189, 189));
         // It rests on the tail (the lowest art), but no further right than
@@ -179,9 +194,13 @@ mod tests {
     #[test]
     fn wide_transparent_padding_does_not_move_the_estimate() {
         let mut tight = RgbaImage::new(100, 100);
-        fill(&mut tight, |x, y| (20..80).contains(&x) && (10..90).contains(&y));
+        fill(&mut tight, |x, y| {
+            (20..80).contains(&x) && (10..90).contains(&y)
+        });
         let mut padded = RgbaImage::new(500, 300);
-        fill(&mut padded, |x, y| (220..280).contains(&x) && (110..190).contains(&y));
+        fill(&mut padded, |x, y| {
+            (220..280).contains(&x) && (110..190).contains(&y)
+        });
         let (a, b) = (estimate(&tight).unwrap(), estimate(&padded).unwrap());
         // The same point on the art, in pixels from the art's corner.
         let (ax, ay) = (a.0 * 100.0 - 20.0, a.1 * 100.0 - 10.0);

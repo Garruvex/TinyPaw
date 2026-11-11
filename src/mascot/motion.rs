@@ -284,6 +284,10 @@ pub struct Pose {
     /// Music bounce: how far the whole character rises, as a fraction of
     /// its height (0 at rest).
     pub bounce: f32,
+    /// Music head bob: how far the head (with everything on it) drops, as
+    /// a fraction of the character's height (0 at rest, never up, so the
+    /// neck never opens).
+    pub head_drop: f32,
     pub expression: Expression,
     /// Where the eyes look, each axis -1 to 1, in head space.
     pub gaze: Vector,
@@ -402,7 +406,11 @@ impl Animator {
                 let spec = part.spec;
                 let t = i.now * spec.speed.clamp(0.0, 2.0);
                 let k = spec.strength.clamp(0.0, 2.0);
-                let base = if i.idle { idle_angle(spec.preset, t, i.dragging) } else { 0.0 };
+                let base = if i.idle {
+                    idle_angle(spec.preset, t, i.dragging)
+                } else {
+                    0.0
+                };
                 let drag = drag_angle(part.kind, spec.preset, self.velocity.x, i.dragging);
                 let music = if i.music > 0.0 {
                     bop_angle(i.bop, part.kind, beat) * level
@@ -412,9 +420,9 @@ impl Animator {
                 let goal = (base + drag + music) * k;
                 angles[n] = if spec.preset.springy() {
                     // Inertia: when the parent turns, the part lags behind.
-                    let parent_turn = part
-                        .parent
-                        .map_or(0.0, |p| angles[p] - self.last.get(p).copied().unwrap_or(0.0));
+                    let parent_turn = part.parent.map_or(0.0, |p| {
+                        angles[p] - self.last.get(p).copied().unwrap_or(0.0)
+                    });
                     let s = &mut self.springs[n];
                     s.angle -= parent_turn * 0.8;
                     let (stiff, damp) = if spec.preset == Preset::Floppy {
@@ -452,6 +460,7 @@ impl Animator {
                 bounce: b.bounce * level,
                 lean: b.lean * level,
                 squash: b.squash * level,
+                head_drop: b.head_drop * level,
             }
         };
         // A Compress reaction: rises fast, eases back, bounded.
@@ -470,8 +479,14 @@ impl Animator {
             angles,
             lean: self.lean + body.lean,
             // A click's Compress and a beat's share one envelope height.
-            squash: self.squash + if click > 0.0 { body.squash.max(click) } else { body.squash },
+            squash: self.squash
+                + if click > 0.0 {
+                    body.squash.max(click)
+                } else {
+                    body.squash
+                },
             bounce: body.bounce,
+            head_drop: body.head_drop,
             expression,
             gaze: Vector::ZERO,
             carry: None,
@@ -542,6 +557,7 @@ struct Body {
     bounce: f32,
     lean: f32,
     squash: f32,
+    head_drop: f32,
 }
 
 /// How a part moves with the music at full level.
@@ -593,15 +609,20 @@ fn bop_body(bop: Bop, b: Beat) -> Body {
     match bop {
         // A quick hop just after each beat, settling before the next; it
         // starts and ends on the ground, so it never jumps.
+        // The head drops on the beat and springs back up as the body
+        // hops, so the two overlap.
         Bop::Nod => Body {
             bounce: (b.p.powf(0.6) * PI).sin() * 0.013,
+            head_drop: hit(b.p, 3) * HEAD_DROP,
             ..Body::default()
         },
-        // A dip on the beat, leaning to one side, then the other.
+        // A dip on the beat, leaning to one side, then the other; the head
+        // bobs down hard on each beat.
         Bop::Groove => Body {
             bounce: 0.0,
             lean: pair.cos() * 0.05,
             squash: hit(b.p, 3) * 0.5,
+            head_drop: hit(b.p, 3) * HEAD_DROP * 1.2,
         },
         // Lands on the beat squashed, stretches at the top of the hop.
         Bop::RubberHose => {
@@ -610,6 +631,7 @@ fn bop_body(bop: Bop, b: Beat) -> Body {
                 bounce: air * 0.035,
                 lean: pair.sin() * 0.06,
                 squash: hit(b.p, 6) * 1.1 - air * 0.6,
+                head_drop: hit(b.p, 6) * HEAD_DROP * 0.8,
             }
         }
         // One short squash per beat, back to rest before the next; silence
@@ -620,6 +642,10 @@ fn bop_body(bop: Bop, b: Beat) -> Body {
         },
     }
 }
+
+/// How far the head drops on a beat at full level, as a fraction of the
+/// character's height: snaps down just after the beat, eases back up.
+const HEAD_DROP: f32 = 0.03;
 
 /// How far a Compress reaction squashes at its peak (the same visible
 /// effect for a click and a beat).
@@ -716,6 +742,7 @@ pub fn blend(from: &Pose, to: Pose, t: f32) -> Pose {
         lean: mix(from.lean, to.lean),
         squash: mix(from.squash, to.squash),
         bounce: mix(from.bounce, to.bounce),
+        head_drop: mix(from.head_drop, to.head_drop),
         carry: from.carry.map(|(at, angle)| (at, mix(angle, 0.0))),
         ..to
     }
@@ -785,7 +812,15 @@ mod tests {
     fn compress_is_bounded_restarts_and_ignores_presses() {
         let mut a = Animator::default();
         let step = |a: &mut Animator, now: f32, pressed: bool| {
-            a.step(&[tail()], &Inputs { now, dt: 0.016, pressed, ..Inputs::default() })
+            a.step(
+                &[tail()],
+                &Inputs {
+                    now,
+                    dt: 0.016,
+                    pressed,
+                    ..Inputs::default()
+                },
+            )
         };
         // A press alone never squashes.
         let mut peak = 0.0f32;
@@ -833,8 +868,18 @@ mod tests {
     #[test]
     fn unplaced_inverts_placed() {
         let feet = iced::Point::new(310.0, 807.0);
-        for (lean, squash, bounce) in [(0.0, 0.0, 0.0), (0.15, 0.0, 0.0), (-0.12, 1.0, 0.03), (0.06, -0.6, 0.035)] {
-            let pose = Pose { lean, squash, bounce, ..Pose::default() };
+        for (lean, squash, bounce) in [
+            (0.0, 0.0, 0.0),
+            (0.15, 0.0, 0.0),
+            (-0.12, 1.0, 0.03),
+            (0.06, -0.6, 0.035),
+        ] {
+            let pose = Pose {
+                lean,
+                squash,
+                bounce,
+                ..Pose::default()
+            };
             for p in [(310.0, 807.0), (0.0, 0.0), (620.0, 120.0), (40.0, 860.0)] {
                 let p = iced::Point::new(p.0, p.1);
                 let back = unplaced(&pose, feet, 860.0, placed(&pose, feet, 860.0, p));
@@ -842,11 +887,19 @@ mod tests {
             }
         }
         // The feet stay put through lean and squash; bounce lifts them.
-        let pose = Pose { lean: 0.15, squash: 1.0, ..Pose::default() };
+        let pose = Pose {
+            lean: 0.15,
+            squash: 1.0,
+            ..Pose::default()
+        };
         assert!(placed(&pose, feet, 860.0, feet).distance(feet) < 1e-3);
         // A carry turn keeps its own point fixed and inverts cleanly.
         let grab = iced::Point::new(250.0, 200.0);
-        let carried = Pose { carry: Some((grab, 0.2)), lean: 0.05, ..Pose::default() };
+        let carried = Pose {
+            carry: Some((grab, 0.2)),
+            lean: 0.05,
+            ..Pose::default()
+        };
         let on_grab = unplaced(&carried, feet, 860.0, grab);
         assert!(placed(&carried, feet, 860.0, on_grab).distance(grab) < 1e-3);
         for p in [(0.0, 0.0), (620.0, 860.0)] {
@@ -858,10 +911,22 @@ mod tests {
 
     #[test]
     fn blend_eases_geometry_and_takes_the_live_face() {
-        let held = Pose { angles: vec![0.4], lean: 0.1, expression: Expression::Dragging, ..Pose::default() };
-        let live = Pose { angles: vec![0.0], expression: Expression::Idle, ..Pose::default() };
+        let held = Pose {
+            angles: vec![0.4],
+            lean: 0.1,
+            expression: Expression::Dragging,
+            ..Pose::default()
+        };
+        let live = Pose {
+            angles: vec![0.0],
+            expression: Expression::Idle,
+            ..Pose::default()
+        };
         let start = blend(&held, live.clone(), 0.0);
-        assert_eq!((start.angles[0], start.lean, start.expression), (0.4, 0.1, Expression::Idle));
+        assert_eq!(
+            (start.angles[0], start.lean, start.expression),
+            (0.4, 0.1, Expression::Idle)
+        );
         let end = blend(&held, live, 1.0);
         assert_eq!((end.angles[0], end.lean), (0.0, 0.0));
     }
@@ -890,7 +955,14 @@ mod tests {
         assert_eq!(pose.expression, Expression::Dragging);
         for _ in 0..200 {
             now += 0.033;
-            pose = a.step(&parts, &Inputs { now, dt: 0.033, ..Inputs::default() });
+            pose = a.step(
+                &parts,
+                &Inputs {
+                    now,
+                    dt: 0.033,
+                    ..Inputs::default()
+                },
+            );
         }
         assert!(!a.settling(), "everything comes to rest after the drop");
         assert!(pose.lean.abs() < 0.002 && pose.angles.iter().all(|a| a.abs() < 0.01));
@@ -901,8 +973,15 @@ mod tests {
         let mut a = Animator::default();
         a.clicked(1.0);
         let at = |a: &mut Animator, now| {
-            a.step(&[], &Inputs { now, dt: 0.03, ..Inputs::default() })
-                .expression
+            a.step(
+                &[],
+                &Inputs {
+                    now,
+                    dt: 0.03,
+                    ..Inputs::default()
+                },
+            )
+            .expression
         };
         assert_eq!(at(&mut a, 1.1), Expression::Pressed);
         assert_eq!(at(&mut a, 1.5), Expression::Idle);
@@ -991,7 +1070,39 @@ mod tests {
         let after = at(&mut a, 0.3);
         let before = at(&mut a, 0.97);
         let on = at(&mut a, 0.0);
-        assert!(after > 0.01 && before < after * 0.2 && on == 0.0, "{after} {before} {on}");
+        assert!(
+            after > 0.01 && before < after * 0.2 && on == 0.0,
+            "{after} {before} {on}"
+        );
+    }
+
+    #[test]
+    fn the_head_bobs_down_on_the_beat_and_back_up() {
+        let mut a = Animator::default();
+        let at = |a: &mut Animator, p: f32, bop: Bop| {
+            a.step(
+                &[],
+                &Inputs {
+                    now: 1.0,
+                    dt: 0.03,
+                    music: 1.0,
+                    beat: Some(p),
+                    bop,
+                    ..Inputs::default()
+                },
+            )
+            .head_drop
+        };
+        for bop in [Bop::Nod, Bop::Groove, Bop::RubberHose] {
+            let on = at(&mut a, 0.0, bop);
+            let down = at(&mut a, 0.08, bop);
+            let up = at(&mut a, 0.95, bop);
+            assert!(
+                on == 0.0 && down > 0.01 && up < down * 0.05 && up >= 0.0,
+                "{bop}: {on} {down} {up}"
+            );
+        }
+        assert_eq!(at(&mut a, 0.08, Bop::Compress), 0.0);
     }
 
     /// Two seconds of a bop at full music: the extremes of bounce, lean and
@@ -1041,7 +1152,11 @@ mod tests {
 
         for bop in Bop::ALL {
             let (bounce, lean, squash, tail) = bop_range(bop, true);
-            assert_eq!((bounce, lean, squash, tail), (0.0, (0.0, 0.0), (0.0, 0.0), 0.0), "{bop}");
+            assert_eq!(
+                (bounce, lean, squash, tail),
+                (0.0, (0.0, 0.0), (0.0, 0.0), 0.0),
+                "{bop}"
+            );
             assert_eq!(Bop::parse(bop.name()), Some(bop));
         }
     }

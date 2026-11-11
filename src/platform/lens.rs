@@ -53,11 +53,13 @@ impl Controller {
         if (input.anywhere || input.source == upcoming::DESKTOP) && !self.desktop_failed {
             let configured = match self.desktop.as_mut() {
                 Some(lens) => lens.configure(input.size, input.zoom, input.exclude),
-                None => DesktopLens::new(input.size, input.zoom).and_then(|mut lens| {
-                    lens.configure(input.size, input.zoom, input.exclude)?;
-                    self.desktop = Some(lens);
-                    Ok(())
-                }),
+                None => {
+                    DesktopLens::new(input.size, input.zoom, input.exclude).and_then(|mut lens| {
+                        lens.configure(input.size, input.zoom, input.exclude)?;
+                        self.desktop = Some(lens);
+                        Ok(())
+                    })
+                }
             };
             match configured {
                 Ok(()) => {

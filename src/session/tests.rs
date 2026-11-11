@@ -22,6 +22,7 @@ fn ptr(kind: PointerKind, x: f32, y: f32) -> Event {
         output: O,
         pos: Pt::new(x, y),
         at: 0,
+        paw_angle: None,
     })
 }
 
@@ -310,6 +311,7 @@ fn stroke_ends_at_display_boundary() {
             output: OutputId(1),
             pos: Pt::new(5.0, 0.0),
             at: 0,
+            paw_angle: None,
         }),
         0,
     );
@@ -731,7 +733,10 @@ fn interact_cancels_an_in_flight_input_acquisition() {
     s.handle(Event::InteractDown, 1);
     assert_eq!(s.overlay_state(), OverlayState::Hidden);
     s.handle(Event::InputAcquired(stale), 2);
-    assert!(!s.is_pointing(), "late acknowledgement must not steal input back from Alt");
+    assert!(
+        !s.is_pointing(),
+        "late acknowledgement must not steal input back from Alt"
+    );
     s.handle(Event::InteractUp, 3);
     s.handle(Event::ButtonsReleased, 4);
     ack(&mut s);
@@ -802,6 +807,31 @@ fn reduced_motion_snaps_grip_and_expires_ink_without_fading() {
 }
 
 #[test]
+fn stamp_keeps_the_rendered_release_angle() {
+    let reg = registry();
+    let mut settings = reg.defaults();
+    reg.set(&mut settings, point::TAP_STAMP, Value::Choice("cat"))
+        .unwrap();
+    let mut s = Session::new(point::TOOL, point::new_state, settings.clone());
+    s.handle(Event::MasterToggle, 0);
+    ack(&mut s);
+    s.handle(ptr(PointerKind::Down, 30.0, 40.0), 10);
+    let Event::Pointer(mut release) = ptr(PointerKind::Up, 30.0, 40.0) else {
+        unreachable!()
+    };
+    release.paw_angle = Some(-0.7);
+    s.handle(Event::Pointer(release), 20);
+    reg.set(&mut settings, point::ANGLE, Value::Float(45.0))
+        .unwrap();
+    s.handle(Event::SettingsChanged(settings), 30);
+    s.handle(ptr(PointerKind::Moved, 100.0, 200.0), 40);
+    let Mark::PawPrint(print) = &s.scene().marks()[0] else {
+        panic!("expected stamp")
+    };
+    assert_eq!(print.angle, -0.7);
+}
+
+#[test]
 fn paw_stamps_commit_once_and_share_ink_history_and_fade() {
     for (id, kind) in [("cat", PawPrintKind::Cat), ("dog", PawPrintKind::Dog)] {
         let reg = registry();
@@ -862,6 +892,7 @@ fn stamps_ignore_laser_cancelled_press_and_release_on_another_output() {
             output: OutputId(1),
             pos: Pt::new(10.0, 10.0),
             at: 4,
+            paw_angle: None,
         }),
         4,
     );

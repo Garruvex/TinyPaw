@@ -21,28 +21,42 @@ pub fn view<'a>(registry: &Registry) -> Element<'a, Message> {
         Some(e) => format!("3.  {e} hands the mouse back to your game."),
         None => "3.  End annotation hands the mouse back to your game.".to_owned(),
     };
-    let logo = container(iced::widget::image(crate::branding::logo()).width(36).height(36))
-        .width(36)
-        .height(36)
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Center);
+    let logo = container(
+        iced::widget::image(crate::branding::logo())
+            .width(36)
+            .height(36),
+    )
+    .width(36)
+    .height(36)
+    .align_x(Alignment::Center)
+    .align_y(Alignment::Center);
     let title = column![
         text("TinyPaw is ready").font(theme::HEADING).size(17),
-        text("It lives in the tray and starts Off.").size(12).color(theme::MUTED),
+        text("It lives in the tray and starts Off.")
+            .size(12)
+            .color(theme::MUTED),
     ]
     .spacing(2);
     let tips = column![
-        text("1.  Click to tap, drag to draw.").size(13).color(theme::SUBTLE),
+        text("1.  Click to tap, drag to draw.")
+            .size(13)
+            .color(theme::SUBTLE),
         text(edit).size(13).color(theme::SUBTLE),
         text(exit).size(13).color(theme::SUBTLE),
     ]
     .spacing(6);
     let mut action = row![
-        button(text("Turn on TinyPaw").font(theme::HEADING).size(14).width(Length::Fill).center())
-            .width(Length::Fill)
-            .padding([12, 16])
-            .style(theme::primary)
-            .on_press(Message::Ui(UiMsg::TurnOn)),
+        button(
+            text("Turn on TinyPaw")
+                .font(theme::HEADING)
+                .size(14)
+                .width(Length::Fill)
+                .center()
+        )
+        .width(Length::Fill)
+        .padding([12, 16])
+        .style(theme::primary)
+        .on_press(Message::Ui(UiMsg::TurnOn)),
     ]
     .spacing(10)
     .align_y(Alignment::Center);

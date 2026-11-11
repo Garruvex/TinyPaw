@@ -17,6 +17,9 @@ pub struct PointerEvent {
     pub output: OutputId,
     pub pos: Pt,
     pub at: Millis,
+    /// Rendered paw rotation at release, including the reaching presentation.
+    /// Headless callers can omit it to use the configured paw angle.
+    pub paw_angle: Option<f32>,
 }
 
 /// What the session lends a tool while it handles input.

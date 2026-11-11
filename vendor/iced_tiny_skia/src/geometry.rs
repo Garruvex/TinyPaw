@@ -154,6 +154,29 @@ impl geometry::frame::Backend for Frame {
         let mut paint = into_paint(stroke.style);
         paint.shader.transform(self.transform);
 
+        // TinyPaw patch: outline the stroke once here instead of on every
+        // draw. Upstream re-ran the stroker over the whole path each time any
+        // part of it was repainted, so a screen of ink made every small
+        // repaint (a moving paw or spotlight) cost as much as drawing it all.
+        // Hairlines keep tiny-skia's dedicated hairline rasterizer.
+        const RES_SCALE: f32 = 2.0;
+        if skia_stroke.width > 1.0 {
+            let dashed = match skia_stroke.dash.clone() {
+                Some(dash) => path.dash(&dash, RES_SCALE),
+                None => Some(path.clone()),
+            };
+            if let Some(outline) =
+                dashed.and_then(|p| p.stroke(&skia_stroke, RES_SCALE))
+            {
+                self.primitives.push(Primitive::Fill {
+                    path: outline,
+                    paint,
+                    rule: tiny_skia::FillRule::Winding,
+                });
+            }
+            return;
+        }
+
         self.primitives.push(Primitive::Stroke {
             path,
             paint,

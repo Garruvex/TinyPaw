@@ -150,6 +150,38 @@ fn outline(width: f32) -> Stroke<'static> {
     Stroke::default().with_color(OUTLINE).with_width(width)
 }
 
+/// Snapshot the same rotation used to paint the paw, at the release position.
+pub fn stamp_angle(tip: Tip, at: Point, area: Size, pack: Option<&Pack>) -> Option<f32> {
+    let Tip::Paw {
+        scale,
+        angle,
+        stick,
+        stretch,
+        grip_x,
+        ..
+    } = tip
+    else {
+        return None;
+    };
+    Some(if stick || stretch {
+        let wrist = pack.map_or(WRIST * scale, |p| Sprite::new(p, scale).wrist());
+        reaching_pose(at, grip_x, area, wrist).1
+    } else {
+        angle
+    })
+}
+
+fn reaching_pose(tip: Point, grip_x: f32, area: Size, wrist: Vector) -> (Point, f32) {
+    let grip = Point::new(
+        (grip_x + area.width * 0.3).clamp(area.width * 0.2, area.width * 1.05),
+        area.height * 1.12,
+    );
+    let dir = grip - tip;
+    // Align the artwork's actual claw-to-wrist axis with the shaft.
+    let angle = dir.y.atan2(dir.x) - wrist.y.atan2(wrist.x);
+    (grip, angle)
+}
+
 /// Classic Stick: a slim rod from an off-screen grip below and right of the
 /// pointer, with the paw rotated along it. The grip follows `grip_x`, which
 /// eases after the pointer; the claw stays on `tip` exactly. `wrist` is where
@@ -168,13 +200,7 @@ fn draw_stick(
     texture: Option<(&crate::packs::Forearm, f32)>,
     draw_paw: impl FnOnce(&mut Frame, f32),
 ) {
-    let grip = Point::new(
-        (grip_x + area.width * 0.3).clamp(area.width * 0.2, area.width * 1.05),
-        area.height * 1.12,
-    );
-    let dir = Vector::new(grip.x - tip.x, grip.y - tip.y);
-    // Align the artwork's actual claw-to-wrist axis with the shaft.
-    let angle = dir.y.atan2(dir.x) - wrist.y.atan2(wrist.x);
+    let (grip, angle) = reaching_pose(tip, grip_x, area, wrist);
     let s = 1.0 - 0.06 * press.clamp(0.0, 1.0);
     let (sin, cos) = angle.sin_cos();
     let wrist = Point::new(
@@ -438,6 +464,44 @@ mod tests {
     use iced::advanced::{graphics::geometry::Renderer as _, renderer::Headless};
     use iced::futures::FutureExt;
     use iced::{Font, Pixels, Renderer};
+
+    #[test]
+    fn stamp_rotation_follows_the_reaching_paw_and_pack_wrist() {
+        let area = Size::new(800.0, 600.0);
+        let at = Point::new(300.0, 200.0);
+        let mut pack = crate::packs::load_all().0.remove(0);
+        pack.width = 100;
+        pack.height = 100;
+        pack.hotspot = (0.2, 0.1);
+        pack.wrist = Some((0.6, 0.9));
+        for (stick, stretch) in [(false, false), (true, false), (false, true)] {
+            for grip_x in [100.0, 500.0] {
+                let tip = Tip::Paw {
+                    at: crate::session::Pt::new(at.x, at.y),
+                    press: 1.0,
+                    scale: 1.5,
+                    angle: -0.7,
+                    stick,
+                    stretch,
+                    grip_x,
+                };
+                for pack in [None, Some(&pack)] {
+                    let expected = if stick || stretch {
+                        let shaft = (672.0_f32 - at.y).atan2(grip_x + 240.0 - at.x);
+                        let wrist = if pack.is_some() {
+                            0.8_f32.atan2(0.4)
+                        } else {
+                            56.0_f32.atan2(7.0)
+                        };
+                        shaft - wrist
+                    } else {
+                        -0.7
+                    };
+                    assert!((stamp_angle(tip, at, area, pack).unwrap() - expected).abs() < 1e-6);
+                }
+            }
+        }
+    }
 
     #[test]
     fn stamps_render_with_distinct_claws_and_transparent_gaps() {

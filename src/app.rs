@@ -15,6 +15,7 @@ use iced::window::{self, settings::PlatformSpecific};
 use iced::{Element, Point, Size, Subscription, Task, Theme, event, theme};
 
 use crate::audio::{self, Audio};
+use crate::features::anywhere::{self, Adjust, HeldToggle, Target};
 use crate::features::{mascot as character, point, sound, system, wheel as wheel_feature};
 use crate::mascot::pack::{self as characters, Character};
 use crate::packs::{self, Draft, Pack};
@@ -24,7 +25,7 @@ use crate::platform::{
 };
 use crate::preferences;
 use crate::registry::{
-    Dispatched, Key, Registry, ShellAction, ShortcutContext, Unavailable, Value,
+    Dispatched, Edge, Key, Registry, ShellAction, ShortcutContext, Unavailable, Value,
 };
 use crate::session::{
     Effect, Event, Millis, Mode, OutputId, OverlayState, PointerEvent, PointerKind, Pt, Session,
@@ -74,6 +75,10 @@ pub enum Message {
     Unoccluding(window::Id),
     Frame,
     Tick,
+    /// Follows the cursor for Spotlight anywhere while not annotating.
+    SpotTick,
+    /// Mouse wheel over the overlay: up, and whether Shift was held.
+    ToolWheel(bool, bool),
 }
 
 #[derive(Debug, Clone)]
@@ -174,8 +179,12 @@ pub struct App {
     alt_down: bool,
     #[cfg(windows)]
     lens: platform::lens::Controller,
-    /// The lens shortcut is held, with annotation on or off.
-    lens_anywhere: bool,
+    /// Lens anywhere (Ctrl+Alt+Z), with annotation on or off.
+    lens_anywhere: HeldToggle,
+    /// Spotlight anywhere (Ctrl+Alt+X), with annotation on or off.
+    spotlight_anywhere: HeldToggle,
+    /// Where the cursor is for Spotlight anywhere while not annotating.
+    spot_cursor: Option<(OutputId, Pt)>,
     /// The desktop character window, while enabled.
     #[cfg(windows)]
     mascot: Option<crate::mascot::desktop::Desktop>,
@@ -318,7 +327,9 @@ impl App {
             alt_down: false,
             #[cfg(windows)]
             lens: platform::lens::Controller::default(),
-            lens_anywhere: false,
+            lens_anywhere: HeldToggle::default(),
+            spotlight_anywhere: HeldToggle::default(),
+            spot_cursor: None,
             #[cfg(windows)]
             mascot: None,
             #[cfg(windows)]
@@ -478,7 +489,15 @@ impl App {
                 ));
             }
             Message::External(External::Hotkey { id, pressed }) => {
-                if let Some(cmd) = self.hotkeys.as_ref().and_then(|h| h.command(id)) {
+                if self.hotkeys.as_ref().is_some_and(|h| h.is_dismiss(id)) {
+                    if pressed {
+                        self.dismiss_anywhere(now);
+                    }
+                } else if let Some(key) = self.hotkeys.as_ref().and_then(|h| h.adjust(id)) {
+                    if pressed {
+                        self.adjust_anywhere(key, &mut out);
+                    }
+                } else if let Some(cmd) = self.hotkeys.as_ref().and_then(|h| h.command(id)) {
                     if pressed {
                         self.run(cmd, now, &mut out);
                     } else {
@@ -564,7 +583,11 @@ impl App {
                 self.character_conflict = None;
                 self.page = Page::Character;
                 let id = self.begin_character_job();
+                let request = self.reference.clone();
                 tasks.push(character_work(id, move || {
+                    if let Some(request) = request {
+                        request.validate_folder(&path)?;
+                    }
                     characters::prepare_folder(&path).map(CharacterWork::Prepared)
                 }));
             }
@@ -603,7 +626,10 @@ impl App {
                             use view::settings::CharacterTab;
                             self.art = Some(*editor);
                             // An opened editor always shows in Arrange.
-                            if !matches!(self.character_tab, CharacterTab::Artwork | CharacterTab::Advanced) {
+                            if !matches!(
+                                self.character_tab,
+                                CharacterTab::Artwork | CharacterTab::Advanced
+                            ) {
                                 self.character_tab = CharacterTab::Artwork;
                             }
                             if !errors.is_empty() {
@@ -611,6 +637,8 @@ impl App {
                             }
                         }
                         Ok(CharacterWork::Prepared(prepared)) => {
+                            self.reference = None;
+                            self.reference_thumb = None;
                             self.prepared_character = Some(prepared);
                             tasks.push(self.import_character(characters::OnDuplicate::Ask));
                         }
@@ -631,7 +659,11 @@ impl App {
                                 match self.save_behavior() {
                                     Ok(()) => {
                                         // Rebuilt from the saved pack and overrides.
-                                        if self.motion_preview.as_ref().is_some_and(|p| p.id == c.id) {
+                                        if self
+                                            .motion_preview
+                                            .as_ref()
+                                            .is_some_and(|p| p.id == c.id)
+                                        {
                                             self.motion_preview = None;
                                         }
                                         if let Some(to) = self.after_save.take() {
@@ -666,7 +698,9 @@ impl App {
                             use crate::mascot::reactions::{MAX_FILES, Sound};
                             // The limit counts what would play, pack and user.
                             if p.files_if(e, &r) > MAX_FILES {
-                                self.notice = Some(format!("A character can use at most {MAX_FILES} sound files; clear one first."));
+                                self.notice = Some(format!(
+                                    "A character can use at most {MAX_FILES} sound files; clear one first."
+                                ));
                             } else {
                                 p.set_reaction_sound(e, Some(Sound::File(r)));
                                 self.notice = None;
@@ -698,7 +732,9 @@ impl App {
                             }
                             self.notice = None;
                         }
-                        Err(err) => self.notice = Some(format!("Could not use that picture: {err}")),
+                        Err(err) => {
+                            self.notice = Some(format!("Could not use that picture: {err}"))
+                        }
                     }
                 }
             }
@@ -711,7 +747,7 @@ impl App {
                 });
                 self.reference = Some(crate::mascot::reference::Request::new(path));
                 self.character_draft = None;
-                self.character_tab = view::settings::CharacterTab::Home;
+                self.character_tab = view::settings::CharacterTab::Library;
             }
             Message::ReferencePicked(None) => {}
             Message::ReferenceResults(paths) => {
@@ -919,6 +955,9 @@ impl App {
                         }
                     } else if escape && (self.ui.wheel.take().is_some() || self.ui.close_menus()) {
                         // Escape closes the wheel or a menu before it exits.
+                    } else if escape && (self.lens_anywhere.on() || self.spotlight_anywhere.on()) {
+                        // Then hides Lens and Spotlight anywhere.
+                        self.dismiss_anywhere(now);
                     } else if let Some(cmd) = self.overlay_shortcut(&key, modifiers) {
                         self.ui.close_menus();
                         self.run(cmd, now, &mut out);
@@ -1050,6 +1089,25 @@ impl App {
                 }
             }
             Message::Frame => {}
+            Message::SpotTick => self.track_spot_cursor(),
+            Message::ToolWheel(up, shift) => {
+                let target = match self.session.active_tool() {
+                    t if t == crate::features::spotlight::TOOL => Some(Target::Spotlight),
+                    t if t == crate::features::upcoming::TOOL => Some(Target::Lens),
+                    _ if self.spotlight_anywhere.on() => Some(Target::Spotlight),
+                    _ => None,
+                };
+                if let Some(target) = target.filter(|_| self.session.is_pointing()) {
+                    let key = match (up, shift) {
+                        (true, false) => Adjust::Bigger,
+                        (false, false) => Adjust::Smaller,
+                        (true, true) => Adjust::More,
+                        (false, true) => Adjust::Less,
+                    };
+                    out.sets
+                        .extend(anywhere::adjust(target, key, self.session.settings()));
+                }
+            }
         }
 
         #[cfg(windows)]
@@ -1067,9 +1125,16 @@ impl App {
                 ShellAction::OpenSettings => tasks.push(self.open_settings()),
                 ShellAction::WheelOpen => self.open_wheel(now),
                 ShellAction::WheelClose => self.close_wheel(now, &mut out),
-                ShellAction::LensShow => self.lens_anywhere = true,
-                ShellAction::LensHide => self.lens_anywhere = false,
+                ShellAction::Anywhere(target, edge) => self.anywhere(target, edge, now),
             }
+        }
+        if let Some(h) = self.hotkeys.as_mut() {
+            h.arm_adjust(self.lens_anywhere.held() || self.spotlight_anywhere.held());
+            // Not while typing a text mark, whose Escape cancels the draft.
+            h.arm_dismiss(
+                (self.lens_anywhere.on() || self.spotlight_anywhere.on())
+                    && self.session.text_draft().is_none(),
+            );
         }
         for (id, value) in std::mem::take(&mut out.sets) {
             self.apply_setting(id, value, now);
@@ -1116,6 +1181,8 @@ impl App {
         tasks.push(self.reconcile());
         tasks.push(self.reconcile_mascot());
         self.sync_motion_preview();
+        #[cfg(windows)]
+        platform::windows::fine_timers(self.live_on_screen());
         self.sync_music();
         if self.quit_pending && self.character_jobs.is_empty() {
             self.quit(now);
@@ -1240,7 +1307,10 @@ impl App {
             };
         }
         if self.session.settings().bool(character::MUSIC) {
-            ("Starts while the character or this page is showing".into(), 0.0)
+            (
+                "Starts while the character or this page is showing".into(),
+                0.0,
+            )
         } else {
             ("Off".into(), 0.0)
         }
@@ -1259,7 +1329,11 @@ impl App {
         #[cfg(windows)]
         if let Some(m) = &self.music {
             rows[0].1 = m.all_apps();
-            rows.extend(m.apps().into_iter().map(|a| (Source::App(a.exe), a.shown, true)));
+            rows.extend(
+                m.apps()
+                    .into_iter()
+                    .map(|a| (Source::App(a.exe), a.shown, true)),
+            );
         }
         let current = self.music_source();
         if matches!(current, Source::App(_)) && !rows.iter().any(|(s, _, _)| *s == current) {
@@ -1309,10 +1383,16 @@ impl App {
                 Source::All => Some(Target::Output),
                 Source::Input(name) => Some(Target::Input(name.clone())),
                 Source::App(exe) => {
-                    let pids = self.music.as_ref().map(|m| m.app_pids(exe)).unwrap_or_default();
+                    let pids = self
+                        .music
+                        .as_ref()
+                        .map(|m| m.app_pids(exe))
+                        .unwrap_or_default();
                     match self.beat.as_ref().map(|b| b.target()) {
                         // Keep a capture still on one of the app's processes.
-                        Some(Target::Process(pid)) if pids.contains(pid) => Some(Target::Process(*pid)),
+                        Some(Target::Process(pid)) if pids.contains(pid) => {
+                            Some(Target::Process(*pid))
+                        }
                         _ => pids.first().map(|pid| Target::Process(*pid)),
                     }
                 }
@@ -1375,7 +1455,9 @@ impl App {
                     c.lines(),
                     c.pack_lines(),
                     c.pack_bop(),
-                    characters::load_overrides(c.id).reactions.unwrap_or_default(),
+                    characters::load_overrides(c.id)
+                        .reactions
+                        .unwrap_or_default(),
                     c.pack_reactions(),
                 ));
                 if let Some(p) = &mut self.motion_preview {
@@ -1489,7 +1571,9 @@ impl App {
                 });
                 let pictures = c.map(character_pictures).unwrap_or_default();
                 let fall = c.is_some_and(|c| {
-                    let user = characters::load_overrides(c.id).reactions.unwrap_or_default();
+                    let user = characters::load_overrides(c.id)
+                        .reactions
+                        .unwrap_or_default();
                     crate::mascot::reactions::falls(&c.pack_reactions(), &user)
                 });
                 match &mut self.mascot {
@@ -1695,7 +1779,10 @@ impl App {
     /// would write.
     fn character_unsaved(&self) -> bool {
         self.motion_preview.as_ref().is_some_and(|p| p.unsaved())
-            || self.art.as_ref().is_some_and(|e| e.new_install || e.can_undo())
+            || self
+                .art
+                .as_ref()
+                .is_some_and(|e| e.new_install || e.can_undo())
     }
 
     /// Writes the behavior draft to the character's overrides in one file,
@@ -1956,6 +2043,8 @@ impl App {
             }
             UiMsg::CharacterTab(tab) => {
                 use view::settings::CharacterTab;
+                // Links from other pages land on the Character tab directly.
+                self.go_page(Page::Character);
                 self.character_tab = tab;
                 // Test character shows the unsaved artwork: build it on a
                 // worker by revision, keeping the last preview meanwhile.
@@ -2228,7 +2317,8 @@ impl App {
                     let taken: Vec<&str> = self.characters.iter().map(|c| c.id).collect();
                     match characters::copy_builtin(&taken) {
                         Ok(copy) => {
-                            out.sets.push((character::CHARACTER, Value::Choice(copy.id)));
+                            out.sets
+                                .push((character::CHARACTER, Value::Choice(copy.id)));
                             self.add_character(copy.clone());
                             c = copy;
                         }
@@ -2266,7 +2356,10 @@ impl App {
                     Target::EyePart => "Choose complete eye or eyebrow PNGs".to_owned(),
                     Target::Held => "Choose the held pose PNG".to_owned(),
                     Target::Face(_, slot) => {
-                        format!("Choose the {} face PNG", FACE_LABELS[slot.min(2)].to_lowercase())
+                        format!(
+                            "Choose the {} face PNG",
+                            FACE_LABELS[slot.min(2)].to_lowercase()
+                        )
                     }
                     Target::Eye(_, slot) => format!(
                         "Choose the eye's {} PNG",
@@ -2367,6 +2460,11 @@ impl App {
                     eye.travel = travel.clamp(0.0, 0.05);
                 }
             }
+            UiMsg::ArtPupilSize(i, scale) => {
+                if let Some(e) = &mut self.art {
+                    self.notice = e.set_pupil_size(i, scale).err();
+                }
+            }
             UiMsg::ArtClick(x, y) => {
                 if let Some(e) = &mut self.art {
                     e.checkpoint();
@@ -2436,7 +2534,10 @@ impl App {
                 }
             }
             UiMsg::ReactionVisual(e, crate::mascot::reactions::Visual::Artwork)
-                if self.motion_preview.as_ref().is_some_and(|p| p.art(e).is_none()) =>
+                if self
+                    .motion_preview
+                    .as_ref()
+                    .is_some_and(|p| p.art(e).is_none()) =>
             {
                 // Use artwork starts by choosing its PNG.
                 return self.ui_message(UiMsg::ReactionPicture(e), now, out);
@@ -2487,6 +2588,19 @@ impl App {
             UiMsg::ReferenceEyes(on) => {
                 if let Some(r) = &mut self.reference {
                     r.eyes = on;
+                    if on {
+                        r.tracking = false;
+                        r.blink = false;
+                        r.faces = false;
+                    }
+                }
+            }
+            UiMsg::ReferenceTracking(on) => {
+                if let Some(r) = &mut self.reference {
+                    r.tracking = on;
+                    if on {
+                        r.eyes = false;
+                    }
                 }
             }
             UiMsg::ReferenceBrows(on) => {
@@ -2497,11 +2611,17 @@ impl App {
             UiMsg::ReferenceBlink(on) => {
                 if let Some(r) = &mut self.reference {
                     r.blink = on;
+                    if on {
+                        r.eyes = false;
+                    }
                 }
             }
             UiMsg::ReferenceFaces(on) => {
                 if let Some(r) = &mut self.reference {
                     r.faces = on;
+                    if on {
+                        r.eyes = false;
+                    }
                 }
             }
             UiMsg::ReferenceHeld(on) => {
@@ -2511,11 +2631,18 @@ impl App {
             }
             UiMsg::ReferenceCopy(role) => {
                 if let Some(r) = &self.reference {
+                    if !r.fits_canvas() {
+                        self.notice =
+                            Some("Choose a smaller canvas for this many feature images.".into());
+                        return Task::none();
+                    }
                     let text = match role {
                         Some(role) => r.prompt(role),
                         None => r.brief(),
                     };
-                    self.notice = Some("Copied. Attach the reference picture in your image tool and paste.".into());
+                    self.notice = Some(
+                        "Copied. Attach the reference picture in your image tool and paste.".into(),
+                    );
                     return iced::clipboard::write(text);
                 }
             }
@@ -2527,7 +2654,11 @@ impl App {
                         .pick_files(),
                     |files| {
                         Message::ReferenceResults(
-                            files.unwrap_or_default().into_iter().map(|f| f.path().to_path_buf()).collect(),
+                            files
+                                .unwrap_or_default()
+                                .into_iter()
+                                .map(|f| f.path().to_path_buf())
+                                .collect(),
                         )
                     },
                 );
@@ -2547,6 +2678,13 @@ impl App {
                 let Some(r) = self.reference.clone() else {
                     return Task::none();
                 };
+                if !r.missing().is_empty() || !r.fits_canvas() {
+                    self.notice = Some(
+                        "Import every requested feature image and choose a supported canvas first."
+                            .into(),
+                    );
+                    return Task::none();
+                }
                 let Some(body) = r.file_for(Role::Body).map(PathBuf::from) else {
                     self.notice = Some("Assign a file to Body first.".into());
                     return Task::none();
@@ -2565,6 +2703,17 @@ impl App {
                     .filter(|role| role.is_face())
                     .filter_map(|role| r.file_for(role).map(|p| (role, PathBuf::from(p))))
                     .collect();
+                let tracking: Vec<_> = r
+                    .roles()
+                    .into_iter()
+                    .filter_map(|role| {
+                        if let Role::Tracking(right, layer) = role {
+                            Some((right, layer, r.file_for(role)?.to_owned()))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
                 self.reference = None;
                 self.reference_thumb = None;
                 let taken: Vec<_> = self.characters.iter().map(|c| c.id).collect();
@@ -2576,7 +2725,11 @@ impl App {
                     let mut errors = Vec::new();
                     // The head first, so eyes and eyebrows ride on it.
                     if let Some(head) = head {
+                        let before = editor.parts.len();
                         errors.extend(editor.set_images(Target::NewPart, vec![head]));
+                        if editor.parts.len() == before {
+                            return Err(errors.join("; "));
+                        }
                         if let Some(p) = editor.parts.last_mut() {
                             p.kind = crate::mascot::motion::PartType::Head;
                             p.motion = crate::mascot::motion::MotionSpec::default_for(p.kind);
@@ -2597,6 +2750,25 @@ impl App {
                             && let Some(p) = editor.parts.last_mut()
                         {
                             p.name = role.label().into();
+                        }
+                    }
+                    if !tracking.is_empty() {
+                        use crate::mascot::editor::EyeSlot;
+                        use crate::mascot::reference::EyeLayer;
+                        editor.add_eye();
+                        editor.add_eye();
+                        for (right, layer, path) in tracking {
+                            let slot = match layer {
+                                EyeLayer::White => EyeSlot::White,
+                                EyeLayer::Pupil => EyeSlot::Pupil,
+                                EyeLayer::Mask => EyeSlot::Mask,
+                                EyeLayer::Blink => EyeSlot::Blink,
+                            };
+                            if let Err(e) =
+                                editor.set_image(Target::Eye(usize::from(right), slot), &path)
+                            {
+                                errors.push(format!("{}: {e}", path.display()));
+                            }
                         }
                     }
                     if let Some(tail) = tail {
@@ -2890,7 +3062,7 @@ impl App {
                 self.audio
                     .set_pack(self.current_pack().and_then(|p| p.tap.clone()));
                 self.audio.play(tap, volume);
-        self.own_sound(0.25);
+                self.own_sound(0.25);
                 self.own_sound(0.25);
             }
             UiMsg::ImportWav => {
@@ -2943,12 +3115,35 @@ impl App {
         if kind == PointerKind::Down && self.ui.close_menus() {
             return; // A click outside a menu only dismisses it.
         }
+        let paw_angle = (kind == PointerKind::Up)
+            .then(|| {
+                let (_, mut tip) = self.session.tip(now)?;
+                if system::reduced(self.session.settings())
+                    && let crate::session::Tip::Paw { grip_x, .. } = &mut tip
+                {
+                    *grip_x = p.x;
+                }
+                let display = &self
+                    .overlays
+                    .iter()
+                    .find(|o| o.display.id == output)?
+                    .display;
+                let scale = display.dpi.max(1) as f32 / 96.0;
+                crate::view::paw::stamp_angle(
+                    tip,
+                    p,
+                    Size::new(display.width as f32 / scale, display.height as f32 / scale),
+                    self.current_pack(),
+                )
+            })
+            .flatten();
         out.effects.extend(self.session.handle(
             Event::Pointer(PointerEvent {
                 kind,
                 output,
                 pos: Pt::new(p.x, p.y),
                 at: now,
+                paw_angle,
             }),
             now,
         ));
@@ -3180,6 +3375,21 @@ impl App {
             .map(|(_, def)| def.id)
     }
 
+    /// Whether anything on screen animates or follows the cursor, so timers
+    /// need to fire on time. Off with the character resting, they don't.
+    #[cfg(windows)]
+    fn live_on_screen(&self) -> bool {
+        self.session.is_enabled()
+            || self.spotlight_anywhere.on()
+            || self.lens_anywhere.on()
+            || self.motion_preview.is_some()
+            || self
+                .mascot
+                .as_ref()
+                .and_then(|m| m.poll_interval(&self.mascot_options()))
+                .is_some_and(|every| every < Duration::from_millis(100))
+    }
+
     fn sync_tray(&mut self) {
         let label = self.registry.shortcut_label(system::MASTER_TOGGLE);
         if let Some(tray) = &mut self.tray {
@@ -3189,7 +3399,12 @@ impl App {
 
     /// Brings the overlay window in line with the session's overlay state.
     fn reconcile(&mut self) -> Task<Message> {
-        let want = self.session.overlay_state();
+        let want = match self.session.overlay_state() {
+            // Spotlight anywhere needs the overlay to draw on, clicks still
+            // going to the app underneath.
+            OverlayState::Hidden if self.spotlight_anywhere.on() => OverlayState::ClickThrough,
+            state => state,
+        };
         if want == OverlayState::Hidden {
             return Task::batch(self.overlays.drain(..).map(|o| window::close(o.id)));
         }
@@ -3200,6 +3415,11 @@ impl App {
                     .settings()
                     .choice(crate::features::display::TARGET),
             );
+            if selected.is_empty() && self.session.overlay_state() == OverlayState::Hidden {
+                self.spotlight_anywhere.set(false);
+                self.notice = Some("Spotlight needs a display. Choose one under Display.".into());
+                return Task::none();
+            }
             if selected.is_empty() {
                 self.session.handle(Event::Interrupted, self.now());
                 self.notice = Some("The selected display is unavailable. Choose a display.".into());
@@ -3272,6 +3492,100 @@ impl App {
         Task::batch(tasks)
     }
 
+    /// A Lens or Spotlight anywhere shortcut went down or up, or the CLI
+    /// asked for it on or off.
+    fn anywhere(&mut self, target: Target, edge: Edge, now: Millis) {
+        let toggle = match target {
+            Target::Lens => &mut self.lens_anywhere,
+            Target::Spotlight => &mut self.spotlight_anywhere,
+        };
+        match edge {
+            Edge::Press => toggle.press(now),
+            Edge::Release => toggle.release(now),
+            Edge::Show => toggle.set(true),
+            Edge::Hide => toggle.set(false),
+        }
+        if target == Target::Spotlight {
+            #[cfg(not(windows))]
+            if self.spotlight_anywhere.on() {
+                self.spotlight_anywhere.set(false);
+                self.notice = Some("Spotlight anywhere is available on Windows".into());
+            }
+            self.track_spot_cursor();
+        }
+    }
+
+    /// Escape: hides Lens and Spotlight anywhere.
+    fn dismiss_anywhere(&mut self, now: Millis) {
+        if self.lens_anywhere.on() {
+            self.anywhere(Target::Lens, Edge::Hide, now);
+        }
+        if self.spotlight_anywhere.on() {
+            self.anywhere(Target::Spotlight, Edge::Hide, now);
+        }
+    }
+
+    /// Up/Down/+/- while an anywhere shortcut is held. Spotlight wins when
+    /// both are held, since it was most likely pressed second.
+    fn adjust_anywhere(&mut self, key: Adjust, out: &mut Outcomes) {
+        let target = if self.spotlight_anywhere.held() {
+            self.spotlight_anywhere.adjusted();
+            Target::Spotlight
+        } else if self.lens_anywhere.held() {
+            self.lens_anywhere.adjusted();
+            Target::Lens
+        } else {
+            return;
+        };
+        out.sets
+            .extend(anywhere::adjust(target, key, self.session.settings()));
+    }
+
+    /// Polls the cursor for Spotlight anywhere, mapped into the logical
+    /// space of the overlay under it. Annotating uses the session's pointer.
+    fn track_spot_cursor(&mut self) {
+        self.spot_cursor = None;
+        if !self.spotlight_anywhere.on() {
+            return;
+        }
+        #[cfg(windows)]
+        if let Some((x, y)) = platform::windows::cursor_pos() {
+            self.spot_cursor = self
+                .overlays
+                .iter()
+                .map(|o| &o.display)
+                .find(|d| x >= d.x && x < d.x + d.width && y >= d.y && y < d.y + d.height)
+                .map(|d| {
+                    let scale = d.dpi.max(1) as f32 / 96.0;
+                    (
+                        d.id,
+                        Pt::new((x - d.x) as f32 / scale, (y - d.y) as f32 / scale),
+                    )
+                });
+        }
+    }
+
+    /// The Spotlight circle to draw: the Spotlight tool, else Spotlight
+    /// anywhere. Neither shows while a still is being captured.
+    fn spotlight(&self) -> Option<(OutputId, Pt, f32)> {
+        if let Some(spot) = self.session.spotlight() {
+            return Some(spot);
+        }
+        if !self.spotlight_anywhere.on() || self.session.capturing() {
+            return None;
+        }
+        let at = if self.session.is_pointing() {
+            self.session.pointer()
+        } else {
+            self.spot_cursor
+        };
+        let radius = self
+            .session
+            .settings()
+            .float(crate::features::spotlight::RADIUS) as f32;
+        at.map(|(output, at)| (output, at, radius))
+    }
+
     fn update_lens(&mut self, now: Millis, out: &mut Outcomes) {
         // The still covers the desktop while frozen, and capture must not
         // see the lens, so neither lens shows then.
@@ -3279,7 +3593,7 @@ impl App {
         let tool = self.session.is_pointing()
             && self.session.active_tool() == crate::features::upcoming::TOOL
             && clear;
-        let anywhere = self.lens_anywhere && clear;
+        let anywhere = self.lens_anywhere.on() && clear;
         #[cfg(windows)]
         {
             use crate::features::upcoming;
@@ -3326,11 +3640,7 @@ impl App {
                 destination,
                 exclude: &exclude,
                 size: s.float(upcoming::SIZE) as f32,
-                zoom: if s.choice(upcoming::ZOOM) == "4" {
-                    4.0
-                } else {
-                    2.0
-                },
+                zoom: anywhere::zoom(s),
             });
             if let Some(notice) = result.notice {
                 self.overlay_notice = Some((notice.clone(), now));
@@ -3339,7 +3649,7 @@ impl App {
                 }
             }
             if result.stop_anywhere {
-                self.lens_anywhere = false;
+                self.lens_anywhere.set(false);
             }
             if result.return_to_point {
                 out.collect(self.dispatch(point::SELECT, now).ok());
@@ -3347,8 +3657,8 @@ impl App {
         }
         #[cfg(not(windows))]
         {
-            if self.lens_anywhere {
-                self.lens_anywhere = false;
+            if self.lens_anywhere.on() {
+                self.lens_anywhere.set(false);
                 self.notice = Some("Lens is available on Windows".into());
             }
             if tool {
@@ -3379,6 +3689,7 @@ impl App {
                     }),
                 notice: self.overlay_notice.as_ref().map(|(text, _)| text.as_str()),
                 pack: self.current_pack(),
+                spotlight: self.spotlight(),
             });
         }
         if Some(window) == self.settings_window {
@@ -3405,7 +3716,10 @@ impl App {
                 character_conflict: self.character_conflict.as_deref(),
                 art: self.art.as_ref(),
                 motion: self.motion_preview.as_ref(),
-                reference: self.reference.as_ref().map(|r| (r, self.reference_thumb.as_ref())),
+                reference: self
+                    .reference
+                    .as_ref()
+                    .map(|r| (r, self.reference_thumb.as_ref())),
                 unsaved: self.character_unsaved(),
                 leaving: self.leaving.is_some(),
                 music: self.music_status(),
@@ -3474,6 +3788,9 @@ impl App {
         {
             subs.push(iced::time::every(Duration::from_millis(250)).map(|_| Message::Tick));
         }
+        if self.spotlight_anywhere.on() && !self.session.is_pointing() {
+            subs.push(Subscription::run(platform::refresh_ticks).map(|_| Message::SpotTick));
+        }
         #[cfg(windows)]
         if let Some(every) = self
             .mascot
@@ -3487,8 +3804,11 @@ impl App {
             subs.push(iced::time::every(Duration::from_millis(33)).map(|_| Message::MotionTick));
         }
         // Frames only while something animates; otherwise the process sleeps.
+        // Paced by the display refresh: `window::frames()` fires for every
+        // window's redraw and each redraw requests the next, so animation
+        // ran uncapped and once per open window.
         if self.session.animating(now) {
-            subs.push(window::frames().map(|_| Message::Frame));
+            subs.push(Subscription::run(platform::refresh_ticks).map(|_| Message::Frame));
         } else if self.overlay_notice.is_some() {
             subs.push(iced::time::every(Duration::from_millis(500)).map(|_| Message::Tick));
         } else if let Some(at) = self.session.next_fade(now) {
@@ -3556,7 +3876,9 @@ const _: &str = wheel_feature::OPEN;
 fn character_pictures(c: &Character) -> crate::mascot::desktop::Pictures {
     use crate::mascot::reactions::{self, Event};
     let pack = c.pack_reactions();
-    let user = characters::load_overrides(c.id).reactions.unwrap_or_default();
+    let user = characters::load_overrides(c.id)
+        .reactions
+        .unwrap_or_default();
     let picture = |art: Option<reactions::Art>| {
         let art = art?;
         let img = c.reaction_image(&art)?;

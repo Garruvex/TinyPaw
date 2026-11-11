@@ -18,16 +18,56 @@ pub struct Item {
 }
 
 pub const ITEMS: [Item; 8] = [
-    Item { glyph: Glyph::Paw, label: "Paw", hint: "Tap and draw", command: point::USE_PAW },
-    Item { glyph: Glyph::Laser, label: "Laser", hint: "Precise dot", command: point::USE_LASER },
-    Item { glyph: Glyph::Text, label: "Text", hint: "Click, type, Enter", command: text::SELECT },
-    Item { glyph: Glyph::Pin, label: "Pin", hint: "Numbered markers", command: pin::SELECT },
-    Item { glyph: Glyph::Spotlight, label: "Spotlight", hint: "Dim everything else", command: spotlight::SELECT },
-    Item { glyph: Glyph::Lens, label: "Lens", hint: "Magnify the window behind", command: upcoming::LENS },
-    Item { glyph: Glyph::Freeze, label: "Freeze", hint: "Draw on a still", command: freeze::TOGGLE },
+    Item {
+        glyph: Glyph::Paw,
+        label: "Paw",
+        hint: "Tap and draw",
+        command: point::USE_PAW,
+    },
+    Item {
+        glyph: Glyph::Laser,
+        label: "Laser",
+        hint: "Precise dot",
+        command: point::USE_LASER,
+    },
+    Item {
+        glyph: Glyph::Text,
+        label: "Text",
+        hint: "Click, type, Enter",
+        command: text::SELECT,
+    },
+    Item {
+        glyph: Glyph::Pin,
+        label: "Pin",
+        hint: "Numbered markers",
+        command: pin::SELECT,
+    },
+    Item {
+        glyph: Glyph::Spotlight,
+        label: "Spotlight",
+        hint: "Dim everything else",
+        command: spotlight::SELECT,
+    },
+    Item {
+        glyph: Glyph::Lens,
+        label: "Lens",
+        hint: "Magnify the window behind",
+        command: upcoming::LENS,
+    },
+    Item {
+        glyph: Glyph::Freeze,
+        label: "Freeze",
+        hint: "Draw on a still",
+        command: freeze::TOGGLE,
+    },
     // Undo rather than Clear: a mis-flick here is easy, and Undo reverses it.
     // Clear marks stays in the bar's More panel and on its key.
-    Item { glyph: Glyph::Undo, label: "Undo", hint: "Remove the last mark", command: system::UNDO },
+    Item {
+        glyph: Glyph::Undo,
+        label: "Undo",
+        hint: "Remove the last mark",
+        command: system::UNDO,
+    },
 ];
 
 /// The Lens hint for its source setting: the desktop source magnifies
@@ -107,12 +147,21 @@ pub fn draw(
     );
 
     let disc = Path::circle(c, OUTER);
-    frame.fill(&Path::circle(Point::new(c.x, c.y + 10.0), OUTER), Color::from_rgba8(0, 0, 0, 0.3));
+    frame.fill(
+        &Path::circle(Point::new(c.x, c.y + 10.0), OUTER),
+        Color::from_rgba8(0, 0, 0, 0.3),
+    );
     frame.fill(&disc, theme::SURFACE_A);
-    frame.stroke(&disc, Stroke::default().with_color(theme::LINE).with_width(1.0));
+    frame.stroke(
+        &disc,
+        Stroke::default().with_color(theme::LINE).with_width(1.0),
+    );
     let hole = Path::circle(c, INNER);
     frame.fill(&hole, theme::WELL);
-    frame.stroke(&hole, Stroke::default().with_color(theme::LINE).with_width(1.0));
+    frame.stroke(
+        &hole,
+        Stroke::default().with_color(theme::LINE).with_width(1.0),
+    );
 
     for (i, item) in ITEMS.iter().enumerate() {
         let p = item_center(c, i);
@@ -126,17 +175,33 @@ pub fn draw(
         };
         if hovered {
             let ring = Path::circle(p, ITEM);
-            let bg = if available { theme::CYAN_BG } else { Color::from_rgba8(255, 255, 255, 0.06) };
+            let bg = if available {
+                theme::CYAN_BG
+            } else {
+                Color::from_rgba8(255, 255, 255, 0.06)
+            };
             frame.fill(&ring, bg);
             if available {
-                frame.stroke(&ring, Stroke::default().with_color(theme::CYAN_RING).with_width(1.5));
+                frame.stroke(
+                    &ring,
+                    Stroke::default()
+                        .with_color(theme::CYAN_RING)
+                        .with_width(1.5),
+                );
             }
         }
         frame.draw_svg(
             Rectangle::new(Point::new(p.x - 12.0, p.y - 20.0), Size::new(24.0, 24.0)),
             iced::advanced::svg::Svg::new(icons::handle(item.glyph)).color(color),
         );
-        label(frame, item.label, Point::new(p.x, p.y + 14.0), 12.0, color, theme::MEDIUM);
+        label(
+            frame,
+            item.label,
+            Point::new(p.x, p.y + 14.0),
+            12.0,
+            color,
+            theme::MEDIUM,
+        );
     }
 
     let (title, hint) = match state.hover {
@@ -150,8 +215,22 @@ pub fn draw(
         ),
         None => ("Pick a tool", "Point, then release"),
     };
-    label(frame, title, Point::new(c.x, c.y - 9.0), 20.0, theme::TEXT, theme::HEADING);
-    label(frame, hint, Point::new(c.x, c.y + 16.0), 12.0, theme::MUTED, theme::BODY);
+    label(
+        frame,
+        title,
+        Point::new(c.x, c.y - 9.0),
+        20.0,
+        theme::TEXT,
+        theme::HEADING,
+    );
+    label(
+        frame,
+        hint,
+        Point::new(c.x, c.y + 16.0),
+        12.0,
+        theme::MUTED,
+        theme::BODY,
+    );
 }
 
 #[cfg(test)]

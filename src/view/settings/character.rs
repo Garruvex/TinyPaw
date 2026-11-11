@@ -26,7 +26,11 @@ fn leave_prompt<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     let choice = |label: &'static str, c: LeaveChoice, primary: bool| {
         button(text(label).size(13))
             .padding([7, 14])
-            .style(if primary { theme::primary } else { theme::secondary })
+            .style(if primary {
+                theme::primary
+            } else {
+                theme::secondary
+            })
             .on_press_maybe((!v.character_busy).then_some(Message::Ui(UiMsg::Leave(c))))
     };
     container(
@@ -82,23 +86,38 @@ fn reference_panel<'a>(
 ) -> Element<'a, Message> {
     use crate::mascot::reference::{CANVASES, Role};
     let small = |label: String, msg: Message| {
-        button(text(label).size(12)).padding([5, 10]).style(theme::secondary).on_press(msg)
+        button(text(label).size(12))
+            .padding([5, 10])
+            .style(theme::secondary)
+            .on_press(msg)
     };
     let preview: Element<'a, Message> = match thumb {
         Some(h) => iced::widget::image(h.clone()).height(120).into(),
         None => hint("No preview for this file type."),
     };
-    let canvas = pick_list(CANVASES.to_vec(), Some(r.canvas), |c| Message::Ui(UiMsg::ReferenceCanvas(c)))
-        .text_size(13)
-        .padding([5, 8])
-        .style(theme::select);
+    let canvas = pick_list(CANVASES.to_vec(), Some(r.canvas), |c| {
+        Message::Ui(UiMsg::ReferenceCanvas(c))
+    })
+    .text_size(13)
+    .padding([5, 8])
+    .style(theme::select);
     let mut files = column![].spacing(6);
     for role in r.roles() {
         files = files.push(
             row![
                 text(role.file()).size(13).width(90),
-                text(if r.file_for(role).is_some() { "✓ imported" } else { "" }).size(12).color(theme::MUTED).width(Length::Fill),
-                small("Copy prompt".into(), Message::Ui(UiMsg::ReferenceCopy(Some(role)))),
+                text(if r.file_for(role).is_some() {
+                    "✓ imported"
+                } else {
+                    ""
+                })
+                .size(12)
+                .color(theme::MUTED)
+                .width(Length::Fill),
+                small(
+                    "Copy prompt".into(),
+                    Message::Ui(UiMsg::ReferenceCopy(Some(role)))
+                ),
             ]
             .spacing(8)
             .align_y(Alignment::Center),
@@ -110,7 +129,14 @@ fn reference_panel<'a>(
         choices.extend(r.roles().into_iter().map(Some));
         results = results.push(
             row![
-                text(path.file_name().unwrap_or_default().to_string_lossy().into_owned()).size(13).width(Length::Fill),
+                text(
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned()
+                )
+                .size(13)
+                .width(Length::Fill),
                 pick_list(
                     choices.into_iter().map(RolePick).collect::<Vec<_>>(),
                     Some(RolePick(*role)),
@@ -143,41 +169,37 @@ fn reference_panel<'a>(
             .into(),
         ]),
         section(vec![
-            h2("Moving parts and poses"),
-            hint("Optional. A single complete picture already works, including click and beat Compress."),
-            checkbox(r.head).label("Separate head (it can tilt and nod; the body comes without it)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceHead(on))).into(),
-            checkbox(r.tail).label("Moving tail (a separate tail, and a body without it)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceTail(on))).into(),
+            h2("Features to create"),
+            hint("Each choice adds every required image and its mapping to the folder prompt."),
+            checkbox(r.tracking).label("Create tracking eyes (background, pupil and mask for each eye, plus a separate head)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceTracking(on))).into(),
+            checkbox(r.head).label("Create a head that bops to music (separate head and neck pivot)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceHead(on))).into(),
+            checkbox(r.tail).label("Create a moving tail (separate tail and attachment pivot)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceTail(on))).into(),
             checkbox(r.eyes).label("Separate eyes (left and right eye images)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceEyes(on))).into(),
             checkbox(r.brows).label("Separate eyebrows (left and right eyebrow images)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceBrows(on))).into(),
             checkbox(r.blink && r.faces_possible())
-                .label("Eyes closed head, for blinking")
+                .label("Create blinking (closed eyes for the selected eye style)")
                 .text_size(13)
-                .on_toggle_maybe(r.faces_possible().then_some(|on| Message::Ui(UiMsg::ReferenceBlink(on))))
+                .on_toggle(|on| Message::Ui(UiMsg::ReferenceBlink(on)))
                 .into(),
             checkbox(r.faces && r.faces_possible())
-                .label("Pressed and being-carried head faces")
+                .label("Create expressions when pressed and carried")
                 .text_size(13)
-                .on_toggle_maybe(r.faces_possible().then_some(|on| Message::Ui(UiMsg::ReferenceFaces(on))))
+                .on_toggle(|on| Message::Ui(UiMsg::ReferenceFaces(on)))
                 .into(),
-            hint(if r.faces_possible() {
-                "Head faces replace the head for a moment: closed eyes when it blinks, and expressions when clicked or carried."
-            } else if r.head {
-                "Head faces need the eyes painted into the head; separate eye layers would stay open on top of them."
-            } else {
-                "Head faces (blinking, pressed, being carried) need a separate head."
-            }),
-            hint("Eyes and eyebrows not asked for separately stay painted into the face. Separate ones become still layers that move with the head. Eyes that follow the cursor need a background, pupil and mask per eye; set those up afterwards in Artwork → Eyes."),
-            checkbox(r.held).label("Held pose (the whole character while carried)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceHeld(on))).into(),
+            hint("Blinking and expressions include their required head automatically. Tracking eyes use separate closed-eye images. Complete eye pictures switch off blinking and expressions."),
+            hint("The prompt includes shared-canvas x/y placement, neck and tail pivots, eye travel and held-pose alignment. The art tool must measure and save the coordinates in character.json."),
+            checkbox(r.held).label("Create a held pose (complete hanging character and pickup mapping)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceHeld(on))).into(),
         ]),
         section(vec![
             h2("Artwork to request"),
+            hint(if r.fits_canvas() { "Every listed file is required for your selected features." } else { "Choose 1024 or 512 pixels. These feature images exceed the character memory limit at this canvas size." }),
             files.into(),
             row![
-                button(text("Copy art prompt").font(theme::MEDIUM).size(13))
+                button(text("Copy character folder prompt").font(theme::MEDIUM).size(13))
                     .padding([7, 14])
                     .style(theme::primary)
-                    .on_press(Message::Ui(UiMsg::ReferenceCopy(None))),
-                hint("One brief for every file; use Copy prompt per file for tools that make one image at a time."),
+                    .on_press_maybe(r.fits_canvas().then_some(Message::Ui(UiMsg::ReferenceCopy(None)))),
+                hint("Attach your reference in a tool that can create images and files. This prompt requests every PNG and its matching character.json."),
             ]
             .spacing(10)
             .align_y(Alignment::Center)
@@ -185,7 +207,9 @@ fn reference_panel<'a>(
         ]),
         section(vec![
             h2("Results"),
-            small("Import results…".into(), Message::Ui(UiMsg::ReferenceImport)).into(),
+            small("Import folder…".into(), Message::Ui(UiMsg::ImportCharacter)).into(),
+            hint("Extract the ZIP if needed, then choose the folder containing character.json."),
+            small("Import individual PNGs…".into(), Message::Ui(UiMsg::ReferenceImport)).into(),
             results.into(),
             hint(if missing.is_empty() {
                 "Every requested file is assigned. Open it to line the layers up, try it, and save.".to_owned()
@@ -197,7 +221,7 @@ fn reference_panel<'a>(
                 button(text("Open in Arrange").font(theme::MEDIUM).size(13))
                     .padding([7, 14])
                     .style(theme::primary)
-                    .on_press_maybe(r.file_for(Role::Body).is_some().then_some(Message::Ui(UiMsg::ReferenceOpen))),
+                    .on_press_maybe((missing.is_empty() && r.fits_canvas()).then_some(Message::Ui(UiMsg::ReferenceOpen))),
             ]
             .spacing(8)
             .into(),
@@ -220,11 +244,13 @@ impl std::fmt::Display for RolePick {
     }
 }
 
-/// Home, then the Customize sections. One draft spans them all.
+/// Library and On desktop, then the Customize sections. One draft spans
+/// them all.
 fn navigator<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     let mut tabs = row![].spacing(4);
     for (tab, label) in [
-        (CharacterTab::Home, "Home"),
+        (CharacterTab::Library, "Library"),
+        (CharacterTab::Desktop, "On desktop"),
         (CharacterTab::Artwork, "Artwork"),
         (CharacterTab::Behavior, "Behavior"),
         (CharacterTab::Advanced, "Advanced"),
@@ -265,7 +291,9 @@ fn artwork_closed<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     if builtin {
         return section(vec![
             h2("Artwork"),
-            hint("Yohta is built in, so his artwork can't be changed. Duplicate him to make an editable copy; his behavior can be customized without one."),
+            hint(
+                "Yohta is built in, so his artwork can't be changed. Duplicate him to make an editable copy; his behavior can be customized without one.",
+            ),
             button(text("Duplicate to edit").size(13))
                 .padding([7, 12])
                 .style(theme::secondary)
@@ -296,17 +324,24 @@ fn character_body<'a>(
             advanced_page(e)
         };
         return (
-            column![navigator(v), body].spacing(16).max_width(640).into(),
+            column![navigator(v), body]
+                .spacing(16)
+                .max_width(640)
+                .into(),
             Some(art_preview(e, v.character_busy)),
         );
     }
     if let Some((r, thumb)) = v.reference {
         return (
-            column![h1("Character"), reference_panel(r, thumb)].spacing(22).max_width(640).into(),
+            column![h1("Character"), reference_panel(r, thumb)]
+                .spacing(22)
+                .max_width(640)
+                .into(),
             None,
         );
     }
-    if matches!(tab, CharacterTab::Artwork | CharacterTab::Advanced) && v.character_draft.is_none() {
+    if matches!(tab, CharacterTab::Artwork | CharacterTab::Advanced) && v.character_draft.is_none()
+    {
         return (
             column![h1("Character"), navigator(v), artwork_closed(v)]
                 .spacing(22)
@@ -374,7 +409,7 @@ fn character_body<'a>(
         Message::Ui(UiMsg::AddCharacter),
     ));
     let custom = selected.filter(|c| !c.is_builtin());
-    let manage = row![
+    let add = row![
         button("From parts…")
             .style(theme::secondary)
             .on_press(Message::Ui(UiMsg::ArtFromParts)),
@@ -384,6 +419,10 @@ fn character_body<'a>(
         button("From reference…")
             .style(theme::secondary)
             .on_press(Message::Ui(UiMsg::ReferenceStart)),
+    ]
+    .spacing(8)
+    .wrap();
+    let manage = row![
         button("Export…")
             .style(theme::secondary)
             .on_press_maybe(selected.map(|_| Message::Ui(UiMsg::ExportCharacter))),
@@ -394,73 +433,96 @@ fn character_body<'a>(
     .spacing(8)
     .wrap();
 
-    let mut page = column![
-        h1("Character"),
-        section(vec![
-            h2("Character library"),
-            cards.wrap().vertical_spacing(8).into(),
-            manage.into(),
-            hint("Add character takes one transparent PNG. Import folder takes a character.json folder with a body and optional moving parts, like one made with Export."),
-        ]),
-    ]
-    .spacing(22)
-    .max_width(640);
-
-    if let Some(other) = v.character_conflict {
-        page = page.push(
-            container(
-                column![
-                    text(format!("A character called {other} is already installed."))
-                        .size(13)
-                        .color(theme::AMBER_TEXT),
-                    row![
-                        button("Keep both")
-                            .style(theme::secondary)
-                            .on_press(Message::Ui(UiMsg::ResolveCharacter(true))),
-                        button("Replace")
-                            .style(theme::secondary)
-                            .on_press(Message::Ui(UiMsg::ResolveCharacter(false))),
-                        button("Cancel")
-                            .style(theme::secondary)
-                            .on_press(Message::Ui(UiMsg::CancelCharacterImport)),
-                    ]
-                    .spacing(8),
-                ]
-                .spacing(10),
-            )
-            .padding([10, 12])
-            .style(theme::fill(theme::AMBER_BG, 8.0)),
-        );
-    }
-
     let side = match (v.character_draft, v.motion) {
         (Some(d), _) => Some(new_character(d, v.character_busy)),
         (None, Some(m)) => Some(motion_preview(m)),
         (None, None) => None,
     };
+    // The tabs sit directly under the title on every tab; they hide only
+    // while Add character's draft is open beside the library.
+    let mut page = column![h1("Character")].spacing(22).max_width(640);
     if v.character_draft.is_none() {
         page = page.push(navigator(v));
     }
     if let Some(m) = v.motion
         && tab == CharacterTab::Behavior
     {
-        let page = column![h1("Character"), navigator(v), save_bar(v), behavior_section(v, m)]
-            .spacing(22)
-            .max_width(640);
-        return (page.into(), side);
+        return (
+            page.push(save_bar(v)).push(behavior_section(v, m)).into(),
+            side,
+        );
     }
     if tab == CharacterTab::Behavior {
-        page = page.push(hint("Behavior opens once the character's preview is ready."));
+        page = page.push(hint(
+            "Behavior opens once the character's preview is ready.",
+        ));
         return (page.into(), side);
     }
+    if tab == CharacterTab::Library || v.character_draft.is_some() {
+        page = page
+            .push(section(vec![
+                h2("Characters"),
+                cards.wrap().vertical_spacing(8).into(),
+            ]))
+            .push(section(vec![
+                h2("More ways to add"),
+                add.into(),
+                hint("Add character takes one transparent PNG. Import folder takes a character.json folder with a body and optional moving parts, like one made with Export."),
+            ]))
+            .push(section(vec![
+                h2("Selected character"),
+                manage.into(),
+                if custom.is_none() {
+                    hint(format!("{name} is built in, so it can't be removed."))
+                } else {
+                    hint(format!("Export saves {name} as a folder you can share or import later."))
+                },
+            ]));
+        if let Some(other) = v.character_conflict {
+            page = page.push(
+                container(
+                    column![
+                        text(format!("A character called {other} is already installed."))
+                            .size(13)
+                            .color(theme::AMBER_TEXT),
+                        row![
+                            button("Keep both")
+                                .style(theme::secondary)
+                                .on_press(Message::Ui(UiMsg::ResolveCharacter(true))),
+                            button("Replace")
+                                .style(theme::secondary)
+                                .on_press(Message::Ui(UiMsg::ResolveCharacter(false))),
+                            button("Cancel")
+                                .style(theme::secondary)
+                                .on_press(Message::Ui(UiMsg::CancelCharacterImport)),
+                        ]
+                        .spacing(8),
+                    ]
+                    .spacing(10),
+                )
+                .padding([10, 12])
+                .style(theme::fill(theme::AMBER_BG, 8.0)),
+            );
+        }
+        return (page.into(), side);
+    }
+
+    // On desktop.
     let tracks = v.motion.is_some_and(|m| m.rig().eye_point().is_some());
     let eyes: Element<'a, Message> = if tracks {
         check("Eyes follow the cursor", s.bool(mascot::EYES), mascot::EYES)
     } else {
-        hint(format!("{name}'s eyes are part of its artwork, so they can't follow the cursor. Tracking eyes need a head with separate white, pupil and mask art (Edit art → Eyes)."))
+        hint_link(
+            format!(
+                "{name}'s eyes are part of its artwork, so they can't follow the cursor. Tracking eyes need a head with separate white, pupil and mask art."
+            ),
+            "Artwork → Eyes",
+            Message::Ui(UiMsg::CharacterTab(CharacterTab::Artwork)),
+        )
     };
     page = page
         .push(section(vec![
+            h2("Visibility"),
             check(
                 "Show on the desktop",
                 s.bool(mascot::ENABLED),
@@ -484,23 +546,20 @@ fn character_body<'a>(
             .style(theme::range)
             .into(),
         ]))
-        .push(eyes)
-        .push(check(
-            "Idle motion and blinking",
-            s.bool(mascot::IDLE),
-            mascot::IDLE,
-        ))
-        .push(
-            row![
-                hint("Reduced motion also stops idle motion and blinking."),
-                button(text("Motion settings").size(12).color(theme::CYAN_TEXT))
-                    .padding([2, 4])
-                    .style(theme::tool_button(theme::Tone::Plain))
-                    .on_press(Message::Ui(UiMsg::Nav(Page::Display))),
-            ]
-            .spacing(6)
-            .align_y(Alignment::Center),
-        )
+        .push(section(vec![
+            h2("Liveliness"),
+            eyes,
+            check(
+                "Idle motion and blinking",
+                s.bool(mascot::IDLE),
+                mascot::IDLE,
+            ),
+            hint_link(
+                "Reduced motion also stops idle motion and blinking.",
+                "Motion settings",
+                Message::Ui(UiMsg::Nav(Page::Display)),
+            ),
+        ]))
         .push(
             button(text("Reset position").size(13))
                 .padding([7, 12])
@@ -518,13 +577,20 @@ fn motion_section<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'
     let mut rows = column![].spacing(14);
     for (i, (label, spec)) in m.labels.iter().zip(&m.specs).enumerate() {
         let kind = m.kinds[i];
-        let number = |value: f32| text(format!("{value:.2}")).size(12).color(theme::MUTED).width(34);
+        let number = |value: f32| {
+            text(format!("{value:.2}"))
+                .size(12)
+                .color(theme::MUTED)
+                .width(34)
+        };
         let speed: Element<'a, Message> = if spec.preset.uses_speed() {
             row![
                 text("Speed").size(12).color(theme::MUTED).width(64),
-                slider(0.0..=2.0, spec.speed, move |x| Message::Ui(UiMsg::MotionSpeed(i, x)))
-                    .step(0.05_f32)
-                    .style(theme::range),
+                slider(0.0..=2.0, spec.speed, move |x| Message::Ui(
+                    UiMsg::MotionSpeed(i, x)
+                ))
+                .step(0.05_f32)
+                .style(theme::range),
                 number(spec.speed),
             ]
             .spacing(10)
@@ -536,7 +602,10 @@ fn motion_section<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'
         rows = rows.push(
             column![
                 row![
-                    text(label.clone()).font(theme::MEDIUM).size(13).width(Length::Fill),
+                    text(label.clone())
+                        .font(theme::MEDIUM)
+                        .size(13)
+                        .width(Length::Fill),
                     pick_list(kind.presets(), Some(spec.preset), move |p| {
                         Message::Ui(UiMsg::MotionPreset(i, p))
                     })
@@ -574,7 +643,9 @@ fn motion_section<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'
         .spacing(8)
         .align_y(Alignment::Center)
         .into(),
-        hint("Pick how each part moves. Strength scales idle, drag and music motion; Speed paces idle motion. Both run from 0 to 2; 1 is the preset as designed."),
+        hint(
+            "Pick how each part moves. Strength scales idle, drag and music motion; Speed paces idle motion. Both run from 0 to 2; 1 is the preset as designed.",
+        ),
         rows.into(),
     ])
 }
@@ -649,7 +720,10 @@ impl std::fmt::Display for SoundPick {
 }
 
 /// Character-wide reaction sound settings, above the event rows.
-fn character_sounds<'a>(m: &'a crate::mascot::preview::MotionPreview, muted: bool) -> Element<'a, Message> {
+fn character_sounds<'a>(
+    m: &'a crate::mascot::preview::MotionPreview,
+    muted: bool,
+) -> Element<'a, Message> {
     let s = m.sounds();
     let mut items: Vec<Element<'a, Message>> = vec![
         row![
@@ -658,7 +732,10 @@ fn character_sounds<'a>(m: &'a crate::mascot::preview::MotionPreview, muted: boo
             button(text("Reset to pack").size(12))
                 .padding([5, 10])
                 .style(theme::secondary)
-                .on_press_maybe(m.reactions_customised().then_some(Message::Ui(UiMsg::ReactionsReset))),
+                .on_press_maybe(
+                    m.reactions_customised()
+                        .then_some(Message::Ui(UiMsg::ReactionsReset))
+                ),
         ]
         .align_y(Alignment::Center)
         .into(),
@@ -672,7 +749,11 @@ fn character_sounds<'a>(m: &'a crate::mascot::preview::MotionPreview, muted: boo
         items.push(
             row![
                 text("Volume").size(12).color(theme::MUTED).width(110),
-                slider(0.0..=1.0, s.volume, |v| Message::Ui(UiMsg::ReactionVolume(v))).step(0.05_f32).style(theme::range),
+                slider(0.0..=1.0, s.volume, |v| Message::Ui(UiMsg::ReactionVolume(
+                    v
+                )))
+                .step(0.05_f32)
+                .style(theme::range),
                 text(format!("{:.0}%", s.volume * 100.0)).size(12).width(48),
             ]
             .spacing(8)
@@ -691,10 +772,18 @@ fn character_sounds<'a>(m: &'a crate::mascot::preview::MotionPreview, muted: boo
             items.push(
                 row![
                     text("Every").size(12).color(theme::MUTED).width(110),
-                    slider(10.0..=600.0, lo, move |x| Message::Ui(UiMsg::ReactionIdleInterval(x, hi))).step(10.0_f32).style(theme::range),
+                    slider(10.0..=600.0, lo, move |x| Message::Ui(
+                        UiMsg::ReactionIdleInterval(x, hi)
+                    ))
+                    .step(10.0_f32)
+                    .style(theme::range),
                     text(format!("{lo:.0} s")).size(12).width(48),
                     text("to").size(12).color(theme::MUTED),
-                    slider(10.0..=600.0, hi, move |x| Message::Ui(UiMsg::ReactionIdleInterval(lo, x))).step(10.0_f32).style(theme::range),
+                    slider(10.0..=600.0, hi, move |x| Message::Ui(
+                        UiMsg::ReactionIdleInterval(lo, x)
+                    ))
+                    .step(10.0_f32)
+                    .style(theme::range),
                     text(format!("{hi:.0} s")).size(12).width(48),
                 ]
                 .spacing(8)
@@ -723,13 +812,17 @@ fn visual_row<'a>(m: &'a crate::mascot::preview::MotionPreview, e: Event) -> Ele
     let mut block = column![
         row![
             text("Visual").size(12).color(theme::MUTED).width(48),
-            pick_list(choices, Some(visual), move |v| Message::Ui(UiMsg::ReactionVisual(e, v)))
-                .text_size(13)
-                .padding([5, 8])
-                .style(theme::select),
+            pick_list(choices, Some(visual), move |v| Message::Ui(
+                UiMsg::ReactionVisual(e, v)
+            ))
+            .text_size(13)
+            .padding([5, 8])
+            .style(theme::select),
             hint(match visual {
-                Visual::Compress => "Briefly shortens and widens the picture after a click, then restores it.",
-                Visual::Artwork => "Shows another whole-character PNG for a moment, then the normal one.",
+                Visual::Compress =>
+                    "Briefly shortens and widens the picture after a click, then restores it.",
+                Visual::Artwork =>
+                    "Shows another whole-character PNG for a moment, then the normal one.",
                 Visual::None => "The picture stays as it is.",
             }),
         ]
@@ -746,7 +839,10 @@ fn visual_row<'a>(m: &'a crate::mascot::preview::MotionPreview, e: Event) -> Ele
 /// Pick up → Held pose: keep the artwork, or show another PNG while carried.
 fn held_row<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'a, Message> {
     let small = |label: &'static str, msg: Message| {
-        button(text(label).size(12)).padding([5, 10]).style(theme::secondary).on_press(msg)
+        button(text(label).size(12))
+            .padding([5, 10])
+            .style(theme::secondary)
+            .on_press(msg)
     };
     match m.held() {
         None => row![
@@ -776,19 +872,26 @@ fn held_row<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'a, Mes
 
 /// Moves and resizes a replacement picture on the stage.
 fn picture_controls<'a>(e: Event, held: bool, place: [f32; 3]) -> Element<'a, Message> {
-    let slider_row = |label: &'static str, which: usize, range: std::ops::RangeInclusive<f32>, step: f32| {
-        row![
-            text(label).size(12).color(theme::MUTED).width(64),
-            slider(range, place[which], move |v| Message::Ui(UiMsg::ReactionPlace(e, held, which, v)))
+    let slider_row =
+        |label: &'static str, which: usize, range: std::ops::RangeInclusive<f32>, step: f32| {
+            row![
+                text(label).size(12).color(theme::MUTED).width(64),
+                slider(range, place[which], move |v| Message::Ui(
+                    UiMsg::ReactionPlace(e, held, which, v)
+                ))
                 .step(step)
                 .style(theme::range),
-            text(if which == 2 { format!("{:.0}%", place[2] * 100.0) } else { format!("{:+.0}%", place[which] * 100.0) })
+                text(if which == 2 {
+                    format!("{:.0}%", place[2] * 100.0)
+                } else {
+                    format!("{:+.0}%", place[which] * 100.0)
+                })
                 .size(12)
                 .width(48),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center)
-    };
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+        };
     column![
         slider_row("Left/right", 0, -0.5..=0.5, 0.005),
         slider_row("Up/down", 1, -0.5..=0.5, 0.005),
@@ -799,32 +902,51 @@ fn picture_controls<'a>(e: Event, held: bool, place: [f32; 3]) -> Element<'a, Me
 }
 
 /// An event's sound: picker, Import WAV…, Clear, Test, and its cooldown.
-fn sound_row<'a>(m: &'a crate::mascot::preview::MotionPreview, e: Event, muted: bool) -> Element<'a, Message> {
+fn sound_row<'a>(
+    m: &'a crate::mascot::preview::MotionPreview,
+    e: Event,
+    muted: bool,
+) -> Element<'a, Message> {
     let sounds = m.sounds();
     let t = sounds.get(e).clone();
     let current = SoundPick(t.sound.clone().filter(|_| t.enabled));
     let mut choices = vec![SoundPick(None)];
-    choices.extend(BUILTIN_SOUNDS.iter().map(|(id, _)| SoundPick(Some(Sound::Builtin(id)))));
+    choices.extend(
+        BUILTIN_SOUNDS
+            .iter()
+            .map(|(id, _)| SoundPick(Some(Sound::Builtin(id)))),
+    );
     if let Some(Sound::File(r)) = &t.sound {
         choices.push(SoundPick(Some(Sound::File(r.clone()))));
     }
     let small = |label: &'static str, msg: Option<Message>| {
-        button(text(label).size(12)).padding([5, 10]).style(theme::secondary).on_press_maybe(msg)
+        button(text(label).size(12))
+            .padding([5, 10])
+            .style(theme::secondary)
+            .on_press_maybe(msg)
     };
     let mut line = row![
         text("Sound").size(12).color(theme::MUTED).width(48),
-        pick_list(choices, Some(current), move |c: SoundPick| Message::Ui(UiMsg::ReactionSound(e, c.0)))
-            .text_size(13)
-            .padding([5, 8])
-            .style(theme::select),
+        pick_list(choices, Some(current), move |c: SoundPick| Message::Ui(
+            UiMsg::ReactionSound(e, c.0)
+        ))
+        .text_size(13)
+        .padding([5, 8])
+        .style(theme::select),
         small("Import WAV…", Some(Message::Ui(UiMsg::ReactionImport(e)))),
     ]
     .spacing(6)
     .align_y(Alignment::Center);
     if t.enabled {
         line = line
-            .push(small("Clear", Some(Message::Ui(UiMsg::ReactionSound(e, None)))))
-            .push(small("Test", (!muted && sounds.enabled).then_some(Message::Ui(UiMsg::ReactionTest(e)))));
+            .push(small(
+                "Clear",
+                Some(Message::Ui(UiMsg::ReactionSound(e, None))),
+            ))
+            .push(small(
+                "Test",
+                (!muted && sounds.enabled).then_some(Message::Ui(UiMsg::ReactionTest(e))),
+            ));
     }
     let mut block = column![line.wrap()].spacing(6);
     if t.enabled && e != Event::Idle {
@@ -832,7 +954,11 @@ fn sound_row<'a>(m: &'a crate::mascot::preview::MotionPreview, e: Event, muted: 
         block = block.push(
             row![
                 text("Cooldown").size(12).color(theme::MUTED).width(64),
-                slider(0.0..=10_000.0, ms, move |x| Message::Ui(UiMsg::ReactionCooldown(e, x))).step(50.0_f32).style(theme::range),
+                slider(0.0..=10_000.0, ms, move |x| Message::Ui(
+                    UiMsg::ReactionCooldown(e, x)
+                ))
+                .step(50.0_f32)
+                .style(theme::range),
                 text(format!("{ms:.0} ms")).size(12).width(64),
             ]
             .spacing(8)
@@ -854,7 +980,12 @@ fn event_row<'a>(
             .style(theme::secondary)
             .on_press(msg)
     };
-    let count = m.lines.get(t).iter().filter(|l| !l.text.trim().is_empty()).count();
+    let count = m
+        .lines
+        .get(t)
+        .iter()
+        .filter(|l| !l.text.trim().is_empty())
+        .count();
     let summary = match count {
         0 => "No lines".to_owned(),
         1 => "1 line".to_owned(),
@@ -862,7 +993,10 @@ fn event_row<'a>(
     };
     let mut group = column![
         row![
-            text(t.label()).font(theme::MEDIUM).size(13).width(Length::Fill),
+            text(t.label())
+                .font(theme::MEDIUM)
+                .size(13)
+                .width(Length::Fill),
             text(summary).size(12).color(theme::MUTED),
             small("Try", Message::Ui(UiMsg::MotionTest(Test::Say(t)))),
             small("Add line", Message::Ui(UiMsg::LineAdd(t))),
@@ -899,7 +1033,11 @@ fn event_row<'a>(
                         selection: theme::CYAN_BG,
                     }),
                 small(
-                    if line.sound.is_some() { "Sound ✓" } else { "Sound…" },
+                    if line.sound.is_some() {
+                        "Sound ✓"
+                    } else {
+                        "Sound…"
+                    },
                     Message::Ui(UiMsg::LineSound(t, i)),
                 ),
             ]
@@ -952,12 +1090,17 @@ fn speech_options<'a>(
             button(text("Reset to pack").size(12))
                 .padding([5, 10])
                 .style(theme::secondary)
-                .on_press_maybe(m.lines_customised().then_some(Message::Ui(UiMsg::LinesReset))),
+                .on_press_maybe(
+                    m.lines_customised()
+                        .then_some(Message::Ui(UiMsg::LinesReset))
+                ),
         ]
         .spacing(8)
         .align_y(Alignment::Center)
         .into(),
-        hint("A line is picked at random, never the same twice in a row, and shows in a bubble above the character. Try each event's lines with its Try button."),
+        hint(
+            "A line is picked at random, never the same twice in a row, and shows in a bubble above the character. Try each event's lines with its Try button.",
+        ),
         check("Show speech lines", s.bool(mascot::LINES), mascot::LINES),
         check(
             "Quiet: no idle or music lines",
@@ -965,7 +1108,10 @@ fn speech_options<'a>(
             mascot::QUIET_LINES,
         ),
         row![
-            text("Character volume").size(12).color(theme::MUTED).width(110),
+            text("Character volume")
+                .size(12)
+                .color(theme::MUTED)
+                .width(110),
             slider(0.0..=1.0, s.float(mascot::VOICE_VOLUME), |x| Message::Set(
                 mascot::VOICE_VOLUME,
                 Value::Float(x)
@@ -979,8 +1125,14 @@ fn speech_options<'a>(
         .spacing(8)
         .align_y(Alignment::Center)
         .into(),
-        hint("Line sounds play at Character volume, separate from the pointer's tap sound. One character sound plays at a time; a new reaction replaces the last."),
-        check("Mute all sounds", s.bool(crate::features::sound::MUTE_ALL), crate::features::sound::MUTE_ALL),
+        hint(
+            "Line sounds play at Character volume, separate from the pointer's tap sound. One character sound plays at a time; a new reaction replaces the last.",
+        ),
+        check(
+            "Mute all sounds",
+            s.bool(crate::features::sound::MUTE_ALL),
+            crate::features::sound::MUTE_ALL,
+        ),
         row![
             text("Bubble").size(12).color(theme::MUTED).width(110),
             swatches(
@@ -1010,9 +1162,11 @@ fn speech_options<'a>(
         .into(),
         row![
             text("Bubble width").size(12).color(theme::MUTED).width(110),
-            slider(MIN_WIDTH..=MAX_WIDTH, b.max_width, |x| Message::Ui(UiMsg::BubbleWidth(x)))
-                .step(10.0_f32)
-                .style(theme::range),
+            slider(MIN_WIDTH..=MAX_WIDTH, b.max_width, |x| Message::Ui(
+                UiMsg::BubbleWidth(x)
+            ))
+            .step(10.0_f32)
+            .style(theme::range),
             text(format!("{:.0} px", b.max_width)).size(12).width(48),
         ]
         .spacing(8)
@@ -1021,7 +1175,6 @@ fn speech_options<'a>(
     ])
 }
 
-
 /// Idle lines' interval, shown only while idle lines can appear.
 fn idle_interval<'a>(s: &crate::registry::SettingValues) -> Element<'a, Message> {
     if !s.bool(mascot::LINES) || s.bool(mascot::QUIET_LINES) {
@@ -1029,7 +1182,10 @@ fn idle_interval<'a>(s: &crate::registry::SettingValues) -> Element<'a, Message>
     }
     let minutes = |x: f64| format!("{x:.0} min");
     row![
-        text("Idle lines every").size(12).color(theme::MUTED).width(110),
+        text("Idle lines every")
+            .size(12)
+            .color(theme::MUTED)
+            .width(110),
         slider(1.0..=30.0, s.float(mascot::IDLE_MIN), |x| Message::Set(
             mascot::IDLE_MIN,
             Value::Float(x)
@@ -1065,7 +1221,11 @@ fn level_bar<'a>(level: f32, width: f32) -> Element<'a, Message> {
     ])
     .height(8)
     .style(theme::fill(theme::WELL, 4.0));
-    if width > 0.0 { bar.width(width).into() } else { bar.width(Length::Fill).into() }
+    if width > 0.0 {
+        bar.width(width).into()
+    } else {
+        bar.width(Length::Fill).into()
+    }
 }
 
 fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
@@ -1074,7 +1234,10 @@ fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     let (status, level) = (v.music.0.clone(), v.music.1);
     let on = s.bool(mascot::MUSIC);
     let pick = |source: &Source| {
-        Message::Set(mascot::MUSIC_SOURCE, Value::Choice(crate::platform::intern(&source.id())))
+        Message::Set(
+            mascot::MUSIC_SOURCE,
+            Value::Choice(crate::platform::intern(&source.id())),
+        )
     };
     // One row per app source, each with its own live meter, so it's clear
     // which one is making sound.
@@ -1108,7 +1271,9 @@ fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     let intro = vec![
         h2("Music response"),
         check("React to playback", on, mascot::MUSIC),
-        hint("Moves with the loudness of what's playing on this PC. TinyPaw's own sounds are left out, and nothing is recorded."),
+        hint(
+            "Moves with the loudness of what's playing on this PC. TinyPaw's own sounds are left out, and nothing is recorded.",
+        ),
     ];
     if !on {
         // Nothing below has an effect, or a meter to read, while off.
@@ -1177,35 +1342,56 @@ fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     ]);
     if follow {
         items.extend([
-        row![
-            text("Beat").size(12).color(theme::MUTED).width(110),
-            text(v.beat.clone()).size(12).color(theme::MUTED).width(Length::Fill),
-        ]
-        .align_y(Alignment::Center)
-        .into(),
-        row![
-            text("Sensitivity").size(12).color(theme::MUTED).width(110),
-            pick_list(
-                [Choice("low", "Low"), Choice("normal", "Normal"), Choice("high", "High")],
-                Some(Choice::of(s.choice(mascot::BEAT_SENSITIVITY), &[("low", "Low"), ("normal", "Normal"), ("high", "High")])),
-                |c| Message::Set(mascot::BEAT_SENSITIVITY, Value::Choice(c.0)),
-            )
-            .text_size(13)
-            .padding([6, 10])
-            .style(theme::select),
-            text("Timing").size(12).color(theme::MUTED),
-            pick_list(
-                [Choice("earlier", "Earlier"), Choice("default", "Default"), Choice("later", "Later")],
-                Some(Choice::of(s.choice(mascot::BEAT_TIMING), &[("earlier", "Earlier"), ("default", "Default"), ("later", "Later")])),
-                |c| Message::Set(mascot::BEAT_TIMING, Value::Choice(c.0)),
-            )
-            .text_size(13)
-            .padding([6, 10])
-            .style(theme::select),
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center)
-        .into(),
+            row![
+                text("Beat").size(12).color(theme::MUTED).width(110),
+                text(v.beat.clone())
+                    .size(12)
+                    .color(theme::MUTED)
+                    .width(Length::Fill),
+            ]
+            .align_y(Alignment::Center)
+            .into(),
+            row![
+                text("Sensitivity").size(12).color(theme::MUTED).width(110),
+                pick_list(
+                    [
+                        Choice("low", "Low"),
+                        Choice("normal", "Normal"),
+                        Choice("high", "High")
+                    ],
+                    Some(Choice::of(
+                        s.choice(mascot::BEAT_SENSITIVITY),
+                        &[("low", "Low"), ("normal", "Normal"), ("high", "High")]
+                    )),
+                    |c| Message::Set(mascot::BEAT_SENSITIVITY, Value::Choice(c.0)),
+                )
+                .text_size(13)
+                .padding([6, 10])
+                .style(theme::select),
+                text("Timing").size(12).color(theme::MUTED),
+                pick_list(
+                    [
+                        Choice("earlier", "Earlier"),
+                        Choice("default", "Default"),
+                        Choice("later", "Later")
+                    ],
+                    Some(Choice::of(
+                        s.choice(mascot::BEAT_TIMING),
+                        &[
+                            ("earlier", "Earlier"),
+                            ("default", "Default"),
+                            ("later", "Later")
+                        ]
+                    )),
+                    |c| Message::Set(mascot::BEAT_TIMING, Value::Choice(c.0)),
+                )
+                .text_size(13)
+                .padding([6, 10])
+                .style(theme::select),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center)
+            .into(),
         ]);
     }
     items.push(hint("Try it without music using Music in the preview."));
@@ -1218,7 +1404,10 @@ struct Choice(&'static str, &'static str);
 
 impl Choice {
     fn of(value: &'static str, all: &[(&'static str, &'static str)]) -> Self {
-        let label = all.iter().find(|(v, _)| *v == value).map_or(value, |(_, l)| l);
+        let label = all
+            .iter()
+            .find(|(v, _)| *v == value)
+            .map_or(value, |(_, l)| l);
         Choice(value, label)
     }
 }
@@ -1249,7 +1438,9 @@ fn motion_preview<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'
         .padding([8, 12])
         .max_width(b.max_width.min(260.0))
         .style(move |_: &Theme| container::Style {
-            background: Some(Color::from_rgba8(b.background[0], b.background[1], b.background[2], 1.0).into()),
+            background: Some(
+                Color::from_rgba8(b.background[0], b.background[1], b.background[2], 1.0).into(),
+            ),
             border: iced::Border {
                 radius: 14.0.into(),
                 width: 1.0,
@@ -1275,7 +1466,9 @@ fn motion_preview<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'
             test("Try beat", Test::Music),
         ]
         .spacing(6),
-        hint("Idle motion follows Settings → Character. Reduced motion stops it, as on the desktop."),
+        hint(
+            "Idle motion follows Settings → Character. Reduced motion stops it, as on the desktop."
+        ),
     ]
     .spacing(10)
     .width(260)
@@ -1312,7 +1505,10 @@ impl canvas::Program<Message> for MotionStage<'_> {
             .min((size.height - pad * 2.0) / canvas_size.height);
         let feet = rig.anchor();
         // Stand the feet on a floor line near the bottom, centred.
-        let origin = iced::Vector::new(size.width / 2.0 - feet.x * k, size.height - pad - feet.y * k);
+        let origin = iced::Vector::new(
+            size.width / 2.0 - feet.x * k,
+            size.height - pad - feet.y * k,
+        );
         // A live cursor test: tracking eyes follow the pointer over the
         // preview, counter-rotated into the head like on the desktop.
         if let (Some(eye), Some(at)) = (rig.eye_point(), cursor.position_in(bounds)) {
@@ -1423,9 +1619,11 @@ fn art_page<'a>(e: &'a crate::mascot::editor::Editor, busy: bool) -> Element<'a,
         .align_y(Alignment::Center);
         if head.is_some() && p.kind != PartType::Head {
             line = line.push(hint("Moves with")).push(
-                pick_list(["Character", "Head"], Some(if p.on_head { "Head" } else { "Character" }), move |w| {
-                    Message::Ui(UiMsg::ArtOnHead(i, w == "Head"))
-                })
+                pick_list(
+                    ["Character", "Head"],
+                    Some(if p.on_head { "Head" } else { "Character" }),
+                    move |w| Message::Ui(UiMsg::ArtOnHead(i, w == "Head")),
+                )
                 .text_size(13)
                 .padding([5, 8])
                 .style(theme::select),
@@ -1631,6 +1829,18 @@ fn eyes_section<'a>(e: &'a crate::mascot::editor::Editor, has_head: bool) -> Ele
                     .push(space().width(Length::Fill))
                     .push(small("Remove".into(), Message::Ui(UiMsg::ArtRemoveEye(i))));
                 let mut block = column![images.wrap()].spacing(6);
+                if let Some(pupil) = &eye.pupil {
+                    block = block.push(
+                        row![
+                            text(format!("Iris / pupil size {:.0}%", pupil.placement.scale * 100.0)).size(12),
+                            slider(0.01..=8.0, pupil.placement.scale, move |scale| Message::Ui(UiMsg::ArtPupilSize(i, scale)))
+                                .step(0.01_f32)
+                                .style(theme::range),
+                        ]
+                        .spacing(10)
+                        .align_y(Alignment::Center),
+                    );
+                }
                 if complete {
                     block = block.push(
                         row![
@@ -2048,11 +2258,19 @@ impl canvas::Program<Message> for ArtPreview<'_> {
         {
             let pivot = at(p.pivot);
             let d = p.layer.image.dimensions();
-            let corners = [(0.0, 0.0), (d.0 as f32, 0.0), (d.0 as f32, d.1 as f32), (0.0, d.1 as f32)]
-                .map(|c| {
-                    let c = p.layer.placement.map(c, d);
-                    iced::Point::new(r.x + c.0 * r.width / e.canvas.0 as f32, r.y + c.1 * r.height / e.canvas.1 as f32)
-                });
+            let corners = [
+                (0.0, 0.0),
+                (d.0 as f32, 0.0),
+                (d.0 as f32, d.1 as f32),
+                (0.0, d.1 as f32),
+            ]
+            .map(|c| {
+                let c = p.layer.placement.map(c, d);
+                iced::Point::new(
+                    r.x + c.0 * r.width / e.canvas.0 as f32,
+                    r.y + c.1 * r.height / e.canvas.1 as f32,
+                )
+            });
             for swing in [-0.3f32, 0.3] {
                 let (sn, cs) = swing.sin_cos();
                 let turned = corners.map(|c| {
@@ -2066,10 +2284,20 @@ impl canvas::Program<Message> for ArtPreview<'_> {
                     }
                     path.close();
                 });
-                frame.stroke(&outline, Stroke::default().with_color(Color::from_rgba8(0x22, 0xD3, 0xEE, 0.6)).with_width(1.0));
+                frame.stroke(
+                    &outline,
+                    Stroke::default()
+                        .with_color(Color::from_rgba8(0x22, 0xD3, 0xEE, 0.6))
+                        .with_width(1.0),
+                );
             }
         }
-        for (i, p) in e.parts.iter().enumerate().filter(|(i, _)| e.joint_part() == Some(*i)) {
+        for (i, p) in e
+            .parts
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| e.joint_part() == Some(*i))
+        {
             let on = e.selected == Selected::Part(i);
             let c = at(p.pivot);
             let radius = if on { 7.0 } else { 5.0 };

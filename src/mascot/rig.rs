@@ -15,7 +15,6 @@ const STEPS: i32 = 3;
 /// little, covering the small idle rotations of head and tail.
 const CELL: f32 = 6.0;
 
-
 #[derive(Debug, Clone)]
 pub struct Rig {
     kind: Kind,
@@ -37,11 +36,14 @@ pub struct Rig {
 
 /// Top and bottom rows of pixels at least as opaque as hit testing needs,
 /// in canvas pixels, over several canvas-sized images.
-fn visible_rows<'a>(images: impl IntoIterator<Item = (&'a RgbaImage, Point, Size)>) -> Option<(f32, f32)> {
+fn visible_rows<'a>(
+    images: impl IntoIterator<Item = (&'a RgbaImage, Point, Size)>,
+) -> Option<(f32, f32)> {
     let mut out: Option<(f32, f32)> = None;
     for (pixels, at, size) in images {
         let sy = size.height / pixels.height().max(1) as f32;
-        let rows = (0..pixels.height()).filter(|&y| (0..pixels.width()).any(|x| pixels.get_pixel(x, y)[3] >= 32));
+        let rows = (0..pixels.height())
+            .filter(|&y| (0..pixels.width()).any(|x| pixels.get_pixel(x, y)[3] >= 32));
         let (mut top, mut bottom) = (None, None);
         for y in rows {
             top.get_or_insert(y);
@@ -357,7 +359,8 @@ impl Rig {
                     .collect()
             })
             .unwrap_or_default();
-        let visible = visible_rows(shown.iter().map(|(p, at, s)| (p, *at, *s))).unwrap_or((0.0, size.height));
+        let visible =
+            visible_rows(shown.iter().map(|(p, at, s)| (p, *at, *s))).unwrap_or((0.0, size.height));
         Self {
             visible,
             anchor: Point::new(art.ground.0 * size.width, art.ground.1 * size.height),
@@ -478,7 +481,12 @@ impl Rig {
                 angle(0) * 0.5,
             ),
             Kind::Layered { body, parts, eyes } => {
-                let ctx = Layered { parts, eyes, pose };
+                let ctx = Layered {
+                    parts,
+                    eyes,
+                    pose,
+                    drop: self.head_drop(pose),
+                };
                 for (i, p) in parts.iter().enumerate() {
                     if p.parent.is_none() && p.behind {
                         ctx.part(frame, i);
@@ -494,6 +502,21 @@ impl Rig {
         }
     }
 
+    /// How far the music head bob moves a head part down, in rig pixels.
+    fn head_drop(&self, pose: &Pose) -> f32 {
+        pose.head_drop * self.visible_height()
+    }
+
+    /// How far part `index` is shifted down by the head bob, in its
+    /// parent's space: heads only.
+    fn shift(parts: &[Part], index: usize, drop: f32) -> Vector {
+        if parts[index].kind == PartType::Head {
+            Vector::new(0.0, drop)
+        } else {
+            Vector::ZERO
+        }
+    }
+
     /// Whether a rig-space point lies on visible artwork, unposed.
     #[cfg(test)]
     pub fn opaque(&self, p: Point) -> bool {
@@ -505,9 +528,12 @@ impl Rig {
     /// lean, squash and bounce are the host's (see `motion::unplaced`).
     pub fn hit(&self, p: Point, pose: &Pose) -> Option<Layer> {
         let angle = |i: usize| pose.angles.get(i).copied().unwrap_or_default();
-        let opaque = |layer: usize, p: Point| self.silhouettes.get(layer).is_some_and(|s| s.contains(p));
+        let opaque =
+            |layer: usize, p: Point| self.silhouettes.get(layer).is_some_and(|s| s.contains(p));
         match &self.kind {
-            Kind::Sprite(_) => opaque(0, unrotate(p, self.anchor, angle(0) * 0.5)).then_some(Layer::Body),
+            Kind::Sprite(_) => {
+                opaque(0, unrotate(p, self.anchor, angle(0) * 0.5)).then_some(Layer::Body)
+            }
             Kind::Layered { parts, .. } => {
                 // Reverse draw order: front roots, the body, behind roots.
                 let roots = |behind: bool| {
@@ -517,18 +543,32 @@ impl Rig {
                         .rev()
                         .filter(move |(_, c)| c.parent.is_none() && c.behind == behind)
                 };
+                let drop = self.head_drop(pose);
                 roots(false)
-                    .find_map(|(i, _)| self.hit_part(parts, i, p, &angle))
+                    .find_map(|(i, _)| self.hit_part(parts, i, p, &angle, drop))
                     .or_else(|| opaque(0, p).then_some(Layer::Body))
-                    .or_else(|| roots(true).find_map(|(i, _)| self.hit_part(parts, i, p, &angle)))
+                    .or_else(|| {
+                        roots(true).find_map(|(i, _)| self.hit_part(parts, i, p, &angle, drop))
+                    })
             }
         }
     }
 
     /// Hit test within part `index` and its children, `p` in its parent's space.
-    fn hit_part(&self, parts: &[Part], index: usize, p: Point, angle: &dyn Fn(usize) -> f32) -> Option<Layer> {
+    fn hit_part(
+        &self,
+        parts: &[Part],
+        index: usize,
+        p: Point,
+        angle: &dyn Fn(usize) -> f32,
+        drop: f32,
+    ) -> Option<Layer> {
         let part = &parts[index];
-        let local = unrotate(p, part.pivot, angle(index));
+        let local = unrotate(
+            p - Self::shift(parts, index, drop),
+            part.pivot,
+            angle(index),
+        );
         let children = |behind: bool| {
             parts
                 .iter()
@@ -537,13 +577,15 @@ impl Rig {
                 .filter(move |(_, c)| c.parent == Some(index) && c.behind == behind)
         };
         children(false)
-            .find_map(|(i, _)| self.hit_part(parts, i, local, angle))
+            .find_map(|(i, _)| self.hit_part(parts, i, local, angle, drop))
             .or_else(|| {
                 self.silhouettes[index + 1]
                     .contains(local)
                     .then_some(Layer::Part(index))
             })
-            .or_else(|| children(true).find_map(|(i, _)| self.hit_part(parts, i, local, angle)))
+            .or_else(|| {
+                children(true).find_map(|(i, _)| self.hit_part(parts, i, local, angle, drop))
+            })
     }
 
     /// Where `draw_pose` draws a point of `layer`'s unposed artwork.
@@ -555,9 +597,10 @@ impl Rig {
             (Kind::Sprite(_), _) => rotate(p, self.anchor, angle(0) * 0.5),
             (Kind::Layered { .. }, Layer::Body) => p,
             (Kind::Layered { parts, .. }, Layer::Part(mut i)) => {
+                let drop = self.head_drop(pose);
                 let mut q = p;
                 loop {
-                    q = rotate(q, parts[i].pivot, angle(i));
+                    q = rotate(q, parts[i].pivot, angle(i)) + Self::shift(parts, i, drop);
                     match parts[i].parent {
                         Some(parent) => i = parent,
                         None => return q,
@@ -602,8 +645,16 @@ pub struct Picture {
 impl Picture {
     pub fn new(pixels: &RgbaImage, place: [f32; 3]) -> Self {
         let art = visible(pixels).map_or(
-            Rectangle::new(Point::ORIGIN, Size::new(pixels.width() as f32, pixels.height() as f32)),
-            |(x, y, w, h)| Rectangle::new(Point::new(x as f32, y as f32), Size::new(w as f32, h as f32)),
+            Rectangle::new(
+                Point::ORIGIN,
+                Size::new(pixels.width() as f32, pixels.height() as f32),
+            ),
+            |(x, y, w, h)| {
+                Rectangle::new(
+                    Point::new(x as f32, y as f32),
+                    Size::new(w as f32, h as f32),
+                )
+            },
         );
         Self {
             image: handle(pixels.clone()),
@@ -617,7 +668,10 @@ impl Picture {
     pub fn in_stage(&self, stage: Size, p: Point) -> Point {
         let [x, y, k] = self.place;
         let (pw, ph) = image_size(&self.image).unwrap_or((stage.width, stage.height));
-        Point::new(x * stage.width + p.x * stage.width * k / pw, y * stage.height + p.y * stage.height * k / ph)
+        Point::new(
+            x * stage.width + p.x * stage.width * k / pw,
+            y * stage.height + p.y * stage.height * k / ph,
+        )
     }
 
     /// The hold point in the stage frame, with the picture placed.
@@ -649,7 +703,10 @@ pub fn hold_point(pixels: &RgbaImage) -> Point {
             }
         }
     }
-    Point::new((sum / n.max(1) as f64) as f32, top as f32 + band as f32 / 2.0)
+    Point::new(
+        (sum / n.max(1) as f64) as f32,
+        top as f32 + band as f32 / 2.0,
+    )
 }
 
 impl Rig {
@@ -702,6 +759,8 @@ struct Layered<'a> {
     parts: &'a [Part],
     eyes: &'a [LayerEye],
     pose: &'a Pose,
+    /// The music head bob, in rig pixels.
+    drop: f32,
 }
 
 impl Layered<'_> {
@@ -709,6 +768,7 @@ impl Layered<'_> {
         let p = &self.parts[index];
         let angle = self.pose.angles.get(index).copied().unwrap_or_default();
         frame.with_save(|f| {
+            f.translate(Rig::shift(self.parts, index, self.drop));
             f.translate(Vector::new(p.pivot.x, p.pivot.y));
             f.rotate(angle);
             f.translate(Vector::new(-p.pivot.x, -p.pivot.y));
@@ -749,7 +809,6 @@ impl Layered<'_> {
     }
 }
 
-
 fn sprite(frame: &mut Frame, image: &Handle, at: Point, size: Size, pivot: Point, angle: f32) {
     frame.with_save(|f| {
         f.translate(Vector::new(pivot.x, pivot.y));
@@ -763,7 +822,6 @@ pub fn gaze_index(gaze: Vector) -> usize {
     let quantize = |v: f32| (v.clamp(-1.0, 1.0) * STEPS as f32).round() as i32 + STEPS;
     (quantize(gaze.y) * (STEPS * 2 + 1) + quantize(gaze.x)) as usize
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -782,7 +840,10 @@ mod tests {
         };
         assert_eq!(eyes.len(), 2);
         assert_eq!(parts.len(), 2, "head and tail");
-        assert!(eyes.iter().all(|eye| eye.frames.len() == 49 && eye.closed.is_some()));
+        assert!(
+            eyes.iter()
+                .all(|eye| eye.frames.len() == 49 && eye.closed.is_some())
+        );
         assert_eq!(rig.size(), Size::new(WIDTH, HEIGHT));
         assert!(rig.eye_point().is_some());
     }
@@ -853,11 +914,17 @@ mod tests {
             }
         }
         let p = hold_point(&img);
-        assert!((p.x - 50.0).abs() < 0.5 && (p.y - 24.0).abs() < 1.0, "{p:?}");
+        assert!(
+            (p.x - 50.0).abs() < 0.5 && (p.y - 24.0).abs() < 1.0,
+            "{p:?}"
+        );
         // Placed at half size and shifted, the hold point follows.
         let pic = Picture::new(&img, [0.1, 0.0, 0.5]);
         let at = pic.hold_in(Size::new(100.0, 200.0));
-        assert!((at.x - 35.0).abs() < 0.5 && (at.y - 12.0).abs() < 1.0, "{at:?}");
+        assert!(
+            (at.x - 35.0).abs() < 0.5 && (at.y - 12.0).abs() < 1.0,
+            "{at:?}"
+        );
     }
 
     #[test]
@@ -877,8 +944,14 @@ mod tests {
     #[test]
     fn hit_testing_follows_the_posed_head() {
         let rig = Rig::layered(layered_art());
-        let rest = Pose { angles: vec![0.0], ..Pose::default() };
-        let tilted = Pose { angles: vec![0.6], ..Pose::default() };
+        let rest = Pose {
+            angles: vec![0.0],
+            ..Pose::default()
+        };
+        let tilted = Pose {
+            angles: vec![0.6],
+            ..Pose::default()
+        };
         // The head's top-left corner: on the head at rest, empty once the
         // head turns away from it.
         let corner = Point::new(22.0, 12.0);
@@ -887,7 +960,11 @@ mod tests {
         // Points of the head art are hit wherever the pose draws them.
         for p in [(25.0, 15.0), (75.0, 20.0), (50.0, 30.0)] {
             let drawn = rig.posed(Layer::Part(0), Point::new(p.0, p.1), &tilted);
-            assert_eq!(rig.hit(drawn, &tilted), Some(Layer::Part(0)), "{p:?} at {drawn:?}");
+            assert_eq!(
+                rig.hit(drawn, &tilted),
+                Some(Layer::Part(0)),
+                "{p:?} at {drawn:?}"
+            );
         }
         // The head is drawn over the body, so the overlap hits the head;
         // below it is body.
@@ -904,7 +981,10 @@ mod tests {
             }
         }
         let rig = Rig::sprite(img, (0.5, 70.0 / 80.0));
-        let pose = Pose { angles: vec![0.4], ..Pose::default() };
+        let pose = Pose {
+            angles: vec![0.4],
+            ..Pose::default()
+        };
         let top = rig.posed(Layer::Body, Point::new(12.0, 12.0), &pose);
         assert_eq!(rig.hit(top, &pose), Some(Layer::Body));
     }

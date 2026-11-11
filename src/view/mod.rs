@@ -4,7 +4,8 @@
 
 pub mod first_run;
 pub mod icons;
-mod paw;
+mod ink;
+pub(crate) mod paw;
 pub mod settings;
 pub mod theme;
 pub mod wheel;
@@ -15,12 +16,14 @@ mod interaction_tests;
 #[cfg(all(test, not(feature = "gpu")))]
 mod pointer_performance_tests;
 
+#[cfg(all(test, not(feature = "gpu")))]
+mod annotation_performance_tests;
+
 use std::cell::Cell;
 
 use iced::advanced::image;
 use iced::alignment;
 use iced::mouse;
-use iced::widget::canvas::fill::Rule;
 use iced::widget::canvas::{self, Cache, Frame, Geometry, LineCap, LineJoin, Path, Stroke};
 use iced::widget::{
     button, canvas as canvas_widget, column, container, mouse_area, pin as place, row, space,
@@ -119,7 +122,10 @@ pub enum UiMsg {
     /// Adjust joint for a part, or Done.
     ArtJoint(Option<usize>),
     /// A reaction row's sound choice.
-    ReactionSound(crate::mascot::reactions::Event, Option<crate::mascot::reactions::Sound>),
+    ReactionSound(
+        crate::mascot::reactions::Event,
+        Option<crate::mascot::reactions::Sound>,
+    ),
     ReactionImport(crate::mascot::reactions::Event),
     ReactionTest(crate::mascot::reactions::Event),
     ReactionCooldown(crate::mascot::reactions::Event, f32),
@@ -128,7 +134,10 @@ pub enum UiMsg {
     ReactionIdleOn(bool),
     ReactionIdleInterval(f32, f32),
     ReactionsReset,
-    ReactionVisual(crate::mascot::reactions::Event, crate::mascot::reactions::Visual),
+    ReactionVisual(
+        crate::mascot::reactions::Event,
+        crate::mascot::reactions::Visual,
+    ),
     /// Choose the PNG for an artwork reaction, or Pick up's held pose.
     ReactionPicture(crate::mascot::reactions::Event),
     ReactionHeldClear,
@@ -139,6 +148,7 @@ pub enum UiMsg {
     ReferenceTail(bool),
     ReferenceHead(bool),
     ReferenceEyes(bool),
+    ReferenceTracking(bool),
     ReferenceBrows(bool),
     ReferenceBlink(bool),
     ReferenceFaces(bool),
@@ -177,6 +187,7 @@ pub enum UiMsg {
     ArtRemoveEye(usize),
     ArtRemoveBlink(usize),
     ArtTravel(usize, f32),
+    ArtPupilSize(usize, f32),
     ArtClick(f32, f32),
     ArtName(String),
     ArtSave,
@@ -221,6 +232,8 @@ pub struct Overlay<'a> {
     pub notice: Option<&'a str>,
     /// The selected pointer pack's art, if it loaded.
     pub pack: Option<&'a crate::packs::Pack>,
+    /// The clear Spotlight circle, from the tool or Spotlight anywhere.
+    pub spotlight: Option<(OutputId, crate::session::Pt, f32)>,
 }
 
 /// Why a command can't run right now, or `None` when it can.
@@ -246,6 +259,17 @@ pub fn overlay(o: Overlay<'_>) -> Element<'_, Message> {
     })
     .width(Length::Fill)
     .height(Length::Fill);
+    let mask = canvas_widget(SpotlightMask {
+        at: o
+            .spotlight
+            .filter(|(output, ..)| *output == o.output && !o.session.capturing())
+            .map(|(_, at, radius)| {
+                let dim = o.session.settings().float(spotlight::DIM) as f32;
+                (Point::new(at.x, at.y), radius, dim)
+            }),
+    })
+    .width(Length::Fill)
+    .height(Length::Fill);
 
     // The still gets its own layer: within one canvas layer Iced paints images
     // above shapes, which would hide the marks drawn on the still.
@@ -261,6 +285,9 @@ pub fn overlay(o: Overlay<'_>) -> Element<'_, Message> {
                 .into(),
         );
     }
+    // Always present so the scene canvas keeps its place, and its state, in
+    // the stack when Spotlight turns on or off.
+    layers.push(mask.into());
     layers.push(scene.into());
     if let Some(draft) = o.session.text_draft().filter(|d| d.output == o.output) {
         layers.push(text_editor(
@@ -862,10 +889,35 @@ struct OverlayCanvas<'a> {
     pack: Option<&'a crate::packs::Pack>,
 }
 
+/// The Spotlight dimming, on its own layer under the marks: it draws its soft
+/// edge as an image, and Iced paints images above shapes within a layer.
+struct SpotlightMask {
+    at: Option<(Point, f32, f32)>,
+}
+
+impl<Message> canvas::Program<Message> for SpotlightMask {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let Some((at, radius, dim)) = self.at else {
+            return Vec::new();
+        };
+        ink::spotlight(renderer, bounds.size(), at, radius, dim)
+    }
+}
+
 #[derive(Default)]
 struct CanvasState {
     inside: bool,
     last: Option<Point>,
+    shift: bool,
 }
 
 fn stroke_style(color: Color, width: f32) -> Stroke<'static> {
@@ -968,14 +1020,14 @@ fn draw_mark(frame: &mut Frame, mark: &Mark, alpha: f32) {
     match s.points.as_slice() {
         [] => {}
         [p] => frame.fill(&Path::circle(Point::new(p.x, p.y), s.width / 2.0), color),
-        [first, rest @ ..] => {
-            let path = Path::new(|b| {
-                b.move_to(Point::new(first.x, first.y));
-                for p in rest {
-                    b.line_to(Point::new(p.x, p.y));
-                }
-            });
-            frame.stroke(&path, stroke_style(color, s.width));
+        points => {
+            // Opaque ink is drawn in short runs (their round caps overlap
+            // invisibly). A repaint then rasterizes only the runs it touches,
+            // and the runs of a stroke still being drawn stay identical
+            // except at its growing end, so only that end repaints.
+            for path in ink::stroke_paths(points, color.a >= 1.0) {
+                frame.stroke(&path, stroke_style(color, s.width));
+            }
         }
     }
 }
@@ -990,8 +1042,13 @@ impl canvas::Program<Message> for OverlayCanvas<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
-        let iced::Event::Mouse(event) = event else {
-            return None;
+        let event = match event {
+            iced::Event::Mouse(event) => event,
+            iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(m)) => {
+                state.shift = m.shift();
+                return None;
+            }
+            _ => return None,
         };
         let pos = cursor.position_in(bounds);
         let msg = match (event, pos) {
@@ -1014,6 +1071,18 @@ impl canvas::Program<Message> for OverlayCanvas<'_> {
             (mouse::Event::ButtonPressed(mouse::Button::Left), Some(p)) => {
                 state.last = Some(p);
                 Message::Pointer(self.output, PointerKind::Down, p)
+            }
+            // Over a Spotlight or Lens: size, or zoom/darkness with Shift.
+            (mouse::Event::WheelScrolled { delta }, Some(_)) => {
+                let y = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } | mouse::ScrollDelta::Pixels { y, .. } => {
+                        *y
+                    }
+                };
+                if y == 0.0 {
+                    return None;
+                }
+                Message::ToolWheel(y > 0.0, state.shift)
             }
             // Always report the release so a swallowed button-up is observed.
             (mouse::Event::ButtonReleased(mouse::Button::Left), p) => {
@@ -1041,25 +1110,8 @@ impl canvas::Program<Message> for OverlayCanvas<'_> {
             return layers;
         }
 
-        // Back to front (the still is a layer below): spotlight mask, marks,
-        // draft, tip.
-        if let Some((output, at, radius)) = self.session.spotlight()
-            && output == self.output
-        {
-            let mut mask = Frame::new(renderer, bounds.size());
-            let path = Path::new(|b| {
-                b.rectangle(Point::ORIGIN, bounds.size());
-                b.circle(Point::new(at.x, at.y), radius);
-            });
-            mask.fill(
-                &path,
-                canvas::Fill {
-                    style: canvas::Style::Solid(Color::from_rgba8(0, 0, 0, 0.55)),
-                    rule: Rule::EvenOdd,
-                },
-            );
-            layers.push(mask.into_geometry());
-        }
+        // Back to front (the still and spotlight mask are layers below):
+        // marks, draft, tip.
         let mut live = Frame::new(renderer, bounds.size());
 
         if self.session.fading() {

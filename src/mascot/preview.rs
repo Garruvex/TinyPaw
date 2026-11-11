@@ -171,7 +171,10 @@ impl MotionPreview {
 
     /// Any unsaved behavior change: motion, lines, bop or reactions.
     pub fn unsaved(&self) -> bool {
-        self.dirty() || self.lines_dirty() || self.bop_dirty() || self.reactions != self.reactions_saved
+        self.dirty()
+            || self.lines_dirty()
+            || self.bop_dirty()
+            || self.reactions != self.reactions_saved
     }
 
     /// The reaction sounds as the draft would play them.
@@ -237,13 +240,19 @@ impl MotionPreview {
     /// Makes a decoded reaction picture available to the preview.
     pub fn add_picture(&mut self, file: super::lines::SoundRef, pixels: &image::RgbaImage) {
         self.pictures.retain(|(f, _)| *f != file);
-        self.pictures.push((file, super::rig::Picture::new(pixels, [0.0, 0.0, 1.0])));
+        self.pictures
+            .push((file, super::rig::Picture::new(pixels, [0.0, 0.0, 1.0])));
     }
 
     /// Every picture the draft's reactions name, for loading.
     pub fn picture_files(&self) -> Vec<super::lines::SoundRef> {
         let mut out: Vec<super::lines::SoundRef> = Vec::new();
-        for r in self.reactions_pack.images().into_iter().chain(self.reactions.images()) {
+        for r in self
+            .reactions_pack
+            .images()
+            .into_iter()
+            .chain(self.reactions.images())
+        {
             if !out.contains(r) {
                 out.push(r.clone());
             }
@@ -253,7 +262,12 @@ impl MotionPreview {
 
     fn picture_for(&self, art: Option<super::reactions::Art>) -> Option<super::rig::Picture> {
         let art = art?;
-        let mut picture = self.pictures.iter().find(|(f, _)| *f == art.image)?.1.clone();
+        let mut picture = self
+            .pictures
+            .iter()
+            .find(|(f, _)| *f == art.image)?
+            .1
+            .clone();
         picture.place = art.place;
         Some(picture)
     }
@@ -294,11 +308,19 @@ impl MotionPreview {
     /// Nudges a picture's alignment: `which` is 0 x, 1 y, 2 scale.
     pub fn set_place(&mut self, e: Event, held: bool, which: usize, value: f32) {
         let entry = self.entry_mut(e);
-        let art = if held { entry.held.as_mut() } else { entry.art.as_mut() };
+        let art = if held {
+            entry.held.as_mut()
+        } else {
+            entry.art.as_mut()
+        };
         if let Some(art) = art
             && which < 3
         {
-            art.place[which] = if which == 2 { value.clamp(0.1, 4.0) } else { value.clamp(-1.0, 1.0) };
+            art.place[which] = if which == 2 {
+                value.clamp(0.1, 4.0)
+            } else {
+                value.clamp(-1.0, 1.0)
+            };
         }
     }
 
@@ -475,7 +497,9 @@ impl MotionPreview {
                     self.animator.clicked(self.now);
                     match self.visual(Event::Click) {
                         super::reactions::Visual::Compress => self.animator.compress(self.now),
-                        super::reactions::Visual::Artwork => self.showing = Some((self.now + 0.7, Event::Click)),
+                        super::reactions::Visual::Artwork => {
+                            self.showing = Some((self.now + 0.7, Event::Click))
+                        }
                         super::reactions::Visual::None => {}
                     }
                     self.test = None;
@@ -515,7 +539,6 @@ impl MotionPreview {
             self.pose.lean = 0.0;
         }
     }
-
 }
 
 #[cfg(test)]
@@ -526,7 +549,16 @@ mod tests {
     fn yohta() -> MotionPreview {
         let rig = Rig::load();
         let defaults = rig.motion().to_vec();
-        MotionPreview::new("yohta", rig, defaults, Lines::default(), Lines::default(), Bop::default(), Config::default(), Config::default())
+        MotionPreview::new(
+            "yohta",
+            rig,
+            defaults,
+            Lines::default(),
+            Lines::default(),
+            Bop::default(),
+            Config::default(),
+            Config::default(),
+        )
     }
 
     #[test]
@@ -556,8 +588,18 @@ mod tests {
         assert!(!p.unsaved());
         p.set_bop(Bop::Groove);
         assert!(p.unsaved() && p.bop_dirty());
-        p.lines.get_mut(Trigger::Click).push(crate::mascot::lines::Line { text: "Hi".into(), sound: None });
-        p.lines.get_mut(Trigger::Drop).push(crate::mascot::lines::Line { text: "  ".into(), sound: None });
+        p.lines
+            .get_mut(Trigger::Click)
+            .push(crate::mascot::lines::Line {
+                text: "Hi".into(),
+                sound: None,
+            });
+        p.lines
+            .get_mut(Trigger::Drop)
+            .push(crate::mascot::lines::Line {
+                text: "  ".into(),
+                sound: None,
+            });
         // Overrides keep only what differs from the pack, without blanks.
         let o = p.overrides(Default::default());
         assert_eq!(o.bop, Some(Bop::Groove));
@@ -588,7 +630,14 @@ mod tests {
         p.sound_settings_mut().volume = 0.4;
         assert!(p.unsaved());
         let s = p.sounds();
-        assert_eq!((s.get(Event::Click).enabled, s.get(Event::Click).cooldown_ms, s.volume), (true, 600, 0.4));
+        assert_eq!(
+            (
+                s.get(Event::Click).enabled,
+                s.get(Event::Click).cooldown_ms,
+                s.volume
+            ),
+            (true, 600, 0.4)
+        );
         let o = p.overrides(Default::default());
         assert!(o.reactions.is_some());
         // Clearing keeps the row's settings but turns it off.
@@ -604,7 +653,10 @@ mod tests {
         use super::super::reactions::Art;
         let mut p = yohta();
         let file = super::super::lines::SoundRef::User("art-1.png".into());
-        p.add_picture(file.clone(), &image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 255])));
+        p.add_picture(
+            file.clone(),
+            &image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 255])),
+        );
         p.set_held(Some(Art::new(file.clone())));
         p.set_art(Event::Drop, Some(Art::new(file.clone())));
         p.set_place(Event::Pickup, true, 0, 0.05);
@@ -632,13 +684,19 @@ mod tests {
         let mut p = yohta();
         p.test(Test::Speak);
         assert!(p.speech().is_none(), "nothing to say yet");
-        p.lines.get_mut(Trigger::Idle).push(crate::mascot::lines::Line {
-            text: "Hmm // hm".into(),
-            sound: None,
-        });
+        p.lines
+            .get_mut(Trigger::Idle)
+            .push(crate::mascot::lines::Line {
+                text: "Hmm // hm".into(),
+                sound: None,
+            });
         assert!(p.lines_dirty() && p.lines_customised());
         p.test(Test::Speak);
-        assert_eq!(p.speech(), Some("Hmm"), "falls back to other triggers' lines");
+        assert_eq!(
+            p.speech(),
+            Some("Hmm"),
+            "falls back to other triggers' lines"
+        );
         for _ in 0..200 {
             p.tick(0.05, true, false, 0.0, None);
         }
@@ -659,7 +717,10 @@ mod tests {
             dragged |= p.pose().expression == Expression::Dragging;
             leaned = leaned.max(p.pose().carry.map_or(0.0, |(_, a)| a));
         }
-        assert!(dragged && leaned.abs() > 0.01, "a drag turns the carried character");
+        assert!(
+            dragged && leaned.abs() > 0.01,
+            "a drag turns the carried character"
+        );
         // Let it settle, then click.
         for _ in 0..40 {
             p.tick(0.033, true, false, 0.0, None);

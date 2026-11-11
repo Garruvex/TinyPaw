@@ -11,11 +11,11 @@ use iced::advanced::image::Handle;
 use image::RgbaImage;
 
 use super::motion::{MotionSpec, PartType};
-use super::rest::RestMode;
 use super::pack::{
     self, Character, EyeDef, Manifest, PartDef, Pose, Source, fit_png, installed_folder,
     read_manifest, read_png, stage_and_install,
 };
+use super::rest::RestMode;
 
 /// A decoded, canvas-sized image and its handle for drawing.
 #[derive(Debug, Clone)]
@@ -33,6 +33,40 @@ impl Layer {
             handle,
             placement: Placement::default(),
         }
+    }
+
+    /// Retain every visible pixel while removing unused source padding.
+    fn compact_source(&self) -> Self {
+        let mut bounds = None;
+        for (x, y, pixel) in self.image.enumerate_pixels() {
+            if pixel[3] != 0 {
+                let (x0, y0, x1, y1) = bounds.get_or_insert((x, y, x, y));
+                *x0 = (*x0).min(x);
+                *y0 = (*y0).min(y);
+                *x1 = (*x1).max(x);
+                *y1 = (*y1).max(y);
+            }
+        }
+        let Some((x0, y0, x1, y1)) = bounds else {
+            return self.clone();
+        };
+        let (width, height) = (x1 - x0 + 1, y1 - y0 + 1);
+        let centre = self.placement.map(
+            (
+                x0 as f32 + width as f32 / 2.0,
+                y0 as f32 + height as f32 / 2.0,
+            ),
+            self.image.dimensions(),
+        );
+        let mut source = Self::new(
+            image::imageops::crop_imm(self.image.as_ref(), x0, y0, width, height).to_image(),
+        );
+        source.placement = Placement {
+            x: centre.0 - width as f32 * self.placement.scale / 2.0,
+            y: centre.1 - height as f32 * self.placement.scale / 2.0,
+            ..self.placement
+        };
+        source
     }
 
     /// Centre and bottom of the visible pixels, as canvas fractions.
@@ -118,7 +152,10 @@ pub const FACE_LABELS: [&str; 3] = ["Eyes closed", "Pressed", "Being carried"];
 /// A readable layer name from a file name: `eye_screen_left.png` becomes
 /// "Eye screen left".
 pub fn display_name(path: &Path) -> String {
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
     let words: Vec<&str> = stem
         .split(['_', '-', ' ', '.'])
         .filter(|w| !w.is_empty())
@@ -160,6 +197,7 @@ pub enum Gesture {
     Nudge,
     Field(usize),
     Travel(usize),
+    PupilSize(usize),
     Rename(usize),
 }
 
@@ -559,9 +597,9 @@ impl Editor {
     /// Whether a part turns, so its joint matters: anything but a still
     /// static layer.
     pub fn has_joint(&self, part: usize) -> bool {
-        self.parts
-            .get(part)
-            .is_some_and(|p| p.kind != PartType::Other || p.motion.preset != super::motion::Preset::Still)
+        self.parts.get(part).is_some_and(|p| {
+            p.kind != PartType::Other || p.motion.preset != super::motion::Preset::Still
+        })
     }
 
     /// The temporary Adjust joint tool for `part`: preview clicks move only
@@ -677,13 +715,22 @@ impl Editor {
                 kind: p.kind,
                 image: bake(&p.layer),
                 pivot: p.pivot,
-                parent: if p.on_head && p.kind != PartType::Head { head } else { None },
+                parent: if p.on_head && p.kind != PartType::Head {
+                    head
+                } else {
+                    None
+                },
                 behind: p.behind,
                 motion: p.motion,
                 faces: [0, 1, 2].map(|i| p.faces[i].as_ref().map(bake)),
             })
             .collect();
-        Rig::layered(LayeredArt { body, ground, parts, eyes })
+        Rig::layered(LayeredArt {
+            body,
+            ground,
+            parts,
+            eyes,
+        })
     }
 
     /// The automatic resting point for the body as arranged, as canvas
@@ -731,6 +778,36 @@ impl Editor {
         }
     }
 
+    /// Scale the pupil around its visible centre, keeping neutral gaze aligned.
+    pub fn set_pupil_size(&mut self, index: usize, scale: f32) -> Result<(), String> {
+        let pupil = self
+            .eyes
+            .get(index)
+            .and_then(|eye| eye.pupil.as_ref())
+            .ok_or("Choose a pupil image first.")?;
+        if !scale.is_finite() {
+            return Err("Pupil size must be a finite number.".into());
+        }
+        let centre = pupil
+            .visible_centre(self.canvas)
+            .ok_or("The pupil image is empty.")?;
+        let mut placement = pupil.placement;
+        placement.scale = scale.clamp(0.01, 8.0);
+        let mut resized = pupil.clone();
+        resized.placement = placement;
+        let next = resized
+            .visible_centre(self.canvas)
+            .ok_or("The pupil image is empty.")?;
+        placement.x += (centre.0 - next.0) * self.canvas.0 as f32;
+        placement.y += (centre.1 - next.1) * self.canvas.1 as f32;
+        if !placement.valid(self.canvas) {
+            return Err("This pupil size exceeds the stage's placement range.".into());
+        }
+        self.checkpoint_gesture(Gesture::PupilSize(index));
+        self.eyes[index].pupil.as_mut().unwrap().placement = placement;
+        Ok(())
+    }
+
     /// Writes the edited character over its installed copy.
     pub fn save(&self, job: &std::sync::atomic::AtomicU8) -> Result<Character, String> {
         let root = pack::user_dir().ok_or("no per-user data folder")?;
@@ -767,7 +844,10 @@ impl Editor {
         if self.held.is_some() {
             use super::reactions::{Art, Entry, Event};
             let file = HELD_FILE.to_owned();
-            let mut entry = reactions.entry(Event::Pickup).cloned().unwrap_or_else(Entry::none);
+            let mut entry = reactions
+                .entry(Event::Pickup)
+                .cloned()
+                .unwrap_or_else(Entry::none);
             entry.held = Some(Art::new(super::lines::SoundRef::Pack(file)));
             reactions.set_entry(Event::Pickup, Some(entry));
         }
@@ -839,6 +919,33 @@ impl Editor {
             eyes,
         }];
         poses.extend(self.others.iter().cloned());
+        let runtime_bytes = u64::from(self.canvas.0)
+            * u64::from(self.canvas.1)
+            * 4
+            * poses
+                .iter()
+                .map(|pose| pose.assets().len() as u64)
+                .sum::<u64>();
+        let source_bytes: u64 = files
+            .iter()
+            .map(|(_, layer)| u64::from(layer.image.width()) * u64::from(layer.image.height()) * 8)
+            .chain(
+                self.other_sources
+                    .iter()
+                    .map(|record| u64::from(record.size.0) * u64::from(record.size.1) * 8),
+            )
+            .sum();
+        let compact = runtime_bytes + source_bytes > 128 * 1024 * 1024;
+        let sources: Vec<Layer> = files
+            .iter()
+            .map(|(_, layer)| {
+                if compact {
+                    layer.compact_source()
+                } else {
+                    layer.clone()
+                }
+            })
+            .collect();
         let manifest = Manifest {
             id: self.id.to_owned(),
             name: name.chars().take(60).collect(),
@@ -853,9 +960,13 @@ impl Editor {
             rest: self.rest,
             editor: files
                 .iter()
+                .zip(&sources)
                 .enumerate()
-                .map(|(i, (file, layer))| SourceRecord {
-                    name: names.iter().find(|(f, _)| f == file).map(|(_, n)| n.clone()),
+                .map(|(i, ((file, _), layer))| SourceRecord {
+                    name: names
+                        .iter()
+                        .find(|(f, _)| f == file)
+                        .map(|(_, n)| n.clone()),
                     target: file.clone(),
                     source: format!("editor/sources/{dir}/layer-{i}.png"),
                     size: layer.image.dimensions(),
@@ -894,7 +1005,7 @@ impl Editor {
                     .save_with_format(&to, image::ImageFormat::Png)
                     .map_err(|e| e.to_string())?;
             }
-            for ((_, layer), record) in files.iter().zip(&manifest.editor) {
+            for (layer, record) in sources.iter().zip(&manifest.editor) {
                 let to = stage.join(&record.source);
                 std::fs::create_dir_all(to.parent().unwrap()).map_err(|e| e.to_string())?;
                 layer
@@ -1535,6 +1646,82 @@ mod tests {
     use crate::mascot::pack::{OnDuplicate, test_install_folder};
 
     #[test]
+    fn saving_many_padded_layers_compacts_sources_and_preserves_placement() {
+        let dir = std::env::temp_dir().join(format!("tinypaw-padded-save-{}", std::process::id()));
+        let (root, character) = test_install_folder(&dir, OnDuplicate::Ask);
+        let mut editor = Editor::open_in(&root, &character).unwrap();
+        editor.canvas = (1024, 1024);
+        let mut image = RgbaImage::new(1024, 1024);
+        for y in 200..240 {
+            for x in 300..330 {
+                image.put_pixel(x, y, image::Rgba([120, 80, 220, 255]));
+            }
+        }
+        let mut layer = Layer::new(image);
+        layer.placement.angle = 90.0;
+        let expected = placement::bake(&layer.image, layer.placement, editor.canvas);
+        editor.body = layer.clone();
+        editor.parts = [PartType::Head, PartType::Tail]
+            .into_iter()
+            .map(|kind| EditPart {
+                name: kind.to_string(),
+                kind,
+                layer: layer.clone(),
+                pivot: (0.5, 0.5),
+                on_head: false,
+                behind: kind.behind_by_default(),
+                motion: MotionSpec::default_for(kind),
+                faces: if kind == PartType::Head {
+                    [None, Some(layer.clone()), Some(layer.clone())]
+                } else {
+                    [None, None, None]
+                },
+            })
+            .collect();
+        editor.eyes = vec![
+            EditEye {
+                white: Some(layer.clone()),
+                pupil: Some(layer.clone()),
+                mask: Some(layer.clone()),
+                blink: Some(layer),
+                travel: DEFAULT_TRAVEL,
+            };
+            2
+        ];
+        // Thirteen canvas layers require 156 MiB with untrimmed editable copies.
+        let saved = editor.save_into(&root).unwrap();
+        let manifest = read_manifest(saved.folder.as_ref().unwrap()).unwrap();
+        assert_eq!(manifest.editor.len(), 13);
+        assert!(manifest.editor.iter().all(|record| record.size == (30, 40)));
+        let reopened = Editor::open_in(&root, &saved).unwrap();
+        let rebaked = placement::bake(
+            &reopened.body.image,
+            reopened.body.placement,
+            reopened.canvas,
+        );
+        for (actual, expected) in rebaked.pixels().zip(expected.pixels()) {
+            assert!(actual[3].abs_diff(expected[3]) <= 1);
+            for channel in 0..3 {
+                let a = u16::from(actual[channel]) * u16::from(actual[3]) / 255;
+                let b = u16::from(expected[channel]) * u16::from(expected[3]) / 255;
+                assert!(a.abs_diff(b) <= 1);
+            }
+        }
+        let saved_again = reopened.save_into(&root).unwrap();
+        let saved_pixels = read_png(
+            saved_again.folder.as_ref().unwrap(),
+            "sit/body.png",
+            editor.canvas,
+        )
+        .unwrap();
+        assert!(
+            saved_pixels == rebaked,
+            "repeated saves preserve the compacted source"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn cropped_placement_round_trip_keeps_sources_and_baked_pixels() {
         let dir =
             std::env::temp_dir().join(format!("tinypaw-crop-roundtrip-{}", std::process::id()));
@@ -1729,7 +1916,11 @@ mod tests {
         e.click(0.4, 0.6);
         assert_eq!(e.parts[0].pivot, (0.4, 0.6));
         e.select(Selected::Body);
-        assert_eq!(e.joint_part(), None, "choosing another layer leaves the tool");
+        assert_eq!(
+            e.joint_part(),
+            None,
+            "choosing another layer leaves the tool"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1752,16 +1943,30 @@ mod tests {
         let root = dir.join("characters");
         std::fs::create_dir_all(&root).unwrap();
         let mut e = Editor::from_body_into(&root, &dir.join("body.png"), &[]).unwrap();
-        assert!(e.set_images(Target::NewPart, vec![dir.join("tail.png")]).is_empty());
+        assert!(
+            e.set_images(Target::NewPart, vec![dir.join("tail.png")])
+                .is_empty()
+        );
         e.set_image(Target::Held, &dir.join("held.png")).unwrap();
         let saved = e.save_into(&root).unwrap();
         let folder = saved.folder.clone().unwrap();
         assert!(folder.join(HELD_FILE).exists());
         assert!(held(&saved.pack_reactions(), &Config::default()).is_some());
-        assert!(saved.reaction_image(&held(&saved.pack_reactions(), &Config::default()).unwrap()).is_some());
-        assert_eq!(saved.rig().unwrap().motion_parts().len(), 1, "the tail is a part");
+        assert!(
+            saved
+                .reaction_image(&held(&saved.pack_reactions(), &Config::default()).unwrap())
+                .is_some()
+        );
+        assert_eq!(
+            saved.rig().unwrap().motion_parts().len(),
+            1,
+            "the tail is a part"
+        );
         // Opening and saving again keeps the held pose.
-        let again = Editor::open_in(&root, &saved).unwrap().save_into(&root).unwrap();
+        let again = Editor::open_in(&root, &saved)
+            .unwrap()
+            .save_into(&root)
+            .unwrap();
         assert!(held(&again.pack_reactions(), &Config::default()).is_some());
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -1786,7 +1991,10 @@ mod tests {
         let mut e = Editor::open_in(&root, &c).unwrap();
         // An installed pack opens in Arrange with the body selected and no
         // joint tool or resting-point guide active.
-        assert_eq!((e.mode, e.selected, e.adjusting_rest), (Mode::Arrange, Selected::Body, false));
+        assert_eq!(
+            (e.mode, e.selected, e.adjusting_rest),
+            (Mode::Arrange, Selected::Body, false)
+        );
         // The fixture has no editor metadata: its anchor is kept by hand.
         assert_eq!(e.rest, RestMode::Manual);
         e.reset_rest();
@@ -1798,7 +2006,11 @@ mod tests {
         let saved = e.save_into(&root).unwrap();
         let reopened = Editor::open_in(&root, &saved).unwrap();
         assert_eq!(reopened.rest, RestMode::Auto);
-        assert!((reopened.ground.1 - (auto.1 - 0.1)).abs() < 0.02, "{:?} {auto:?}", reopened.ground);
+        assert!(
+            (reopened.ground.1 - (auto.1 - 0.1)).abs() < 0.02,
+            "{:?} {auto:?}",
+            reopened.ground
+        );
         // Adjust manually: clicks place it and it stays set by hand.
         let mut e = reopened;
         e.adjust_rest();
@@ -1807,14 +2019,23 @@ mod tests {
         assert_eq!((e.rest, e.ground), (RestMode::Manual, (0.3, 0.7)));
         let saved = e.save_into(&root).unwrap();
         let reopened = Editor::open_in(&root, &saved).unwrap();
-        assert_eq!((reopened.rest, reopened.ground), (RestMode::Manual, (0.3, 0.7)));
+        assert_eq!(
+            (reopened.rest, reopened.ground),
+            (RestMode::Manual, (0.3, 0.7))
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn layers_have_readable_names_and_eye_images_ride_the_head() {
-        assert_eq!(display_name(Path::new("eye_screen_left.png")), "Eye screen left");
-        assert_eq!(display_name(Path::new("Right-Eyebrow.PNG")), "Right eyebrow");
+        assert_eq!(
+            display_name(Path::new("eye_screen_left.png")),
+            "Eye screen left"
+        );
+        assert_eq!(
+            display_name(Path::new("Right-Eyebrow.PNG")),
+            "Right eyebrow"
+        );
         let dir = std::env::temp_dir().join(format!("tinypaw-names-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let (root, c) = test_install_folder(&dir, OnDuplicate::Ask);
@@ -1834,7 +2055,10 @@ mod tests {
         e.set_image(Target::EyePart, &eye).unwrap();
         let p = &e.parts[1];
         assert_eq!(p.name, "Left eye");
-        assert_eq!((p.kind, p.on_head, p.motion.preset), (PartType::Other, true, super::super::motion::Preset::Still));
+        assert_eq!(
+            (p.kind, p.on_head, p.motion.preset),
+            (PartType::Other, true, super::super::motion::Preset::Still)
+        );
         assert_eq!(e.eye_style(), EyeStyle::Separate);
         e.rename(0, "Cat head".into());
         // The draft rig matches what a save would install.
@@ -1845,7 +2069,14 @@ mod tests {
         assert!(draft.anchor().distance(installed.anchor()) < 0.5);
         // Names come back from the editor metadata.
         let reopened = Editor::open_in(&root, &saved).unwrap();
-        assert_eq!(reopened.parts.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Cat head", "Left eye"]);
+        assert_eq!(
+            reopened
+                .parts
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Cat head", "Left eye"]
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1895,6 +2126,25 @@ mod tests {
         e.set_image(Target::Eye(0, EyeSlot::Pupil), &ear).unwrap();
         assert!(e.save_into(&root).unwrap_err().contains("mask"));
         e.set_image(Target::Eye(0, EyeSlot::Mask), &ear).unwrap();
+        let pupil_centre = e.eyes[0]
+            .pupil
+            .as_ref()
+            .unwrap()
+            .visible_centre(e.canvas)
+            .unwrap();
+        e.set_pupil_size(0, 1.5).unwrap();
+        e.set_pupil_size(0, 2.0).unwrap();
+        let pupil = e.eyes[0].pupil.as_ref().unwrap();
+        let resized_centre = pupil.visible_centre(e.canvas).unwrap();
+        assert!((pupil_centre.0 - resized_centre.0).abs() < 0.0001);
+        assert!((pupil_centre.1 - resized_centre.1).abs() < 0.0001);
+        let original_pixels = pupil.image.pixels().filter(|pixel| pixel[3] > 0).count();
+        let baked = placement::bake(&pupil.image, pupil.placement, e.canvas);
+        assert!(baked.pixels().filter(|pixel| pixel[3] > 0).count() >= original_pixels * 4);
+        e.undo();
+        assert_eq!(e.eyes[0].pupil.as_ref().unwrap().placement.scale, 1.0);
+        e.redo();
+        assert_eq!(e.eyes[0].pupil.as_ref().unwrap().placement.scale, 2.0);
         let saved = e.save_into(&root).unwrap();
         assert_eq!(saved.id, c.id, "saving keeps the character's identity");
         let rig = saved.rig().unwrap();
@@ -1903,6 +2153,10 @@ mod tests {
 
         // Reopening shows what was saved.
         let again = Editor::open_in(&root, &saved).unwrap();
+        assert_eq!(
+            again.eyes[0].pupil.as_ref().unwrap().placement,
+            e.eyes[0].pupil.as_ref().unwrap().placement
+        );
         assert_eq!(again.parts.len(), 3);
         assert_eq!(again.parts[1].pivot, (0.66, 0.65));
         assert!(again.parts[0].faces[1].is_some());

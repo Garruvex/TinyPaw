@@ -166,7 +166,11 @@ pub fn card(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style 
         };
         button::Style {
             background: Some(bg.into()),
-            text_color: if status == button::Status::Disabled { FAINT } else { TEXT },
+            text_color: if status == button::Status::Disabled {
+                FAINT
+            } else {
+                TEXT
+            },
             border: border(12.0, if selected { 1.5 } else { 0.0 }, CYAN_RING),
             ..button::Style::default()
         }
@@ -194,9 +198,18 @@ pub fn segment(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Sty
 pub fn secondary(_: &Theme, status: button::Status) -> button::Style {
     button::Style {
         background: Some(
-            if status == button::Status::Hovered { HOVER } else { CONTROL }.into(),
+            if status == button::Status::Hovered {
+                HOVER
+            } else {
+                CONTROL
+            }
+            .into(),
         ),
-        text_color: if status == button::Status::Disabled { DISABLED } else { TEXT },
+        text_color: if status == button::Status::Disabled {
+            DISABLED
+        } else {
+            TEXT
+        },
         border: border(10.0, 1.0, LINE_STRONG),
         ..button::Style::default()
     }
@@ -232,10 +245,16 @@ pub fn swatch(color: Color, selected: bool) -> impl Fn(&Theme, button::Status) -
 pub fn master_toggler(_: &Theme, status: toggler::Status) -> toggler::Style {
     let on = matches!(
         status,
-        toggler::Status::Active { is_toggled: true } | toggler::Status::Hovered { is_toggled: true }
+        toggler::Status::Active { is_toggled: true }
+            | toggler::Status::Hovered { is_toggled: true }
     );
     toggler::Style {
-        background: (if on { AMBER } else { Color::from_rgb8(0x3A, 0x3D, 0x45) }).into(),
+        background: (if on {
+            AMBER
+        } else {
+            Color::from_rgb8(0x3A, 0x3D, 0x45)
+        })
+        .into(),
         background_border_width: 0.0,
         background_border_color: Color::TRANSPARENT,
         foreground: Color::WHITE.into(),
@@ -273,8 +292,12 @@ pub fn select(_: &Theme, status: pick_list::Status) -> pick_list::Style {
         text_color: TEXT,
         placeholder_color: MUTED,
         handle_color: MUTED,
-        background: (if matches!(status, pick_list::Status::Hovered) { HOVER } else { CONTROL })
-            .into(),
+        background: (if matches!(status, pick_list::Status::Hovered) {
+            HOVER
+        } else {
+            CONTROL
+        })
+        .into(),
         border: border(8.0, 1.0, LINE_STRONG),
     }
 }

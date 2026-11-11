@@ -1,6 +1,7 @@
 //! Built-in feature modules. Adding a feature means adding its module and one
 //! line to [`BUILTINS`].
 
+pub mod anywhere;
 pub mod display;
 pub mod freeze;
 pub mod mascot;
