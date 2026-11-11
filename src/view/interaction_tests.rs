@@ -393,3 +393,58 @@ fn generated_forearm_colour_controls_receive_clicks() {
         .unwrap();
     assert_eq!(point::forearm_color(&values), Some([20, 30, 80, 255]));
 }
+
+/// Lays out and clicks `next` with the widget state `prev` left behind,
+/// the way the app moves from one screen to another.
+fn transition(prev: Element<'_, Message>, mut next: Element<'_, Message>, size: Size) {
+    let renderer = Renderer::new(iced::Font::DEFAULT, 14.0.into());
+    let mut prev = prev;
+    let mut tree = Tree::new(prev.as_widget());
+    let _ = prev.as_widget_mut().layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, size));
+    tree.diff(next.as_widget());
+    let node = next.as_widget_mut().layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, size));
+    let viewport = Rectangle::with_size(size);
+    let mut messages = Vec::new();
+    let event = mouse::Event::CursorMoved { position: Point::new(200.0, 200.0) };
+    next.as_widget_mut().update(
+        &mut tree,
+        &iced::Event::Mouse(event),
+        Layout::new(&node),
+        mouse::Cursor::Available(Point::new(200.0, 200.0)),
+        &renderer,
+        &mut clipboard::Null,
+        &mut Shell::new(&mut messages),
+        &viewport,
+    );
+}
+
+#[test]
+fn character_screens_switch_without_mismatched_widget_state() {
+    use crate::mascot::{preview::MotionPreview, reference::Request, rig::Rig};
+    use settings::CharacterTab;
+    let registry = Registry::build(crate::features::BUILTINS).unwrap();
+    let session = pointing(&registry);
+    let rig = Rig::load();
+    let defaults = rig.motion().to_vec();
+    let preview = MotionPreview::new("yohta", rig, defaults, Default::default(), Default::default(), Default::default(), Default::default(), Default::default());
+    let mut request = Request::new("ref.png".into());
+    let thumb = image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]);
+    request.tail = true;
+    request.add_results(vec!["body.png".into(), "tail.png".into()]);
+    let tabs = [CharacterTab::Home, CharacterTab::Artwork, CharacterTab::Behavior, CharacterTab::Advanced];
+    let screen = |n: usize| {
+        let mut v = settings_view(&registry, &session, &[], settings::Page::Character);
+        v.motion = Some(&preview);
+        match n {
+            0..=3 => v.character_tab = tabs[n],
+            4 => v.reference = Some((&request, None)),
+            _ => v.reference = Some((&request, Some(&thumb))),
+        }
+        settings::view(v)
+    };
+    for a in 0..6 {
+        for b in 0..6 {
+            transition(screen(a), screen(b), Size::new(1040.0, 2000.0));
+        }
+    }
+}

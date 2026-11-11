@@ -1053,8 +1053,10 @@ impl Desktop {
         .width(Length::Fill)
         .height(Length::Fill);
         let body = iced::widget::stack![stage, menus];
+        // Always a stack with a bubble layer, so a bubble appearing doesn't
+        // change the widget structure under the stage's state.
         let Some(speech) = self.speech.as_ref().filter(|_| o.lines) else {
-            return body.into();
+            return iced::widget::stack![body, space()].into();
         };
         // The bubble sits in the band above the character, centred on it
         // and kept inside the window. It never takes clicks.

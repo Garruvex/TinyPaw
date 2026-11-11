@@ -362,29 +362,25 @@ fn main<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         bottom: 24.0,
         left,
     };
-    let Some(side) = side else {
-        return scrollable(
-            container(Column::with_children(content).spacing(16))
-                .padding(pad(28.0, 28.0))
-                .width(Length::Fill),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into();
-    };
     // The side panel (preview or pointer editor) scrolls separately, so the
-    // preview stays in view while the settings beside it scroll.
+    // preview stays in view while the settings beside it scroll. The same
+    // two-column structure is kept without one: switching between a page
+    // with a side panel and one without (on the same Page) must not hand
+    // one scroll area's widget state to a different widget.
+    let has_side = side.is_some();
+    let side = match side {
+        Some(side) => container(side).padding(pad(14.0, 28.0)),
+        None => container(space().width(0)),
+    };
     row![
         scrollable(
             container(Column::with_children(content).spacing(16))
-                .padding(pad(28.0, 14.0))
+                .padding(pad(28.0, if has_side { 14.0 } else { 28.0 }))
                 .width(Length::Fill),
         )
         .width(Length::Fill)
         .height(Length::Fill),
-        scrollable(container(side).padding(pad(14.0, 28.0)))
-            .width(Length::Shrink)
-            .height(Length::Fill),
+        scrollable(side).width(Length::Shrink).height(Length::Fill),
     ]
     .into()
 }
