@@ -2223,6 +2223,7 @@ mod tests {
             .save(source.join(&manifest.default_pose().body))
             .unwrap();
         manifest.editor = vec![SourceRecord {
+            name: None,
             target: manifest.default_pose().body.clone(),
             source: "editor/sources/body.png".into(),
             size: original.dimensions(),

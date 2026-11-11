@@ -224,23 +224,31 @@ fn character_tabs_show_the_selected_controls_and_keep_the_preview_interactive() 
         Default::default(),
         Default::default(),
     );
-    let tabs = [
-        CharacterTab::Desktop,
-        CharacterTab::Motion,
-        CharacterTab::Speech,
-        CharacterTab::Music,
-    ];
+    let tabs = [CharacterTab::Home, CharacterTab::Behavior];
     for tab in tabs {
         let mut view = settings_view(&registry, &session, &[], settings::Page::Character);
         view.motion = Some(&preview);
         view.character_tab = tab;
         let messages = click_layout(settings::view(view), Size::new(1040.0, 1200.0));
-        for target in tabs {
+        for target in [
+            CharacterTab::Home,
+            CharacterTab::Artwork,
+            CharacterTab::Behavior,
+            CharacterTab::Advanced,
+        ] {
             assert!(
                 messages
                     .iter()
                     .any(|m| matches!(m, Message::Ui(UiMsg::CharacterTab(t)) if *t == target))
             );
+        }
+        // Behavior has a row for every line trigger, each with Try.
+        for t in crate::mascot::lines::Trigger::ALL {
+            let row = messages.iter().any(|m| matches!(m, Message::Ui(UiMsg::LineAdd(x)) if *x == t));
+            let try_ = messages.iter().any(|m| {
+                matches!(m, Message::Ui(UiMsg::MotionTest(crate::mascot::preview::Test::Say(x))) if *x == t)
+            });
+            assert_eq!((row, try_), (tab == CharacterTab::Behavior, tab == CharacterTab::Behavior), "{t:?}");
         }
         assert!(
             messages
@@ -248,9 +256,9 @@ fn character_tabs_show_the_selected_controls_and_keep_the_preview_interactive() 
                 .any(|m| matches!(m, Message::Ui(UiMsg::MotionTest(_))))
         );
         for (id, owner) in [
-            (mascot::ENABLED, CharacterTab::Desktop),
-            (mascot::LINES, CharacterTab::Speech),
-            (mascot::MUSIC, CharacterTab::Music),
+            (mascot::ENABLED, CharacterTab::Home),
+            (mascot::LINES, CharacterTab::Behavior),
+            (mascot::MUSIC, CharacterTab::Behavior),
         ] {
             assert_eq!(
                 messages
@@ -275,7 +283,7 @@ fn one_save_and_the_leave_prompt_appear_only_with_unsaved_work() {
     let messages = |unsaved: bool, leaving: bool| {
         let mut view = settings_view(&registry, &session, &[], settings::Page::Character);
         view.motion = Some(&preview);
-        view.character_tab = CharacterTab::Motion;
+        view.character_tab = CharacterTab::Behavior;
         view.unsaved = unsaved;
         view.leaving = leaving;
         click_layout(settings::view(view), Size::new(1040.0, 1200.0))

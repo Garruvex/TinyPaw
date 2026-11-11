@@ -18,6 +18,8 @@ pub enum Test {
     Speak,
     /// A few seconds of simulated music, to try music motion without audio.
     Music,
+    /// An event row's Try: its gesture, if it has one, and one of its lines.
+    Say(Trigger),
 }
 
 /// How long a test press is held before it releases into a click.
@@ -95,6 +97,23 @@ impl MotionPreview {
         &self.rig
     }
 
+    /// Shows another rig for the same character, such as the unsaved
+    /// artwork draft, keeping the behavior draft. Motion carries over when
+    /// the parts still line up; otherwise the new parts start from their
+    /// own defaults.
+    pub fn set_rig(&mut self, mut rig: Rig) {
+        rig.set_bop(self.rig.bop());
+        if !rig.set_motion(&self.specs) {
+            self.specs = rig.motion().to_vec();
+            self.saved = self.specs.clone();
+            self.defaults = self.specs.clone();
+        }
+        self.labels = rig.motion_labels();
+        self.kinds = rig.motion_parts().iter().map(|p| p.kind).collect();
+        self.rig = rig;
+        self.animator = Animator::default();
+    }
+
     pub fn pose(&self) -> &Pose {
         &self.pose
     }
@@ -169,6 +188,19 @@ impl MotionPreview {
     }
 
     pub fn test(&mut self, test: Test) {
+        if let Test::Say(t) = test {
+            self.say(t);
+            let gesture = match t {
+                Trigger::Click => Some(Test::Click),
+                Trigger::Pickup | Trigger::Drop => Some(Test::DragRight),
+                Trigger::MusicStart => Some(Test::Music),
+                Trigger::Idle | Trigger::AnnotationEnd => None,
+            };
+            if let Some(g) = gesture {
+                self.test = Some((g, self.now));
+            }
+            return;
+        }
         if test == Test::Speak {
             let t = if self.lines.get(Trigger::Click).is_empty() {
                 Trigger::ALL
@@ -187,6 +219,16 @@ impl MotionPreview {
             return;
         }
         self.test = Some((test, self.now));
+    }
+
+    /// Says a line for `t` now, if it has one.
+    fn say(&mut self, t: Trigger) {
+        if let Some(line) = self.picker.pick(&self.lines, t)
+            && let Some(speech) = Speech::new(&line.text, self.now)
+        {
+            self.speech = Some(speech);
+            self.sound = line.sound.clone();
+        }
     }
 
     pub fn lines_dirty(&self) -> bool {
@@ -255,7 +297,9 @@ impl MotionPreview {
                     inputs.music = inputs.music.max((t / MUSIC * std::f32::consts::PI).sin());
                     inputs.beat = Some((t * 2.0).fract());
                 }
-                Test::DragLeft | Test::DragRight | Test::Speak | Test::Music => self.test = None,
+                Test::DragLeft | Test::DragRight | Test::Speak | Test::Music | Test::Say(_) => {
+                    self.test = None
+                }
             }
         }
         self.pose = self.animator.step(&self.rig.motion_parts(), &inputs);

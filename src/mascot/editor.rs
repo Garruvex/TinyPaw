@@ -67,6 +67,9 @@ impl Layer {
 
 #[derive(Debug, Clone)]
 pub struct EditPart {
+    /// What the layer list calls it, such as "Left eye". Starts from the
+    /// imported file's name; the runtime type stays separate.
+    pub name: String,
     pub kind: PartType,
     pub layer: Layer,
     pub pivot: (f32, f32),
@@ -97,6 +100,36 @@ pub enum EyeSlot {
     Blink,
 }
 
+/// "How are the eyes drawn?" in the Eyes section. A starting workflow,
+/// not a conversion: static and tracking eyes can both exist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EyeStyle {
+    /// Painted into the head (or body) art: nothing to set up.
+    InArt,
+    /// Separate complete eye and eyebrow images that ride on the head.
+    Separate,
+    /// Eyes that follow the cursor: background, moving pupil and mask.
+    Tracking,
+}
+
+/// Display names for head faces, by slot. File names keep `FACE_NAMES`.
+pub const FACE_LABELS: [&str; 3] = ["Eyes closed", "Pressed", "Being carried"];
+
+/// A readable layer name from a file name: `eye_screen_left.png` becomes
+/// "Eye screen left".
+pub fn display_name(path: &Path) -> String {
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+    let words: Vec<&str> = stem
+        .split(|c: char| c == '_' || c == '-' || c == ' ' || c == '.')
+        .filter(|w| !w.is_empty())
+        .collect();
+    let mut name = words.join(" ").to_lowercase();
+    if let Some(first) = name.get(0..1) {
+        name = first.to_uppercase() + &name[1..];
+    }
+    name.chars().take(placement::MAX_NAME).collect()
+}
+
 /// What the preview's clicks move.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Selected {
@@ -110,6 +143,8 @@ pub enum Selected {
 pub enum Target {
     Body,
     NewPart,
+    /// A complete eye or eyebrow image: a still part riding on the head.
+    EyePart,
     /// A head face: part index and face slot (blink, pressed, dragging).
     Face(usize, usize),
     Eye(usize, EyeSlot),
@@ -166,6 +201,8 @@ pub struct Editor {
     pub mode: Mode,
     pub zoom: f32,
     pub background: Background,
+    /// The Eyes section's chosen workflow; `None` follows the art.
+    pub eye_style: Option<EyeStyle>,
     pub fields: [String; 4],
     pub canvas_fields: [String; 2],
     pub new_install: bool,
@@ -209,7 +246,14 @@ impl Editor {
                     *slot = Some(png(asset)?);
                 }
             }
+            let name = m
+                .editor
+                .iter()
+                .find(|r| r.target == p.image)
+                .and_then(|r| r.name.clone())
+                .unwrap_or_else(|| format!("{} {}", p.kind, parts.len() + 1));
             parts.push(EditPart {
+                name,
                 kind: p.kind,
                 layer: png(&p.image)?,
                 pivot: p.pivot,
@@ -243,6 +287,7 @@ impl Editor {
             mode: Mode::Arrange,
             zoom: 1.0,
             background: Background::Checker,
+            eye_style: None,
             fields: Default::default(),
             canvas_fields: [m.canvas.0.to_string(), m.canvas.1.to_string()],
             new_install: false,
@@ -289,7 +334,7 @@ impl Editor {
         target: Target,
         mut paths: Vec<std::path::PathBuf>,
     ) -> Vec<String> {
-        if target == Target::NewPart && self.head().is_none() {
+        if matches!(target, Target::NewPart | Target::EyePart) && self.head().is_none() {
             paths.sort_by_key(|p| {
                 !p.file_stem()
                     .and_then(|s| s.to_str())
@@ -381,7 +426,7 @@ impl Editor {
         }
         // Invalid slots must not create undo entries or discard valid draft work.
         match target {
-            Target::NewPart if self.parts.len() >= 16 => {
+            Target::NewPart | Target::EyePart if self.parts.len() >= 16 => {
                 return Err("a character can have at most 16 parts".into());
             }
             Target::Face(i, _) if self.parts.get(i).is_none_or(|p| p.kind != PartType::Head) => {
@@ -402,6 +447,7 @@ impl Editor {
                     return Err("a character can have at most 16 parts".into());
                 }
                 let kind = guess_kind(path, self.head().is_some());
+                let name = display_name(path);
                 let (cx, cy, bottom) = layer.visible_centre(self.canvas).unwrap_or((0.5, 0.5, 0.5));
                 // A head turns at the neck; anything else from its middle.
                 let pivot = if kind == PartType::Head {
@@ -410,6 +456,7 @@ impl Editor {
                     (cx, cy)
                 };
                 self.parts.push(EditPart {
+                    name,
                     kind,
                     on_head: matches!(kind, PartType::Ear | PartType::Hair | PartType::Other)
                         && self.head().is_some(),
@@ -417,6 +464,20 @@ impl Editor {
                     motion: MotionSpec::default_for(kind),
                     layer,
                     pivot,
+                    faces: [None, None, None],
+                });
+                self.select(Selected::Part(self.parts.len() - 1));
+            }
+            Target::EyePart => {
+                let (cx, cy, _) = layer.visible_centre(self.canvas).unwrap_or((0.5, 0.5, 0.5));
+                self.parts.push(EditPart {
+                    name: display_name(path),
+                    kind: PartType::Other,
+                    on_head: self.head().is_some(),
+                    behind: false,
+                    motion: MotionSpec::of(super::motion::Preset::Still),
+                    layer,
+                    pivot: (cx, cy),
                     faces: [None, None, None],
                 });
                 self.select(Selected::Part(self.parts.len() - 1));
@@ -441,6 +502,28 @@ impl Editor {
             }
         }
         Ok(())
+    }
+
+    /// The Eyes section's workflow: the creator's choice, else what the
+    /// artwork already has.
+    pub fn eye_style(&self) -> EyeStyle {
+        self.eye_style.unwrap_or(if !self.eyes.is_empty() {
+            EyeStyle::Tracking
+        } else if self
+            .parts
+            .iter()
+            .any(|p| p.kind == PartType::Other && p.name.to_lowercase().contains("eye"))
+        {
+            EyeStyle::Separate
+        } else {
+            EyeStyle::InArt
+        })
+    }
+
+    pub fn rename(&mut self, part: usize, name: String) {
+        if let Some(p) = self.parts.get_mut(part) {
+            p.name = name.chars().take(placement::MAX_NAME).collect();
+        }
     }
 
     pub fn set_kind(&mut self, part: usize, kind: PartType) {
@@ -496,6 +579,49 @@ impl Editor {
         {
             p.pivot = at;
         }
+    }
+
+    /// The draft as a rig, so Test character shows unsaved artwork. Baking
+    /// every layer is slow, so callers run it on a worker.
+    pub fn draft_rig(&self) -> super::rig::Rig {
+        use super::rig::{EyeArt, LayeredArt, PartArt, Rig};
+        let bake = |l: &Layer| placement::bake(&l.image, l.placement, self.canvas);
+        let ground = match self.rest {
+            RestMode::Auto => self.auto_rest().unwrap_or(self.ground),
+            RestMode::Manual => self.ground,
+        };
+        let body = bake(&self.body);
+        let eyes: Vec<EyeArt> = self
+            .eyes
+            .iter()
+            .filter_map(|e| {
+                Some(EyeArt {
+                    white: bake(e.white.as_ref()?),
+                    pupil: bake(e.pupil.as_ref()?),
+                    mask: bake(e.mask.as_ref()?),
+                    blink: e.blink.as_ref().map(bake),
+                    max_offset: (e.travel, e.travel * 0.75),
+                })
+            })
+            .collect();
+        if self.parts.is_empty() && eyes.is_empty() {
+            return Rig::sprite(body, ground);
+        }
+        let head = self.head();
+        let parts = self
+            .parts
+            .iter()
+            .map(|p| PartArt {
+                kind: p.kind,
+                image: bake(&p.layer),
+                pivot: p.pivot,
+                parent: if p.on_head && p.kind != PartType::Head { head } else { None },
+                behind: p.behind,
+                motion: p.motion,
+                faces: [0, 1, 2].map(|i| p.faces[i].as_ref().map(bake)),
+            })
+            .collect();
+        Rig::layered(LayeredArt { body, ground, parts, eyes })
     }
 
     /// The automatic resting point for the body as arranged, as canvas
@@ -574,9 +700,12 @@ impl Editor {
         // Write each image under a name from its role, then the manifest.
         let dir = &self.pose;
         let mut files: Vec<(String, Layer)> = vec![(format!("{dir}/body.png"), self.body.clone())];
+        // Display names travel in the editor metadata, by image.
+        let mut names: Vec<(String, String)> = Vec::new();
         let mut parts = Vec::new();
         for (n, p) in self.parts.iter().enumerate() {
             let base = format!("{dir}/part-{}-{}", n + 1, p.kind.name());
+            names.push((format!("{base}.png"), p.name.clone()));
             files.push((format!("{base}.png"), p.layer.clone()));
             let mut faces = [None, None, None];
             for (slot, face) in p.faces.iter().enumerate() {
@@ -654,6 +783,7 @@ impl Editor {
                 .iter()
                 .enumerate()
                 .map(|(i, (file, layer))| SourceRecord {
+                    name: names.iter().find(|(f, _)| f == file).map(|(_, n)| n.clone()),
                     target: file.clone(),
                     source: format!("editor/sources/{dir}/layer-{i}.png"),
                     size: layer.image.dimensions(),
@@ -786,6 +916,7 @@ impl Editor {
             mode: Mode::Arrange,
             zoom: 1.0,
             background: Background::Checker,
+            eye_style: None,
             fields: Default::default(),
             canvas_fields: [canvas.0.to_string(), canvas.1.to_string()],
             new_install: true,
@@ -1022,8 +1153,10 @@ impl Editor {
         }
         self.checkpoint();
         let eye = self.eyes.remove(index);
-        for layer in [eye.white, eye.pupil].into_iter().flatten() {
+        for (label, layer) in [("background", eye.white), ("pupil", eye.pupil)] {
+            let Some(layer) = layer else { continue };
             self.parts.push(EditPart {
+                name: format!("Eye {} {label}", index + 1),
                 kind: PartType::Other,
                 layer,
                 pivot: (0.5, 0.5),
@@ -1489,6 +1622,44 @@ mod tests {
         let saved = e.save_into(&root).unwrap();
         let reopened = Editor::open_in(&root, &saved).unwrap();
         assert_eq!((reopened.rest, reopened.ground), (RestMode::Manual, (0.3, 0.7)));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn layers_have_readable_names_and_eye_images_ride_the_head() {
+        assert_eq!(display_name(Path::new("eye_screen_left.png")), "Eye screen left");
+        assert_eq!(display_name(Path::new("Right-Eyebrow.PNG")), "Right eyebrow");
+        let dir = std::env::temp_dir().join(format!("tinypaw-names-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (root, c) = test_install_folder(&dir, OnDuplicate::Ask);
+        let mut e = Editor::open_in(&root, &c).unwrap();
+        assert_eq!(e.eye_style(), EyeStyle::InArt);
+        let block = |x0: u32, y0: u32, x1: u32, y1: u32| {
+            RgbaImage::from_fn(100, 100, |x, y| {
+                let on = (x0..x1).contains(&x) && (y0..y1).contains(&y);
+                image::Rgba(if on { [200, 90, 40, 255] } else { [0, 0, 0, 0] })
+            })
+        };
+        let head = dir.join("cat-head.png");
+        block(20, 10, 80, 55).save(&head).unwrap();
+        let eye = dir.join("left_eye.png");
+        block(35, 25, 45, 35).save(&eye).unwrap();
+        e.set_image(Target::NewPart, &head).unwrap();
+        e.set_image(Target::EyePart, &eye).unwrap();
+        let p = &e.parts[1];
+        assert_eq!(p.name, "Left eye");
+        assert_eq!((p.kind, p.on_head, p.motion.preset), (PartType::Other, true, super::super::motion::Preset::Still));
+        assert_eq!(e.eye_style(), EyeStyle::Separate);
+        e.rename(0, "Cat head".into());
+        // The draft rig matches what a save would install.
+        let draft = e.draft_rig();
+        let saved = e.save_into(&root).unwrap();
+        let installed = saved.rig().unwrap();
+        assert_eq!(draft.motion_parts().len(), installed.motion_parts().len());
+        assert!(draft.anchor().distance(installed.anchor()) < 0.5);
+        // Names come back from the editor metadata.
+        let reopened = Editor::open_in(&root, &saved).unwrap();
+        assert_eq!(reopened.parts.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Cat head", "Left eye"]);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

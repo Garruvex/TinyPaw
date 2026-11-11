@@ -116,6 +116,8 @@ pub enum UiMsg {
     ArtFromParts,
     ArtMode(crate::mascot::editor::Mode),
     ArtRest(crate::mascot::editor::RestAction),
+    ArtRename(usize, String),
+    ArtEyeStyle(crate::mascot::editor::EyeStyle),
     ArtField(usize, String),
     ArtCanvas(usize, String),
     ArtDragStart(crate::mascot::editor::Selected),

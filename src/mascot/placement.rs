@@ -116,13 +116,25 @@ pub struct SourceRecord {
     pub source: String,
     pub size: (u32, u32),
     pub placement: Placement,
+    /// The layer's display name in the editor, such as "Left eye".
+    pub name: Option<String>,
 }
 
+/// Longest layer display name kept.
+pub const MAX_NAME: usize = 40;
+
 pub fn to_json(records: &[SourceRecord]) -> Json {
-    json!({ "version": 1, "layers": records.iter().map(|r| json!({
-        "target": r.target, "source": r.source, "size": [r.size.0,r.size.1],
-        "placement": [r.placement.x,r.placement.y,r.placement.scale,r.placement.angle]
-    })).collect::<Vec<_>>() })
+    json!({ "version": 1, "layers": records.iter().map(|r| {
+        let mut layer = json!({
+            "target": r.target, "source": r.source, "size": [r.size.0,r.size.1],
+            "placement": [r.placement.x,r.placement.y,r.placement.scale,r.placement.angle]
+        });
+        // Optional: older builds ignore it.
+        if let Some(name) = &r.name {
+            layer["name"] = json!(name);
+        }
+        layer
+    }).collect::<Vec<_>>() })
 }
 
 pub fn parse(
@@ -201,6 +213,10 @@ pub fn parse(
             source: source.into(),
             size,
             placement,
+            name: item["name"]
+                .as_str()
+                .map(|n| n.trim().chars().take(MAX_NAME).collect::<String>())
+                .filter(|n| !n.is_empty()),
         });
     }
     Ok(records)
@@ -216,6 +232,7 @@ mod tests {
             source: "editor/sources/body.png".into(),
             size: (16, 20),
             placement: Placement::default(),
+            name: Some("Body".into()),
         };
         let good = to_json(&[r]);
         assert_eq!(parse(&good, (100, 100), &["body.png"]).unwrap().len(), 1);

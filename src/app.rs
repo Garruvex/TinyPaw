@@ -52,6 +52,8 @@ pub enum Message {
     CharacterPicked(Option<PathBuf>),
     CharacterFolderPicked(Option<PathBuf>),
     CharacterWorked(u64, Result<CharacterWork, String>),
+    /// The artwork draft built as a rig for Test character, by request.
+    DraftRig(u64, Box<crate::mascot::rig::Rig>),
     CharacterExportPicked(Option<PathBuf>),
     ArtFilesPicked(u64, crate::mascot::editor::Target, Vec<PathBuf>),
     /// Frames for the Motion tab's preview.
@@ -143,6 +145,8 @@ pub struct App {
     /// on every update.
     motion_failed: Option<&'static str>,
     motion_ticked: Option<Instant>,
+    /// The latest draft-rig request; older results are dropped.
+    draft_rig_request: u64,
     /// The character voice: cooldowns, idle deadline, what's playing.
     voice: crate::mascot::reactions::Voice,
     /// The desktop character's reaction sounds.
@@ -290,6 +294,7 @@ impl App {
             after_save: None,
             motion_failed: None,
             motion_ticked: None,
+            draft_rig_request: 0,
             voice: Default::default(),
             reaction_sounds: Default::default(),
             voice_clock: Instant::now(),
@@ -585,7 +590,12 @@ impl App {
                     match result {
                         Ok(CharacterWork::Draft(draft)) => self.character_draft = Some(draft),
                         Ok(CharacterWork::Editor(editor, errors)) => {
+                            use view::settings::CharacterTab;
                             self.art = Some(*editor);
+                            // An opened editor always shows in Arrange.
+                            if !matches!(self.character_tab, CharacterTab::Artwork | CharacterTab::Advanced) {
+                                self.character_tab = CharacterTab::Artwork;
+                            }
                             if !errors.is_empty() {
                                 self.notice = Some(errors.join("; "));
                             }
@@ -637,6 +647,15 @@ impl App {
                             self.notice = Some(format!("Could not import that character: {e}"))
                         }
                     }
+                }
+            }
+            Message::DraftRig(request, rig) => {
+                if request == self.draft_rig_request
+                    && let Some(e) = &self.art
+                    && let Some(p) = &mut self.motion_preview
+                    && p.id == e.id
+                {
+                    p.set_rig(*rig);
                 }
             }
             Message::CharacterExportPicked(Some(into)) => {
@@ -1787,7 +1806,38 @@ impl App {
                 self.ui.more_menu = false;
                 self.ui.ink_menu = !self.ui.ink_menu;
             }
-            UiMsg::CharacterTab(tab) => self.character_tab = tab,
+            UiMsg::CharacterTab(tab) => {
+                use view::settings::CharacterTab;
+                self.character_tab = tab;
+                // Test character shows the unsaved artwork: build it on a
+                // worker by revision, keeping the last preview meanwhile.
+                if tab == CharacterTab::Behavior
+                    && let Some(e) = self.art.clone()
+                    && self.motion_preview.as_ref().is_some_and(|p| p.id == e.id)
+                    && e.can_undo()
+                {
+                    self.draft_rig_request += 1;
+                    let request = self.draft_rig_request;
+                    let (tx, rx) = iced::futures::channel::oneshot::channel();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(e.draft_rig());
+                    });
+                    return Task::perform(rx, move |r| match r {
+                        Ok(rig) => Message::DraftRig(request, Box::new(rig)),
+                        Err(_) => Message::DraftRig(0, Box::new(crate::mascot::rig::Rig::load())),
+                    });
+                }
+                // Artwork and Advanced open the editor for an installed
+                // character; built-in Yohta offers Duplicate to edit instead.
+                if matches!(tab, CharacterTab::Artwork | CharacterTab::Advanced)
+                    && self.art.is_none()
+                    && self.character_job.is_none()
+                    && self.character_draft.is_none()
+                    && !self.current_character().is_builtin()
+                {
+                    return self.ui_message(UiMsg::EditArt, now, out);
+                }
+            }
             UiMsg::Nav(page) => {
                 if page != Page::Character && self.character_unsaved() {
                     self.leaving = Some(view::settings::Leave::Page(page));
@@ -2059,24 +2109,22 @@ impl App {
                 );
             }
             UiMsg::ArtPick(target) => {
-                use crate::mascot::editor::{EyeSlot, FACE_NAMES, Target};
+                use crate::mascot::editor::{EyeSlot, FACE_LABELS, Target};
                 let title = match target {
                     Target::Body => "Choose the body PNG".to_owned(),
                     Target::NewPart => {
                         "Choose a part PNG: head, tail, ear, wing or hair".to_owned()
                     }
+                    Target::EyePart => "Choose complete eye or eyebrow PNGs".to_owned(),
                     Target::Face(_, slot) => {
-                        format!(
-                            "Choose the {} face PNG",
-                            FACE_NAMES[slot.min(2)].to_lowercase()
-                        )
+                        format!("Choose the {} face PNG", FACE_LABELS[slot.min(2)].to_lowercase())
                     }
                     Target::Eye(_, slot) => format!(
-                        "Choose the eye {} PNG",
+                        "Choose the eye's {} PNG",
                         match slot {
-                            EyeSlot::White => "white",
-                            EyeSlot::Pupil => "pupil",
-                            EyeSlot::Mask => "mask",
+                            EyeSlot::White => "background",
+                            EyeSlot::Pupil => "moving pupil",
+                            EyeSlot::Mask => "pupil area (mask)",
                             EyeSlot::Blink => "blink",
                         }
                     ),
@@ -2087,7 +2135,7 @@ impl App {
                         let picker = rfd::AsyncFileDialog::new()
                             .set_title(title)
                             .add_filter("PNG image", &["png"]);
-                        if target == Target::NewPart {
+                        if matches!(target, Target::NewPart | Target::EyePart) {
                             picker
                                 .pick_files()
                                 .await
@@ -2200,6 +2248,16 @@ impl App {
                 if let Some(e) = &mut self.art {
                     e.mode = mode;
                     e.finish_rest();
+                }
+            }
+            UiMsg::ArtRename(i, name) => {
+                if let Some(e) = &mut self.art {
+                    e.rename(i, name);
+                }
+            }
+            UiMsg::ArtEyeStyle(style) => {
+                if let Some(e) = &mut self.art {
+                    e.eye_style = Some(style);
                 }
             }
             UiMsg::ArtRest(action) => {
