@@ -174,6 +174,8 @@ pub struct Options {
     pub quiet: bool,
     /// Idle lines come at a random time in this range, in seconds.
     pub idle_every: (f32, f32),
+    /// Playback loudness to move with, 0 when off or silent.
+    pub music: f32,
 }
 
 /// One menu row. `checked` draws a tick column; `on_press: None` disables it.
@@ -543,6 +545,7 @@ impl Desktop {
                 pressed: self.press.as_ref().is_some_and(|p| !p.dragging),
                 dragging,
                 velocity,
+                music: o.music,
             },
         );
         // Counter-rotate the gaze into the head's space so it stays
@@ -673,7 +676,7 @@ impl Desktop {
         };
         Some(Duration::from_millis(if self.press.is_some() {
             16
-        } else if self.menu.is_some() || (o.idle && !o.reduced) || settling {
+        } else if self.menu.is_some() || (o.idle && !o.reduced) || settling || o.music > 0.001 {
             33
         } else {
             // Still: only hit testing and new gaze targets.
@@ -843,6 +846,8 @@ impl canvas::Program<Message> for Stage<'_> {
         let mut frame = Frame::new(renderer, bounds.size());
         frame.translate(Vector::new(0.0, l.character.y));
         frame.scale(l.scale);
+        // Music bounce lifts the whole character.
+        frame.translate(Vector::new(0.0, -pose.bounce * d.rig.size().height));
         if pose.squash > 0.001 || pose.lean.abs() > 0.0005 {
             // Lean while carried, squash when pressed: both around the
             // feet, so they stay on the ground.

@@ -85,6 +85,8 @@ pub struct SettingsView<'a> {
     pub art: Option<&'a crate::mascot::editor::Editor>,
     /// The Motion tab's live preview, on the Character page.
     pub motion: Option<&'a crate::mascot::preview::MotionPreview>,
+    /// Music response status and live level, for the meter.
+    pub music: (&'static str, f32),
 }
 
 fn h1<'a>(label: &'a str) -> Element<'a, Message> {
@@ -1642,7 +1644,10 @@ fn character_page<'a>(
                 ),
         );
     if let Some(m) = v.motion {
-        page = page.push(motion_section(m)).push(lines_section(v, m));
+        page = page
+            .push(motion_section(m))
+            .push(lines_section(v, m))
+            .push(music_section(v));
     }
 
     let side = match (v.character_draft, v.motion) {
@@ -1905,6 +1910,53 @@ fn lines_section<'a>(
     ])
 }
 
+/// The Music tab: react to playback, how strongly, and a live meter.
+fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
+    let s = v.session.settings();
+    let (status, level) = v.music;
+    let on = s.bool(mascot::MUSIC);
+    let meter = container(
+        container(space())
+            .width(Length::FillPortion((level.clamp(0.0, 1.0) * 1000.0) as u16 + 1))
+            .height(8)
+            .style(theme::fill(theme::CYAN_TEXT, 4.0)),
+    )
+    .width(Length::Fill)
+    .height(8)
+    .style(theme::fill(theme::WELL, 4.0));
+    let meter = row![
+        meter,
+        space().width(Length::FillPortion(((1.0 - level.clamp(0.0, 1.0)) * 1000.0) as u16 + 1)),
+    ];
+    section(vec![
+        h2("Music"),
+        check("React to playback", on, mascot::MUSIC),
+        hint("Moves with the loudness of what's playing on this PC. TinyPaw's own sounds are left out, and nothing is recorded."),
+        row![
+            text("Playback").size(12).color(theme::MUTED).width(110),
+            container(meter).width(Length::Fill),
+            text(status).size(12).color(theme::MUTED),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center)
+        .into(),
+        row![
+            text("Music strength").size(12).color(theme::MUTED).width(110),
+            slider(0.0..=2.0, s.float(mascot::MUSIC_STRENGTH), |x| Message::Set(
+                mascot::MUSIC_STRENGTH,
+                Value::Float(x)
+            ))
+            .step(0.05)
+            .style(theme::range),
+            text(format!("{:.2}", s.float(mascot::MUSIC_STRENGTH))).size(12).width(40),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .into(),
+        hint("Try it without music using Music in the preview. Following the beat is a later trial."),
+    ])
+}
+
 /// The selected character, animated, with buttons to try its reactions.
 fn motion_preview<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'a, Message> {
     use crate::mascot::preview::Test;
@@ -1947,6 +1999,7 @@ fn motion_preview<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'
             test("Drag ←", Test::DragLeft),
             test("Drag →", Test::DragRight),
             test("Speak", Test::Speak),
+            test("Music", Test::Music),
         ]
         .spacing(6),
         hint("Idle motion follows Settings → Character. Reduced motion stops it, as on the desktop."),

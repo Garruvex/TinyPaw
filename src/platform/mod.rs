@@ -9,6 +9,8 @@ pub mod hotkeys;
 pub mod ipc;
 #[cfg(windows)]
 pub mod lens;
+#[cfg(windows)]
+pub mod music;
 pub mod tray;
 #[cfg(windows)]
 pub mod windows;

@@ -14,6 +14,9 @@ pub const LINES: &str = "mascot.lines";
 pub const QUIET_LINES: &str = "mascot.quiet_lines";
 /// Character sounds (line sounds), separate from the pointer's tap volume.
 pub const VOICE_VOLUME: &str = "mascot.voice_volume";
+/// Music response: move with playback, and how strongly.
+pub const MUSIC: &str = "mascot.music";
+pub const MUSIC_STRENGTH: &str = "mascot.music_strength";
 /// Idle lines come at a random time within this many minutes.
 pub const IDLE_MIN: &str = "mascot.idle_lines_min";
 pub const IDLE_MAX: &str = "mascot.idle_lines_max";
@@ -112,6 +115,22 @@ pub fn register(r: &mut Registrar) {
             constraint: Constraint::Range { min: 1.0, max: 30.0 },
         });
     }
+    r.setting(SettingDef {
+        id: MUSIC,
+        label: "React to playback",
+        group: "Character",
+        order: 9,
+        default: Value::Bool(false),
+        constraint: Constraint::None,
+    });
+    r.setting(SettingDef {
+        id: MUSIC_STRENGTH,
+        label: "Music strength",
+        group: "Character",
+        order: 10,
+        default: Value::Float(1.0),
+        constraint: Constraint::Range { min: 0.0, max: 2.0 },
+    });
     for (id, order) in [(X, 90), (Y, 91)] {
         r.setting(SettingDef {
             id,

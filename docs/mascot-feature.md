@@ -454,8 +454,32 @@ Implemented 11 November 2026.
   volume**, which is separate from the pointer's tap sound. The preview's
   **Speak** shows the bubble. **Save lines** stores them as overrides beside
   the pack; **Reset to pack** returns to the pack's own.
-- **Not yet.** Music-start lines need music response (step 4). Arbitration
-  with the planned reaction sounds is left to that feature.
+- **Not yet.** Arbitration with the planned reaction sounds is left to that
+  feature.
+
+### Music response, level stage (character creation step 4)
+
+Implemented 11 November 2026.
+
+- **Meter.** `src/platform/music.rs` runs a background thread only while
+  **React to playback** is on and the desktop character is showing (or the
+  Character page is open, for the meter). Every 50 ms it reads the peak meter
+  of each active audio session on the default output, skipping TinyPaw's own
+  process, so taps and line sounds never count and no samples are captured.
+  The default output is looked up again every 2 s, so device changes recover;
+  an unreadable device reports Unavailable. Turning it off joins the thread.
+- **Envelope.** `src/mascot/music.rs` smooths the loudest peak (fast attack,
+  slower release), starts "playing" above one threshold and stops only after
+  0.8 s below a lower one, so quiet passages don't flicker.
+- **Motion.** The level, times **Music strength** (0–2), adds a relaxed
+  two-per-second bob to each part through its own Strength, and a small body
+  bounce. Reduced motion stops both. *Music starts* lines fire when playback
+  begins.
+- **Settings.** The Character page's Music section has **React to playback**,
+  a live meter with its status (Off, Listening, Silent, Hearing playback,
+  Unavailable) and **Music strength**. The preview's **Music** test simulates
+  a few seconds of music without any audio.
+- **Not yet.** Following the beat (step 5).
 
 Completion checks:
 

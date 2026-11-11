@@ -135,6 +135,7 @@ fn settings_view<'a>(
         character_conflict: None,
         art: None,
         motion: None,
+        music: ("Off", 0.0),
     }
 }
 

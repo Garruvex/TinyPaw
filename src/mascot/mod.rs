@@ -6,6 +6,7 @@ pub mod desktop;
 pub mod editor;
 pub mod lines;
 pub mod motion;
+pub mod music;
 pub mod pack;
 pub mod placement;
 pub mod preview;

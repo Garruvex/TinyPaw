@@ -207,6 +207,9 @@ pub struct Inputs {
     pub dragging: bool,
     /// How fast the character is being dragged, in logical pixels per second.
     pub velocity: Vector,
+    /// Playback loudness, 0 (silent or off) to 1, already scaled by the
+    /// user's music strength.
+    pub music: f32,
 }
 
 /// Everything the renderer needs for one frame.
@@ -218,6 +221,9 @@ pub struct Pose {
     pub lean: f32,
     /// Press feedback, 0 to 1.
     pub squash: f32,
+    /// Music bounce: how far the whole character rises, as a fraction of
+    /// its height (0 at rest).
+    pub bounce: f32,
     pub expression: Expression,
     /// Where the eyes look, each axis -1 to 1, in head space.
     pub gaze: Vector,
@@ -307,7 +313,12 @@ impl Animator {
                 let k = spec.strength.clamp(0.0, 2.0);
                 let base = if i.idle { idle_angle(spec.preset, t, i.dragging) } else { 0.0 };
                 let drag = drag_angle(part.kind, spec.preset, self.velocity.x, i.dragging);
-                let goal = (base + drag) * k;
+                let music = if i.music > 0.0 {
+                    music_angle(part.kind, i.now) * i.music.min(2.0)
+                } else {
+                    0.0
+                };
+                let goal = (base + drag + music) * k;
                 angles[n] = if spec.preset.springy() {
                     // Inertia: when the parent turns, the part lags behind.
                     let parent_turn = part
@@ -342,10 +353,16 @@ impl Animator {
             Expression::Idle
         };
 
+        let bounce = if i.reduced || i.music <= 0.0 {
+            0.0
+        } else {
+            (i.now * MUSIC_TEMPO * std::f32::consts::TAU).sin().abs() * 0.012 * i.music.min(2.0)
+        };
         Pose {
             angles,
             lean: self.lean,
             squash: self.squash,
+            bounce,
             expression,
             gaze: Vector::ZERO,
         }
@@ -386,6 +403,21 @@ fn drag_angle(kind: PartType, preset: Preset, vx: f32, dragging: bool) -> f32 {
         PartType::Ear => trail * 0.4,
         PartType::Head => (vx * -0.0002).clamp(-0.1, 0.1),
         _ => 0.0,
+    }
+}
+
+/// Bobs per second while music plays: a relaxed nod, not a beat match.
+const MUSIC_TEMPO: f32 = 2.0;
+
+/// How a part moves with the music at full level.
+fn music_angle(kind: PartType, now: f32) -> f32 {
+    let phase = now * MUSIC_TEMPO * std::f32::consts::TAU;
+    match kind {
+        PartType::Head => phase.sin() * 0.05,
+        PartType::Tail => (phase * 0.5).sin() * 0.1,
+        PartType::Ear => (phase + 1.0).sin() * 0.06,
+        PartType::Wing => (phase * 2.0).sin() * 0.15,
+        PartType::Hair | PartType::Other => (phase + 0.5).sin() * 0.04,
     }
 }
 
@@ -519,6 +551,39 @@ mod tests {
             swing = swing.max(pose.angles[0].abs());
         }
         assert!(swing > 0.005, "the ear swings as the head nods");
+    }
+
+    #[test]
+    fn music_moves_parts_and_bounces_unless_reduced() {
+        let mut a = Animator::default();
+        let parts = [tail()];
+        let mut moved = 0.0f32;
+        let mut bounced = 0.0f32;
+        for n in 1..40 {
+            let pose = a.step(
+                &parts,
+                &Inputs {
+                    now: n as f32 * 0.033,
+                    dt: 0.033,
+                    music: 1.0,
+                    ..Inputs::default()
+                },
+            );
+            moved = moved.max(pose.angles[0].abs());
+            bounced = bounced.max(pose.bounce);
+        }
+        assert!(moved > 0.03 && bounced > 0.005);
+        let pose = a.step(
+            &parts,
+            &Inputs {
+                now: 2.0,
+                dt: 0.033,
+                music: 1.0,
+                reduced: true,
+                ..Inputs::default()
+            },
+        );
+        assert_eq!((pose.bounce, pose.angles[0]), (0.0, 0.0));
     }
 
     #[test]

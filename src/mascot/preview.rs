@@ -16,6 +16,8 @@ pub enum Test {
     DragRight,
     /// Say a line: a click line, or any line if there are none.
     Speak,
+    /// A few seconds of simulated music, to try music motion without audio.
+    Music,
 }
 
 /// How long a test press is held before it releases into a click.
@@ -24,6 +26,8 @@ const PRESS: f32 = 0.12;
 const DRAG: f32 = 0.9;
 /// Peak test drag speed, in logical pixels per second.
 const DRAG_SPEED: f32 = 700.0;
+/// How long the simulated music plays.
+const MUSIC: f32 = 4.0;
 
 pub struct MotionPreview {
     pub id: &'static str,
@@ -167,7 +171,8 @@ impl MotionPreview {
     }
 
     /// Advances the preview by `dt` seconds.
-    pub fn tick(&mut self, dt: f32, idle: bool, reduced: bool) {
+    /// `music` is live playback loudness (0 when off or silent).
+    pub fn tick(&mut self, dt: f32, idle: bool, reduced: bool, music: f32) {
         self.now += dt.clamp(0.0, 0.1);
         if let Some(s) = &mut self.speech
             && !s.advance(self.now)
@@ -179,6 +184,7 @@ impl MotionPreview {
             dt,
             idle: idle && !reduced,
             reduced,
+            music,
             ..Inputs::default()
         };
         if let Some((test, started)) = self.test {
@@ -196,7 +202,11 @@ impl MotionPreview {
                     inputs.dragging = true;
                     inputs.velocity = Vector::new(sign * speed, 0.0);
                 }
-                Test::DragLeft | Test::DragRight | Test::Speak => self.test = None,
+                Test::Music if t < MUSIC => {
+                    // Rises and falls like a short phrase.
+                    inputs.music = inputs.music.max((t / MUSIC * std::f32::consts::PI).sin());
+                }
+                Test::DragLeft | Test::DragRight | Test::Speak | Test::Music => self.test = None,
             }
         }
         self.pose = self.animator.step(&self.rig.motion_parts(), &inputs);
@@ -249,7 +259,7 @@ mod tests {
         p.test(Test::Speak);
         assert_eq!(p.speech(), Some("Hmm"), "falls back to other triggers' lines");
         for _ in 0..200 {
-            p.tick(0.05, true, false);
+            p.tick(0.05, true, false, 0.0);
         }
         assert!(p.speech().is_none(), "the line ends");
         p.mark_lines_saved();
@@ -264,20 +274,20 @@ mod tests {
         let mut dragged = false;
         let mut leaned = 0.0f32;
         for _ in 0..20 {
-            p.tick(0.033, true, false);
+            p.tick(0.033, true, false, 0.0);
             dragged |= p.pose().expression == Expression::Dragging;
             leaned = leaned.min(p.pose().lean);
         }
         assert!(dragged && leaned < -0.01, "a rightward drag leans the character left");
         // Let it settle, then click.
         for _ in 0..40 {
-            p.tick(0.033, true, false);
+            p.tick(0.033, true, false, 0.0);
         }
         p.test(Test::Click);
         let mut squashed = false;
         let mut pressed_face = false;
         for _ in 0..12 {
-            p.tick(0.033, true, false);
+            p.tick(0.033, true, false, 0.0);
             squashed |= p.pose().squash > 0.1;
             pressed_face |= p.pose().expression == Expression::Pressed;
         }

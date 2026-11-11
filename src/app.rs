@@ -134,6 +134,9 @@ pub struct App {
     /// on every update.
     motion_failed: Option<&'static str>,
     motion_ticked: Option<Instant>,
+    /// The playback meter, while music response is on and needed.
+    #[cfg(windows)]
+    music: Option<platform::music::Meter>,
     editing_pack: Option<&'static str>,
     rebinding: Option<&'static str>,
     alt_down: bool,
@@ -262,6 +265,8 @@ impl App {
             motion_preview: None,
             motion_failed: None,
             motion_ticked: None,
+            #[cfg(windows)]
+            music: None,
             pointer_draft: None,
             editing_pack: None,
             rebinding: None,
@@ -638,8 +643,9 @@ impl App {
                     .map_or(0.0, |t| now_i.duration_since(t).as_secs_f32());
                 self.motion_ticked = Some(now_i);
                 let o = self.motion_options();
+                let music = self.music_level();
                 if let Some(p) = &mut self.motion_preview {
-                    p.tick(dt, o.0, o.1);
+                    p.tick(dt, o.0, o.1, music);
                 }
             }
             Message::CharacterPicked(None)
@@ -960,6 +966,7 @@ impl App {
         tasks.push(self.reconcile());
         tasks.push(self.reconcile_mascot());
         self.sync_motion_preview();
+        self.sync_music();
         if self.quit_pending && self.character_jobs.is_empty() {
             self.quit(now);
         }
@@ -978,6 +985,61 @@ impl App {
     }
 
     #[cfg(windows)]
+    /// Playback loudness scaled by Music strength, 0 when off or silent.
+    fn music_level(&self) -> f32 {
+        #[cfg(windows)]
+        if let Some(m) = &self.music {
+            let strength = self.session.settings().float(character::MUSIC_STRENGTH) as f32;
+            return m.level() * strength;
+        }
+        0.0
+    }
+
+    /// What the Music section shows: off, starting, silent, playing or
+    /// unavailable, with the raw level for the meter.
+    fn music_status(&self) -> (&'static str, f32) {
+        #[cfg(windows)]
+        if let Some(m) = &self.music {
+            use platform::music::State;
+            return match m.state() {
+                State::Starting => ("Listening…", 0.0),
+                State::Silent => ("Silent", 0.0),
+                State::Playing => ("Hearing playback", m.level()),
+                State::Unavailable => ("Unavailable: no playback device to listen to", 0.0),
+            };
+        }
+        if self.session.settings().bool(character::MUSIC) {
+            ("Starts while the character or this page is showing", 0.0)
+        } else {
+            ("Off", 0.0)
+        }
+    }
+
+    /// Runs the playback meter only while music response is on and the
+    /// desktop character is showing, or the Character page is open to show
+    /// the meter; otherwise it's stopped and costs nothing. Also passes on
+    /// "music started" to the character.
+    fn sync_music(&mut self) {
+        #[cfg(windows)]
+        {
+            let on = self.session.settings().bool(character::MUSIC);
+            let showing = self.mascot.as_ref().is_some_and(|m| !m.is_hidden());
+            let wanted = on && (showing || self.motion_preview.is_some());
+            match (wanted, self.music.is_some()) {
+                (true, false) => self.music = Some(platform::music::Meter::start()),
+                (false, true) => self.music = None,
+                _ => {}
+            }
+            if self.music.as_ref().is_some_and(|m| m.take_started()) {
+                let options = self.mascot_options();
+                if let Some(m) = &mut self.mascot {
+                    m.say(crate::mascot::lines::Trigger::MusicStart, &options);
+                }
+                self.play_mascot_sound();
+            }
+        }
+    }
+
     /// Idle motion on, and reduced motion, for the Motion tab preview.
     fn motion_options(&self) -> (bool, bool) {
         let s = self.session.settings();
@@ -1040,6 +1102,7 @@ impl App {
                 s.float(character::IDLE_MIN) as f32 * 60.0,
                 s.float(character::IDLE_MAX) as f32 * 60.0,
             ),
+            music: self.music_level(),
         }
     }
 
@@ -2498,6 +2561,7 @@ impl App {
                 character_conflict: self.character_conflict.as_deref(),
                 art: self.art.as_ref(),
                 motion: self.motion_preview.as_ref(),
+                music: self.music_status(),
             });
         }
         #[cfg(windows)]
