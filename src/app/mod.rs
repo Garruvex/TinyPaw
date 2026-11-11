@@ -1512,6 +1512,18 @@ impl App {
         iced::widget::space().into()
     }
 
+    /// Character animation steps at the frame rate chosen in Settings.
+    fn animation_ticks(&self) -> Subscription<()> {
+        let rate = self
+            .session
+            .settings()
+            .choice(crate::features::mascot::FRAME_RATE);
+        match crate::features::mascot::frame_period(rate) {
+            Some(every) => iced::time::every(every).map(|_| ()),
+            None => Subscription::run(platform::refresh_ticks),
+        }
+    }
+
     fn subscription(&self) -> Subscription<Message> {
         let now = self.now();
         let mut subs = vec![
@@ -1570,11 +1582,17 @@ impl App {
             .as_ref()
             .and_then(|m| m.poll_interval(&self.mascot_options()))
         {
-            subs.push(iced::time::every(every).map(|_| Message::Mascot(crate::mascot::Msg::Poll)));
+            // Moving: at the chosen frame rate. Still: a slow timer.
+            subs.push(if every < Duration::from_millis(100) {
+                self.animation_ticks()
+                    .map(|_| Message::Mascot(crate::mascot::Msg::Poll))
+            } else {
+                iced::time::every(every).map(|_| Message::Mascot(crate::mascot::Msg::Poll))
+            });
         }
         // The Motion tab's preview animates while it's open.
         if self.motion_preview.is_some() {
-            subs.push(iced::time::every(Duration::from_millis(33)).map(|_| Message::MotionTick));
+            subs.push(self.animation_ticks().map(|_| Message::MotionTick));
         }
         // Frames only while something animates; otherwise the process sleeps.
         // Paced by the display refresh: `window::frames()` fires for every

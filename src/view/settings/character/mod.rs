@@ -16,6 +16,13 @@ use behavior::*;
 use iced::widget::{column, row};
 use reference::*;
 
+/// `mascot::FRAME_RATE` choices with their labels.
+const FRAME_RATES: [(&str, &str); 3] = [
+    ("30", "30 fps"),
+    ("60", "60 fps"),
+    ("display", "Match display"),
+];
+
 pub(super) fn character_page<'a>(
     v: &SettingsView<'a>,
 ) -> (Element<'a, Message>, Option<Element<'a, Message>>) {
@@ -403,6 +410,19 @@ fn character_body<'a>(
                 "Motion settings",
                 Message::Ui(UiMsg::Nav(Page::Display)),
             ),
+            row![
+                text("Frame rate").size(13).width(Length::Fill),
+                pick_list(FRAME_RATES.map(|(v, l)| Choice(v, l)), {
+                    Some(Choice::of(s.choice(mascot::FRAME_RATE), &FRAME_RATES))
+                }, |c| Message::Set(mascot::FRAME_RATE, Value::Choice(c.0)))
+                .text_size(13)
+                .padding([6, 10])
+                .style(theme::select),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center)
+            .into(),
+            hint("Higher is smoother but uses more CPU while the character moves."),
         ]))
         .push(
             button(text("Reset position").size(13))

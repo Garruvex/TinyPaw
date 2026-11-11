@@ -32,6 +32,8 @@ pub const BEAT_TIMING: &str = "mascot.beat_timing";
 /// Idle lines come at a random time within this many minutes.
 pub const IDLE_MIN: &str = "mascot.idle_lines_min";
 pub const IDLE_MAX: &str = "mascot.idle_lines_max";
+/// Animation frame rate: `30`, `60`, or `display` (one frame per refresh).
+pub const FRAME_RATE: &str = "mascot.frame_rate";
 /// The selected character's ID: bundled `yohta` or an installed pack.
 pub const CHARACTER: &str = "mascot.character";
 /// Ground anchor (bottom centre of the character) in physical desktop pixels.
@@ -52,6 +54,16 @@ pub const MAX_HEIGHT: f64 = 292.0;
 /// Saved position meaning "never placed": no display reaches it, so the
 /// character starts at the default spot on the primary display.
 pub const UNPLACED: f64 = -1.0e7;
+
+/// The animation timer period for a `FRAME_RATE` choice, or `None` to step
+/// once per display refresh.
+pub fn frame_period(choice: &str) -> Option<std::time::Duration> {
+    match choice {
+        "30" => Some(std::time::Duration::from_micros(33_333)),
+        "60" => Some(std::time::Duration::from_micros(16_667)),
+        _ => None,
+    }
+}
 
 pub fn register(r: &mut Registrar) {
     r.setting(SettingDef {
@@ -201,6 +213,14 @@ pub fn register(r: &mut Registrar) {
         order: 14,
         default: Value::Choice("all"),
         constraint: Constraint::None,
+    });
+    r.setting(SettingDef {
+        id: FRAME_RATE,
+        label: "Animation frame rate",
+        group: "Character",
+        order: 15,
+        default: Value::Choice("display"),
+        constraint: Constraint::Choices(&["30", "60", "display"]),
     });
     for (id, order) in [(X, 90), (Y, 91)] {
         r.setting(SettingDef {

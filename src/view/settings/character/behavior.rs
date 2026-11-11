@@ -836,10 +836,10 @@ pub(super) fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
 
 /// A setting value with its display label, for pick lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Choice(&'static str, &'static str);
+pub(super) struct Choice(pub(super) &'static str, pub(super) &'static str);
 
 impl Choice {
-    fn of(value: &'static str, all: &[(&'static str, &'static str)]) -> Self {
+    pub(super) fn of(value: &'static str, all: &[(&'static str, &'static str)]) -> Self {
         let label = all
             .iter()
             .find(|(v, _)| *v == value)

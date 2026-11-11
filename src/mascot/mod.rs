@@ -41,7 +41,7 @@ use iced::{
 };
 use rig::Rig;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 pub fn run() -> iced::Result {
     iced::application(Preview::new, Preview::update, Preview::view)
@@ -136,13 +136,16 @@ impl Preview {
                 return iced::exit();
             }
             Message::Tick => {
-                self.now = self.started.elapsed().as_secs_f32();
+                let now = self.started.elapsed().as_secs_f32();
+                let dt = (now - self.now).clamp(0.0, 0.1);
+                self.now = now;
                 let target = if self.track {
                     self.target
                 } else {
                     Vector::ZERO
                 };
-                self.gaze = self.gaze + (target - self.gaze) * 0.24;
+                // The same easing at any frame rate: 24% of the way per 33 ms.
+                self.gaze = self.gaze + (target - self.gaze) * (1.0 - 0.76f32.powf(dt / 0.033));
                 if self.snapshot.is_some() && self.now > 0.6 {
                     if self.snapshot_scene == "blink" {
                         self.now = 3.55;
@@ -184,7 +187,7 @@ impl Preview {
         // No frame-rate wakeups when all motion is disabled and the eyes settle.
         let delta = self.target - self.gaze;
         if self.idle || self.beat || (self.track && delta.x.hypot(delta.y) > 0.01) {
-            iced::time::every(Duration::from_millis(33)).map(|_| Message::Tick)
+            Subscription::run(crate::platform::refresh_ticks).map(|_| Message::Tick)
         } else {
             Subscription::none()
         }

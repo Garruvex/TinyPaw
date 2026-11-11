@@ -707,7 +707,9 @@ impl Desktop {
         self.gaze = if o.reduced {
             self.target
         } else {
-            self.gaze + (self.target - self.gaze) * 0.3
+            // The same easing at any frame rate: 30% of the way per 33 ms.
+            let dt = (self.now - self.stepped).clamp(0.0, 0.1);
+            self.gaze + (self.target - self.gaze) * (1.0 - 0.7f32.powf(dt / 0.033))
         };
         self.step_motion(o, k);
         if picked_up {
@@ -1123,7 +1125,8 @@ impl Desktop {
         )
     }
 
-    /// How often to poll, or `None` when nothing needs watching.
+    /// How often to poll, or `None` when nothing needs watching. Anything
+    /// under 100 ms means motion: the app then polls once per display frame.
     pub fn poll_interval(&self, o: &Options) -> Option<Duration> {
         if !self.shown {
             return None;
