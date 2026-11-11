@@ -129,12 +129,47 @@ pub const BUILTIN_SOUNDS: [(&str, &str); 4] = [
 /// Most distinct WAV files one character's reactions may use.
 pub const MAX_FILES: usize = 4;
 
-/// One event's entry in a `reactions` object: its sound setup, plus keys
-/// this version doesn't edit (such as `visual`), kept as they were.
+/// What an event does to the picture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visual {
+    None,
+    /// Briefly shortens and widens the picture, then restores it.
+    Compress,
+}
+
+impl Visual {
+    pub fn name(self) -> &'static str {
+        match self {
+            Visual::None => "none",
+            Visual::Compress => "compress",
+        }
+    }
+}
+
+impl std::fmt::Display for Visual {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Visual::None => "None",
+            Visual::Compress => "Compress",
+        })
+    }
+}
+
+/// One event's entry in a `reactions` object: its sound and visual, plus
+/// keys this version doesn't edit, kept as they were.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Entry {
     pub sound: TriggerSound,
+    /// `None` when this layer doesn't set it.
+    pub visual: Option<Visual>,
     pub other: Map<String, Json>,
+}
+
+impl Entry {
+    /// A new character's explicit "nothing": no visual, no sound.
+    pub fn none() -> Self {
+        Self { visual: Some(Visual::None), ..Self::default() }
+    }
 }
 
 /// Character-wide sound settings, `reactions.sound`.
@@ -246,6 +281,9 @@ impl Config {
         for e in Event::ALL {
             if let Some(entry) = &self.events[e.index()] {
                 let mut v = entry.other.clone();
+                if let Some(visual) = entry.visual {
+                    v.insert("visual".into(), json!(visual.name()));
+                }
                 let t = &entry.sound;
                 v.insert("enabled".into(), json!(t.enabled));
                 match &t.sound {
@@ -329,11 +367,24 @@ fn parse_entry(v: &Json, user: bool) -> Result<Entry, String> {
         Some(n) if n <= u64::from(MAX_COOLDOWN_MS) => n as u32,
         _ => return Err(format!("a reaction's cooldown_ms must be 0–{MAX_COOLDOWN_MS}")),
     };
+    let visual = match &v["visual"] {
+        Json::String(name) => Some(match name.as_str() {
+            "none" => Visual::None,
+            "compress" => Visual::Compress,
+            other => return Err(format!("unknown reaction visual `{other}`")),
+        }),
+        // Absent here; an artwork visual is kept as written.
+        _ => None,
+    };
     let mut other = map.clone();
     for key in ["enabled", "sound", "gain", "cooldown_ms"] {
         other.remove(key);
     }
+    if visual.is_some() {
+        other.remove("visual");
+    }
     Ok(Entry {
+        visual,
         sound: TriggerSound {
             // Enabled without a sound plays nothing; it reads as off.
             enabled: enabled && sound.is_some(),
@@ -362,6 +413,28 @@ fn parse_sound(v: &Json, user: bool) -> Result<Sound, String> {
         },
         _ => Err("a reaction sound names exactly one of builtin or file".into()),
     }
+}
+
+/// What `e` does to the picture: the user's choice, else the pack's. With
+/// neither, a click keeps the legacy built-in squash (now a Compress after
+/// release, so it never moves a held point) and other events do nothing.
+pub fn visual(pack: &Config, user: &Config, e: Event) -> Visual {
+    let set = |c: &Config| c.entry(e).and_then(|x| x.visual);
+    set(user).or(set(pack)).unwrap_or(if e == Event::Click {
+        Visual::Compress
+    } else {
+        Visual::None
+    })
+}
+
+/// The explicit defaults a new character is written with: None for each
+/// touch event, so nothing depends on a missing field.
+pub fn new_character() -> Config {
+    let mut c = Config::default();
+    for e in [Event::Click, Event::Pickup, Event::Drop] {
+        c.set_entry(e, Some(Entry::none()));
+    }
+    c
 }
 
 /// What a character actually does: the pack's layer under the user's.
@@ -622,7 +695,7 @@ mod tests {
             "idle": { "enabled": false }
         });
         let c = Config::parse(&v, true).unwrap();
-        assert_eq!(c.entry(Event::Click).unwrap().other["visual"], json!("compress"));
+        assert_eq!(c.entry(Event::Click).unwrap().visual, Some(Visual::Compress));
         assert!(c.entry(Event::Drop).unwrap().sound.enabled, "a sound with no flag is on");
         assert_eq!(c.files().len(), 1);
         let again = Config::parse(&c.to_json(), true).unwrap();
@@ -665,6 +738,20 @@ mod tests {
         let s = effective(&pack, &user);
         assert!(!s.get(Event::Click).enabled, "the user's entry replaces the pack's");
         assert_eq!(s.get(Event::Idle).sound, Some(Sound::Builtin("mac-quack")));
+    }
+
+    #[test]
+    fn visuals_default_to_legacy_only_when_unset() {
+        let empty = Config::default();
+        assert_eq!(visual(&empty, &empty, Event::Click), Visual::Compress, "legacy squash");
+        assert_eq!(visual(&empty, &empty, Event::Drop), Visual::None);
+        let fresh = new_character();
+        assert_eq!(visual(&fresh, &empty, Event::Click), Visual::None);
+        let again = Config::parse(&fresh.to_json(), false).unwrap();
+        assert_eq!(again, fresh, "explicit defaults round-trip");
+        let user = Config::parse(&json!({ "click": { "visual": "compress" } }), true).unwrap();
+        assert_eq!(visual(&fresh, &user, Event::Click), Visual::Compress);
+        assert!(Config::parse(&json!({ "click": { "visual": "wobble" } }), true).is_err());
     }
 
     #[test]

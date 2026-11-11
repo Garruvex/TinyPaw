@@ -137,6 +137,12 @@ impl Character {
         }
     }
 
+    /// What `e` does to the picture, pack under user.
+    pub fn reaction_visual(&self, e: super::reactions::Event) -> super::reactions::Visual {
+        let user = load_overrides(self.id).reactions.unwrap_or_default();
+        super::reactions::visual(&self.pack_reactions(), &user, e)
+    }
+
     /// What the character's reactions actually do: pack under user.
     pub fn reaction_sounds(&self) -> super::reactions::Sounds {
         let user = load_overrides(self.id).reactions.unwrap_or_default();
@@ -1312,7 +1318,7 @@ fn install_into_guarded(
         rest: super::rest::RestMode::Auto,
         lines: Lines::default(),
         bop: None,
-        reactions: Default::default(),
+        reactions: super::reactions::new_character(),
     };
     let art = draft.art.clone();
     stage_and_install_guarded(
@@ -2697,7 +2703,7 @@ mod tests {
         };
         assert!(root.join("booper/sounds/boop.wav").exists(), "declared sounds are copied");
         let pack = read_manifest(&root.join("booper")).unwrap().reactions;
-        assert_eq!(pack.entry(Event::Click).unwrap().other["visual"], "compress", "unknown keys survive");
+        assert_eq!(pack.entry(Event::Click).unwrap().visual, Some(super::super::reactions::Visual::Compress));
         // The user's layer: an imported WAV on Pick up, Drop turned off.
         let user_dir = dir.join("user");
         write_wav(&user_dir.join("reaction-7.wav"));

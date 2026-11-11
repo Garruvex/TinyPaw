@@ -443,6 +443,7 @@ fn behavior_section<'a>(
         section(vec![
             h2("When touched"),
             event_row(m, Trigger::Click),
+            visual_row(m, Event::Click),
             sound_row(m, Event::Click, muted),
             event_row(m, Trigger::Pickup),
             sound_row(m, Event::Pickup, muted),
@@ -538,6 +539,24 @@ fn character_sounds<'a>(m: &'a crate::mascot::preview::MotionPreview, muted: boo
         "One sound plays at a time; a new reaction replaces the last, and idle never interrupts. A reaction sound plays instead of that event's line sound."
     }));
     section(items)
+}
+
+/// What an event does to the picture. Compress works with one PNG.
+fn visual_row<'a>(m: &'a crate::mascot::preview::MotionPreview, e: Event) -> Element<'a, Message> {
+    use crate::mascot::reactions::Visual;
+    row![
+        text("Visual").size(12).color(theme::MUTED).width(48),
+        pick_list([Visual::None, Visual::Compress], Some(m.visual(e)), move |v| {
+            Message::Ui(UiMsg::ReactionVisual(e, v))
+        })
+        .text_size(13)
+        .padding([5, 8])
+        .style(theme::select),
+        hint("Compress briefly shortens and widens the picture after a click, then restores it."),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center)
+    .into()
 }
 
 /// An event's sound: picker, Import WAV…, Clear, Test, and its cooldown.
@@ -913,7 +932,7 @@ fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         .spacing(10)
         .align_y(Alignment::Center)
         .into(),
-        hint("Nod is relaxed. Groove dips on the beat and leans side to side. Rubber hose hops every beat, squashing and stretching like an old cartoon. Saved with the character's Save, and carried when you export it."),
+        hint("Nod is relaxed. Groove dips on the beat and leans side to side. Rubber hose hops every beat, squashing and stretching like an old cartoon. Compress briefly squashes the whole picture on each beat, so it suits a single PNG. Saved with the character's Save, and carried when you export it."),
         check("Follow beat (trial)", follow, mascot::BEAT),
         hint("Nods land on the beat instead of a steady bob. It listens to what's playing (TinyPaw's own sounds are held off while they play) and keeps nothing."),
     ]);
@@ -1014,7 +1033,7 @@ fn motion_preview<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'
             test("Drag ←", Test::DragLeft),
             test("Drag →", Test::DragRight),
             test("Speak", Test::Speak),
-            test("Music", Test::Music),
+            test("Try beat", Test::Music),
         ]
         .spacing(6),
         hint("Idle motion follows Settings → Character. Reduced motion stops it, as on the desktop."),

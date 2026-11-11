@@ -914,7 +914,8 @@ impl Editor {
             author: None,
             lines: super::lines::Lines::default(),
             bop: None,
-            reactions: Default::default(),
+            // A new character's touch events start at None, written out.
+            reactions: super::reactions::new_character(),
             others: Vec::new(),
             pose: "sit".into(),
             mode: Mode::Arrange,

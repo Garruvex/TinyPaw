@@ -1,6 +1,8 @@
 # Character behaviors plan
 
-Proposed, 11 November 2026. **Planning only; not implemented.** Scope decisions for B1–B8 were agreed the same day.
+Proposed, 11 November 2026. Scope decisions for B1–B8 were agreed the same day.
+
+**Status:** B1 is implemented but not yet checked natively. Each event entry takes a `visual` of `none` or `compress`. With no visual set, a click keeps the legacy squash, now played as a Compress after release so it never moves a held point; other events do nothing. New one-image characters and new from-parts characters are written with explicit `none` for Click, Pick up and Drop. Behavior → Click has a Visual picker. Compress is also a beat style (`Bop::Compress`, nothing but one bounded squash per beat), independent of the Click switch. Overlapping Compress pulses restart one envelope instead of stacking, and the preview's Music test is now labelled Try beat. B2, B3, B5 and B6 are not implemented.
 
 These features were split out of the [character creator UI and interaction plan](character-creator-ui-flow-plan.md) during review. That plan fixes and reorganises what exists. This one adds new behavior, and several items contradict the current scope, so each needed a decision before work starts. The feature descriptions below are carried over unchanged in intent.
 

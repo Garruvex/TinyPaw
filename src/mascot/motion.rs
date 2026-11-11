@@ -165,6 +165,9 @@ pub enum Bop {
     /// Old-cartoon bounce: a hop every beat, squashing on landing and
     /// stretching at the top, rocking side to side with parts flopping late.
     RubberHose,
+    /// The whole picture briefly shortens and widens on each beat, then
+    /// restores; works with one PNG. Nothing else moves.
+    Compress,
 }
 
 impl std::fmt::Display for Bop {
@@ -173,12 +176,13 @@ impl std::fmt::Display for Bop {
             Bop::Nod => "Nod",
             Bop::Groove => "Groove",
             Bop::RubberHose => "Rubber hose",
+            Bop::Compress => "Compress",
         })
     }
 }
 
 impl Bop {
-    pub const ALL: [Bop; 3] = [Bop::Nod, Bop::Groove, Bop::RubberHose];
+    pub const ALL: [Bop; 4] = [Bop::Nod, Bop::Groove, Bop::RubberHose, Bop::Compress];
 
     pub fn parse(text: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|b| b.name() == text)
@@ -189,6 +193,7 @@ impl Bop {
             Bop::Nod => "nod",
             Bop::Groove => "groove",
             Bop::RubberHose => "rubber_hose",
+            Bop::Compress => "compress",
         }
     }
 }
@@ -302,6 +307,9 @@ pub struct Animator {
     velocity: Vector,
     /// The click reaction's face shows until this time.
     react_until: f32,
+    /// When the last Compress reaction started. A new one restarts this
+    /// one bounded envelope rather than stacking scale.
+    compressed: Option<f32>,
     /// Beats so far and the last beat phase, so two-beat bops know which
     /// side they're on.
     beats: u32,
@@ -319,11 +327,18 @@ impl Animator {
         self.react_until = now + CLICK_FACE;
     }
 
+    /// Starts a Compress reaction: the picture shortens and widens, then
+    /// restores. Overlapping ones restart the envelope.
+    pub fn compress(&mut self, now: f32) {
+        self.compressed = Some(now);
+    }
+
     /// Whether anything is still moving toward rest, so the host keeps
     /// stepping even with idle motion off.
     pub fn settling(&self) -> bool {
         self.lean.abs() > 0.002
             || self.squash > 0.01
+            || self.compressed.is_some()
             || self.velocity.x.hypot(self.velocity.y) > 1.0
             || self
                 .springs
@@ -354,8 +369,9 @@ impl Animator {
         } else {
             let lean = (-self.velocity.x * 0.0004).clamp(-0.15, 0.15);
             self.lean += (lean - self.lean) * ease(10.0);
-            let squash = if i.pressed { 1.0 } else { 0.0 };
-            self.squash += (squash - self.squash) * ease(25.0);
+            // Pressing only changes the face: a squash before the drag
+            // threshold would pull the grabbed point away from the cursor.
+            self.squash += (0.0 - self.squash) * ease(25.0);
         }
 
         // Where the bop is: this beat's phase, and which of two beats.
@@ -434,10 +450,23 @@ impl Animator {
                 squash: b.squash * level,
             }
         };
+        // A Compress reaction: rises fast, eases back, bounded.
+        let click = match self.compressed {
+            Some(at) if !i.reduced && !i.dragging && i.now >= at && i.now - at < COMPRESS_TIME => {
+                let t = (i.now - at) / COMPRESS_TIME;
+                hit(t, 2) * COMPRESS
+            }
+            Some(_) => {
+                self.compressed = None;
+                0.0
+            }
+            None => 0.0,
+        };
         Pose {
             angles,
             lean: self.lean + body.lean,
-            squash: self.squash + body.squash,
+            // A click's Compress and a beat's share one envelope height.
+            squash: self.squash + if click > 0.0 { body.squash.max(click) } else { body.squash },
             bounce: body.bounce,
             expression,
             gaze: Vector::ZERO,
@@ -542,6 +571,7 @@ fn bop_angle(bop: Bop, kind: PartType, b: Beat) -> f32 {
             PartType::Wing => beat.sin() * 0.2,
             PartType::Hair | PartType::Other => -(beat - 1.2).cos() * 0.08,
         },
+        Bop::Compress => 0.0,
     }
 }
 
@@ -577,8 +607,20 @@ fn bop_body(bop: Bop, b: Beat) -> Body {
                 squash: hit(b.p, 6) * 1.1 - air * 0.6,
             }
         }
+        // One short squash per beat, back to rest before the next; silence
+        // leaves the picture resting.
+        Bop::Compress => Body {
+            squash: hit(b.p, 4) * COMPRESS,
+            ..Body::default()
+        },
     }
 }
+
+/// How far a Compress reaction squashes at its peak (the same visible
+/// effect for a click and a beat).
+const COMPRESS: f32 = 0.9;
+/// A click's Compress envelope length, in seconds.
+const COMPRESS_TIME: f32 = 0.28;
 
 /// Places the character for `pose`: the music bounce lifts it, and lean and
 /// squash turn and scale it around its feet so they stay on the ground.
@@ -707,6 +749,47 @@ mod tests {
         assert!(pose.angles.iter().all(|a| *a == 0.0));
         assert_eq!((pose.lean, pose.squash), (0.0, 0.0));
         assert_eq!(pose.expression, Expression::Dragging);
+    }
+
+    #[test]
+    fn compress_is_bounded_restarts_and_ignores_presses() {
+        let mut a = Animator::default();
+        let step = |a: &mut Animator, now: f32, pressed: bool| {
+            a.step(&[tail()], &Inputs { now, dt: 0.016, pressed, ..Inputs::default() })
+        };
+        // A press alone never squashes.
+        let mut peak = 0.0f32;
+        for n in 0..30 {
+            peak = peak.max(step(&mut a, n as f32 * 0.016, true).squash);
+        }
+        assert!(peak < 1e-3, "{peak}");
+        // A click's Compress rises and restores.
+        a.compress(1.0);
+        let mut peak = 0.0f32;
+        let mut end = 0.0f32;
+        for n in 0..40 {
+            let s = step(&mut a, 1.0 + n as f32 * 0.016, false).squash;
+            peak = peak.max(s);
+            end = s;
+        }
+        assert!(peak > 0.4 && peak <= COMPRESS + 1e-3, "{peak}");
+        assert!(end.abs() < 1e-3);
+        // Rapid clicks restart one envelope instead of stacking.
+        let mut a = Animator::default();
+        let mut most = 0.0f32;
+        for n in 0..20 {
+            let now = 2.0 + n as f32 * 0.03;
+            a.compress(now);
+            most = most.max(step(&mut a, now + 0.02, false).squash);
+        }
+        assert!(most <= COMPRESS + 1e-3, "{most}");
+    }
+
+    #[test]
+    fn the_compress_beat_style_squashes_once_per_beat_and_nothing_else() {
+        let (bounce, lean, squash, tail) = bop_range(Bop::Compress, false);
+        assert_eq!((bounce, lean, tail), (0.0, (0.0, 0.0), 0.0));
+        assert!(squash.1 > 0.5 && squash.0 >= 0.0, "{squash:?}");
     }
 
     #[test]

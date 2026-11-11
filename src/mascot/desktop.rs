@@ -251,6 +251,8 @@ pub struct Desktop {
     sound: Option<SoundRef>,
     /// Gesture events since the app last took them, each exactly once.
     events: Vec<Event>,
+    /// A click plays Compress.
+    click_compress: bool,
     /// When motion last stepped, and where the feet were then.
     stepped: f32,
     last_anchor: (f32, f32),
@@ -324,6 +326,7 @@ impl Desktop {
             next_idle: f32::INFINITY,
             sound: None,
             events: Vec::new(),
+            click_compress: true,
             stepped: 0.0,
             last_anchor: (anchor.0 as f32, anchor.1 as f32),
             size,
@@ -395,6 +398,12 @@ impl Desktop {
     /// The line sound to play now, once.
     pub fn take_sound(&mut self) -> Option<SoundRef> {
         self.sound.take()
+    }
+
+    /// Whether a click plays Compress (after release, so it never moves a
+    /// held point).
+    pub fn set_click_compress(&mut self, on: bool) {
+        self.click_compress = on;
     }
 
     /// Gesture events (Click, Pickup, Drop) since the last call.
@@ -661,6 +670,9 @@ impl Desktop {
         }
         self.menu = None;
         self.animator.clicked(self.now);
+        if self.click_compress {
+            self.animator.compress(self.now);
+        }
         self.events.push(Event::Click);
         self.say(Trigger::Click, o);
         None

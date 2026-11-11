@@ -1416,22 +1416,24 @@ impl App {
                 let rig = self.character_rig(selected);
                 let lines = self.character_lines(selected);
                 self.stop_character_voice();
-                self.reaction_sounds = self
-                    .characters
-                    .iter()
-                    .find(|c| c.id == selected)
-                    .map(|c| c.reaction_sounds())
-                    .unwrap_or_default();
+                let c = self.characters.iter().find(|c| c.id == selected);
+                self.reaction_sounds = c.map(|c| c.reaction_sounds()).unwrap_or_default();
+                let compress = c.is_none_or(|c| {
+                    c.reaction_visual(crate::mascot::reactions::Event::Click)
+                        == crate::mascot::reactions::Visual::Compress
+                });
                 match &mut self.mascot {
                     Some(m) => {
                         m.set_rig(selected, rig);
                         m.set_lines(lines, &options);
+                        m.set_click_compress(compress);
                     }
                     None => {
                         let (mut m, open) = crate::mascot::desktop::Desktop::open(
                             selected, rig, size, anchor, rows, hidden,
                         );
                         m.set_lines(lines, &options);
+                        m.set_click_compress(compress);
                         self.mascot = Some(m);
                         return open.map(Message::WindowOpened);
                     }
@@ -1608,6 +1610,8 @@ impl App {
         p.mark_all_saved();
         characters::prune_line_sounds(id, &p.lines, Some(&p.reactions));
         let saved_sounds = p.sounds();
+        let compress = p.visual(crate::mascot::reactions::Event::Click)
+            == crate::mascot::reactions::Visual::Compress;
         self.notice = None;
         #[cfg(windows)]
         if self.mascot.as_ref().is_some_and(|m| m.character() == id) {
@@ -1618,6 +1622,7 @@ impl App {
             if let Some(m) = &mut self.mascot {
                 m.set_rig(id, rig);
                 m.set_lines(lines, &options);
+                m.set_click_compress(compress);
             }
         }
         Ok(())
@@ -2319,6 +2324,14 @@ impl App {
             UiMsg::ReactionIdleInterval(lo, hi) => {
                 if let Some(p) = &mut self.motion_preview {
                     p.sound_settings_mut().idle_interval = (lo.min(hi), lo.max(hi));
+                }
+            }
+            UiMsg::ReactionVisual(e, v) => {
+                if let Some(p) = &mut self.motion_preview {
+                    p.set_visual(e, v);
+                    if e == crate::mascot::reactions::Event::Click {
+                        p.test(crate::mascot::preview::Test::Click);
+                    }
                 }
             }
             UiMsg::ReactionsReset => {

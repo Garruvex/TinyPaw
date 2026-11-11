@@ -218,6 +218,15 @@ impl MotionPreview {
         files.len()
     }
 
+    /// What `e` does to the picture in the draft.
+    pub fn visual(&self, e: Event) -> super::reactions::Visual {
+        super::reactions::visual(&self.reactions_pack, &self.reactions, e)
+    }
+
+    pub fn set_visual(&mut self, e: Event, v: super::reactions::Visual) {
+        self.entry_mut(e).visual = Some(v);
+    }
+
     /// Back to the pack's reaction sounds (unsaved until Save).
     pub fn reset_reactions(&mut self) {
         self.reactions = Config::default();
@@ -368,6 +377,9 @@ impl MotionPreview {
                 Test::Click if t < PRESS => inputs.pressed = true,
                 Test::Click => {
                     self.animator.clicked(self.now);
+                    if self.visual(Event::Click) == super::reactions::Visual::Compress {
+                        self.animator.compress(self.now);
+                    }
                     self.test = None;
                 }
                 Test::DragLeft | Test::DragRight if t < DRAG => {

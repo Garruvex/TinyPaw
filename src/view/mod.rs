@@ -127,6 +127,7 @@ pub enum UiMsg {
     ReactionIdleOn(bool),
     ReactionIdleInterval(f32, f32),
     ReactionsReset,
+    ReactionVisual(crate::mascot::reactions::Event, crate::mascot::reactions::Visual),
     ArtEyeStyle(crate::mascot::editor::EyeStyle),
     ArtField(usize, String),
     ArtCanvas(usize, String),
