@@ -205,33 +205,27 @@ impl App {
                     }
                 }
             }
-            Message::PackPicked(path) => {
-                if let Some(path) = path {
-                    let taken: Vec<_> = self.packs.iter().map(|p| p.id).collect();
-                    match packs::import_folder(&path, &taken) {
-                        Ok(pack) => {
-                            let id = pack.id;
-                            self.packs.push(pack);
-                            out.sets.push((point::PACK, Value::Choice(id)));
-                            self.notice = None;
-                        }
-                        Err(e) => self.notice = Some(e),
+            Message::PackPicked(Some(path)) => {
+                let taken: Vec<_> = self.packs.iter().map(|p| p.id).collect();
+                match packs::import_folder(&path, &taken) {
+                    Ok(pack) => {
+                        let id = pack.id;
+                        self.packs.push(pack);
+                        out.sets.push((point::PACK, Value::Choice(id)));
+                        self.notice = None;
                     }
+                    Err(e) => self.notice = Some(e),
                 }
             }
-            Message::ForearmPicked(path) => {
-                if let Some(path) = path {
-                    match packs::forearm_from_file(&path) {
-                        Ok(arm) => {
-                            if let Some(draft) = &mut self.pointer_draft {
-                                draft.forearm = Some(arm);
-                            }
-                            self.notice = None;
-                        }
-                        Err(e) => self.notice = Some(format!("Could not load the forearm: {e}")),
+            Message::ForearmPicked(Some(path)) => match packs::forearm_from_file(&path) {
+                Ok(arm) => {
+                    if let Some(draft) = &mut self.pointer_draft {
+                        draft.forearm = Some(arm);
                     }
+                    self.notice = None;
                 }
-            }
+                Err(e) => self.notice = Some(format!("Could not load the forearm: {e}")),
+            },
             Message::CharacterPicked(Some(path)) => {
                 self.character_draft = None;
                 self.prepared_character = None;
@@ -496,31 +490,23 @@ impl App {
             Message::CharacterPicked(None)
             | Message::CharacterFolderPicked(None)
             | Message::CharacterExportPicked(None) => {}
-            Message::PointerPicked(path) => {
-                if let Some(path) = path {
-                    match packs::draft_from_file(&path) {
-                        Ok(draft) => {
-                            self.pointer_draft = Some(draft);
-                            self.editing_pack = None;
-                            self.page = Page::Pointer;
-                            self.notice = None;
-                        }
-                        Err(e) => self.notice = Some(format!("Could not use that image: {e}")),
-                    }
+            Message::PointerPicked(Some(path)) => match packs::draft_from_file(&path) {
+                Ok(draft) => {
+                    self.pointer_draft = Some(draft);
+                    self.editing_pack = None;
+                    self.page = Page::Pointer;
+                    self.notice = None;
                 }
-            }
-            Message::WavPicked(path) => {
-                if let Some(path) = path {
-                    match audio::import_wav(&path) {
-                        Ok(clip) => {
-                            self.audio.set_custom(clip);
-                            self.notice = None;
-                            out.sets.push((sound::TAP, Value::Choice("custom")));
-                        }
-                        Err(e) => self.notice = Some(format!("Could not use that WAV: {e}")),
-                    }
+                Err(e) => self.notice = Some(format!("Could not use that image: {e}")),
+            },
+            Message::WavPicked(Some(path)) => match audio::import_wav(&path) {
+                Ok(clip) => {
+                    self.audio.set_custom(clip);
+                    self.notice = None;
+                    out.sets.push((sound::TAP, Value::Choice("custom")));
                 }
-            }
+                Err(e) => self.notice = Some(format!("Could not use that WAV: {e}")),
+            },
             _ => {}
         }
     }
