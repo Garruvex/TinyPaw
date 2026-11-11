@@ -131,6 +131,14 @@ pub struct App {
     art: Option<crate::mascot::editor::Editor>,
     /// The Motion tab's live preview, while Settings shows Character.
     motion_preview: Option<crate::mascot::preview::MotionPreview>,
+    /// Somewhere the user asked to go with unsaved character changes,
+    /// waiting on Save, Discard or Stay.
+    leaving: Option<view::settings::Leave>,
+    /// The character whose artwork Save is writing, so its behavior
+    /// overrides follow once the pack is committed.
+    art_saving: Option<&'static str>,
+    /// Where to go once that save finishes, from Save in the leave prompt.
+    after_save: Option<view::settings::Leave>,
     /// A character whose preview failed to load, so it isn't retried
     /// on every update.
     motion_failed: Option<&'static str>,
@@ -271,6 +279,9 @@ impl App {
             quit_pending: false,
             art: None,
             motion_preview: None,
+            leaving: None,
+            art_saving: None,
+            after_save: None,
             motion_failed: None,
             motion_ticked: None,
             #[cfg(windows)]
@@ -585,12 +596,35 @@ impl App {
                             self.prepared_character = None;
                             self.character_draft = None;
                             self.art = None;
+                            // One Save, two writes: the pack is committed, so
+                            // now the behavior draft. A failure keeps it open.
+                            if self.art_saving.take() == Some(c.id) {
+                                match self.save_behavior() {
+                                    Ok(()) => {
+                                        // Rebuilt from the saved pack and overrides.
+                                        if self.motion_preview.as_ref().is_some_and(|p| p.id == c.id) {
+                                            self.motion_preview = None;
+                                        }
+                                        if let Some(to) = self.after_save.take() {
+                                            tasks.push(self.finish_leave(to, &mut out));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        self.after_save = None;
+                                        self.notice = Some(format!(
+                                            "The artwork is saved, but the behavior changes could not be: {e}. They are still open; try Save again."
+                                        ));
+                                    }
+                                }
+                            }
                             out.sets.push((character::CHARACTER, Value::Choice(c.id)));
                             if show {
                                 out.sets.push((character::ENABLED, Value::Bool(true)));
                             }
                         }
                         Err(e) => {
+                            self.art_saving = None;
+                            self.after_save = None;
                             self.notice = Some(format!("Could not import that character: {e}"))
                         }
                     }
@@ -862,13 +896,12 @@ impl App {
                     out.effects
                         .extend(self.session.handle(Event::MasterOff, now));
                 } else if Some(id) == self.settings_window {
-                    self.settings_window = None;
-                    self.cancel_character_job();
-                    self.prepared_character = None;
-                    self.character_conflict = None;
-                    self.settings_framed = false;
-                    self.notice = None;
-                    tasks.push(window::close(id));
+                    if self.character_unsaved() {
+                        self.page = Page::Character;
+                        self.leaving = Some(view::settings::Leave::Close);
+                    } else {
+                        tasks.push(self.close_settings());
+                    }
                 } else if Some(id) == self.first_run_window {
                     self.first_run_window = None;
                     tasks.push(window::close(id));
@@ -1207,9 +1240,9 @@ impl App {
     /// page (not while editing art or adding a character), and drops it
     /// otherwise so its art isn't held in memory.
     fn sync_motion_preview(&mut self) {
+        // Kept while the artwork editor is open: one draft spans both.
         let wanted = self.settings_window.is_some()
             && self.page == Page::Character
-            && self.art.is_none()
             && self.character_draft.is_none();
         if !wanted {
             self.motion_preview = None;
@@ -1236,6 +1269,7 @@ impl App {
                     defaults,
                     c.lines(),
                     c.pack_lines(),
+                    c.pack_bop(),
                 ));
                 self.motion_failed = None;
                 self.motion_ticked = None;
@@ -1420,6 +1454,94 @@ impl App {
         })
     }
 
+    /// Whether the character draft (artwork or behavior) has changes Save
+    /// would write.
+    fn character_unsaved(&self) -> bool {
+        self.motion_preview.as_ref().is_some_and(|p| p.unsaved())
+            || self.art.as_ref().is_some_and(|e| e.new_install || e.can_undo())
+    }
+
+    /// Writes the behavior draft to the character's overrides in one file,
+    /// then shows it on the desktop. Nothing to write is a success.
+    fn save_behavior(&mut self) -> Result<(), String> {
+        let Some(p) = &mut self.motion_preview else {
+            return Ok(());
+        };
+        if !p.unsaved() {
+            return Ok(());
+        }
+        let id = p.id;
+        let o = p.overrides(characters::load_overrides(id));
+        characters::save_overrides(id, &o)?;
+        p.mark_all_saved();
+        characters::prune_line_sounds(id, &p.lines);
+        self.notice = None;
+        #[cfg(windows)]
+        if self.mascot.as_ref().is_some_and(|m| m.character() == id) {
+            let lines = p.lines.clone();
+            let rig = self.character_rig(id);
+            let options = self.mascot_options();
+            if let Some(m) = &mut self.mascot {
+                m.set_rig(id, rig);
+                m.set_lines(lines, &options);
+            }
+        }
+        Ok(())
+    }
+
+    /// Cancel / Discard: drops the artwork edit and every unsaved behavior
+    /// change. The installed character is untouched.
+    fn discard_character(&mut self) {
+        self.cancel_character_job();
+        self.art = None;
+        self.art_saving = None;
+        if let Some(p) = &mut self.motion_preview {
+            p.discard();
+        }
+    }
+
+    fn go_page(&mut self, page: Page) {
+        if page != Page::Character {
+            self.cancel_character_job();
+            self.prepared_character = None;
+            self.character_conflict = None;
+        }
+        self.page = page;
+    }
+
+    fn pick_character(&mut self, id: &'static str, out: &mut Outcomes) {
+        self.cancel_character_job();
+        self.prepared_character = None;
+        self.character_conflict = None;
+        self.character_draft = None;
+        self.art = None;
+        out.sets.push((character::CHARACTER, Value::Choice(id)));
+    }
+
+    fn close_settings(&mut self) -> Task<Message> {
+        let Some(id) = self.settings_window.take() else {
+            return Task::none();
+        };
+        self.cancel_character_job();
+        self.prepared_character = None;
+        self.character_conflict = None;
+        self.settings_framed = false;
+        self.notice = None;
+        self.leaving = None;
+        window::close(id)
+    }
+
+    /// Goes where the leave prompt was holding.
+    fn finish_leave(&mut self, to: view::settings::Leave, out: &mut Outcomes) -> Task<Message> {
+        use view::settings::Leave;
+        match to {
+            Leave::Page(page) => self.go_page(page),
+            Leave::Character(id) => self.pick_character(id, out),
+            Leave::Close => return self.close_settings(),
+        }
+        Task::none()
+    }
+
     /// The selected character, or bundled Yohta if it's gone.
     fn current_character(&self) -> &Character {
         let id = self.session.settings().choice(character::CHARACTER);
@@ -1582,21 +1704,49 @@ impl App {
             }
             UiMsg::CharacterTab(tab) => self.character_tab = tab,
             UiMsg::Nav(page) => {
-                if page != Page::Character {
-                    self.cancel_character_job();
-                    self.prepared_character = None;
-                    self.character_conflict = None;
+                if page != Page::Character && self.character_unsaved() {
+                    self.leaving = Some(view::settings::Leave::Page(page));
+                } else {
+                    self.go_page(page);
                 }
-                self.page = page;
             }
             UiMsg::PickCharacter(id) => {
-                self.cancel_character_job();
-                self.prepared_character = None;
-                self.character_conflict = None;
-                self.character_draft = None;
-                self.art = None;
-                out.sets.push((character::CHARACTER, Value::Choice(id)));
+                if id != self.current_character().id && self.character_unsaved() {
+                    self.leaving = Some(view::settings::Leave::Character(id));
+                } else {
+                    self.pick_character(id, out);
+                }
             }
+            UiMsg::Leave(choice) => {
+                use view::settings::LeaveChoice;
+                let Some(to) = self.leaving.take() else {
+                    return Task::none();
+                };
+                match choice {
+                    LeaveChoice::Stay => {}
+                    LeaveChoice::Discard => {
+                        self.discard_character();
+                        return self.finish_leave(to, out);
+                    }
+                    LeaveChoice::Save if self.art.is_some() => {
+                        self.after_save = Some(to);
+                        return self.ui_message(UiMsg::ArtSave, now, out);
+                    }
+                    LeaveChoice::Save => match self.save_behavior() {
+                        Ok(()) => return self.finish_leave(to, out),
+                        Err(e) => self.notice = Some(format!("Could not save: {e}")),
+                    },
+                }
+            }
+            UiMsg::CharacterSave => {
+                if self.art.is_some() {
+                    return self.ui_message(UiMsg::ArtSave, now, out);
+                }
+                if let Err(e) = self.save_behavior() {
+                    self.notice = Some(format!("Could not save: {e}"));
+                }
+            }
+            UiMsg::CharacterDiscard => self.discard_character(),
             UiMsg::AddCharacter => {
                 return Task::perform(
                     rfd::AsyncFileDialog::new()
@@ -1705,25 +1855,10 @@ impl App {
                 }
             }
             UiMsg::MusicBop(bop) => {
-                let c = self.current_character().clone();
-                match c.save_bop(bop) {
-                    Ok(()) => {
-                        self.notice = None;
-                        if let Some(p) = &mut self.motion_preview
-                            && p.id == c.id
-                        {
-                            p.set_bop(bop);
-                            // Show it straight away, even without music.
-                            p.test(crate::mascot::preview::Test::Music);
-                        }
-                        #[cfg(windows)]
-                        if let Some(m) = &mut self.mascot
-                            && m.character() == c.id
-                        {
-                            m.set_bop(bop);
-                        }
-                    }
-                    Err(e) => self.notice = Some(format!("Could not save bop style: {e}")),
+                if let Some(p) = &mut self.motion_preview {
+                    p.set_bop(bop);
+                    // Show it straight away, even without music.
+                    p.test(crate::mascot::preview::Test::Music);
                 }
             }
             UiMsg::LineText(t, i, text) => {
@@ -1793,62 +1928,9 @@ impl App {
                     p.reset_lines();
                 }
             }
-            UiMsg::LinesSave => {
-                if let Some(p) = &mut self.motion_preview {
-                    let id = p.id;
-                    // Empty lines are dropped rather than saved.
-                    for t in crate::mascot::lines::Trigger::ALL {
-                        p.lines.get_mut(t).retain(|l| !l.text.trim().is_empty());
-                    }
-                    let mut o = characters::load_overrides(id);
-                    o.lines = p.lines_customised().then(|| p.lines.clone());
-                    match characters::save_overrides(id, &o) {
-                        Ok(()) => {
-                            p.mark_lines_saved();
-                            characters::prune_line_sounds(id, &p.lines);
-                            self.notice = None;
-                            #[cfg(windows)]
-                            if self.mascot.as_ref().is_some_and(|m| m.character() == id) {
-                                let lines = p.lines.clone();
-                                let options = self.mascot_options();
-                                if let Some(m) = &mut self.mascot {
-                                    m.set_lines(lines, &options);
-                                }
-                            }
-                        }
-                        Err(e) => self.notice = Some(format!("Could not save lines: {e}")),
-                    }
-                }
-            }
             UiMsg::MotionReset => {
                 if let Some(p) = &mut self.motion_preview {
                     p.reset();
-                }
-            }
-            UiMsg::MotionSave => {
-                if let Some(p) = &mut self.motion_preview {
-                    let id = p.id;
-                    let result = if p.customised() {
-                        characters::save_motion(id, &p.specs)
-                    } else {
-                        // Matching the pack again: forget the override.
-                        characters::clear_motion(id)
-                    };
-                    match result {
-                        Ok(()) => {
-                            p.mark_saved();
-                            self.notice = None;
-                            // The desktop picks up the new motion at once.
-                            #[cfg(windows)]
-                            if self.mascot.as_ref().is_some_and(|m| m.character() == id) {
-                                let rig = self.character_rig(id);
-                                if let Some(m) = &mut self.mascot {
-                                    m.set_rig(id, rig);
-                                }
-                            }
-                        }
-                        Err(e) => self.notice = Some(format!("Could not save motion: {e}")),
-                    }
                 }
             }
             UiMsg::CancelCharacterImport => {
@@ -2011,14 +2093,12 @@ impl App {
                     e.name = name.chars().take(60).collect();
                 }
             }
-            UiMsg::ArtCancel => {
-                self.cancel_character_job();
-                self.art = None;
-            }
+            UiMsg::ArtCancel => self.discard_character(),
             UiMsg::ArtSave => {
                 if self.character_job.is_none()
                     && let Some(editor) = self.art.clone()
                 {
+                    self.art_saving = Some(editor.id);
                     let id = self.begin_character_job();
                     let job = self.character_job.as_ref().unwrap().clone();
                     return character_work(id, move || {
@@ -2753,6 +2833,8 @@ impl App {
                 character_conflict: self.character_conflict.as_deref(),
                 art: self.art.as_ref(),
                 motion: self.motion_preview.as_ref(),
+                unsaved: self.character_unsaved(),
+                leaving: self.leaving.is_some(),
                 music: self.music_status(),
                 music_source: self.music_source(),
                 music_rows: self.music_rows(),

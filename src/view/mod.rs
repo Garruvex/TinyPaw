@@ -66,6 +66,12 @@ pub enum UiMsg {
     ToggleMoreMenu,
     Nav(settings::Page),
     CharacterTab(settings::CharacterTab),
+    /// The answer to Save / Discard / Stay.
+    Leave(settings::LeaveChoice),
+    /// Save the character draft: artwork (if open) then behavior.
+    CharacterSave,
+    /// Drop the character draft's unsaved changes.
+    CharacterDiscard,
     ImportWav,
     PreviewSound,
     TurnOn,
@@ -144,7 +150,6 @@ pub enum UiMsg {
     MotionTest(crate::mascot::preview::Test),
     /// Pick how the selected character bops to music; saved at once.
     MusicBop(crate::mascot::motion::Bop),
-    MotionSave,
     MotionReset,
     /// Lines: edit, add or remove a line, and its sound.
     LineText(crate::mascot::lines::Trigger, usize, String),
@@ -155,7 +160,6 @@ pub enum UiMsg {
     BubbleBackground([u8; 4]),
     BubbleText([u8; 4]),
     BubbleWidth(f32),
-    LinesSave,
     LinesReset,
 }
 

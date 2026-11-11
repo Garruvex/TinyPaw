@@ -352,10 +352,6 @@ impl Desktop {
         }
     }
 
-    pub fn set_bop(&mut self, bop: super::motion::Bop) {
-        self.rig.set_bop(bop);
-    }
-
     /// The character's lines; re-lays out for the bubble band.
     pub fn set_lines(&mut self, lines: Lines, o: &Options) {
         self.lines = lines;

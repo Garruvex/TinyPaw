@@ -48,22 +48,29 @@ pub struct MotionPreview {
     pub lines: Lines,
     lines_saved: Lines,
     lines_defaults: Lines,
+    /// The bop style saved, and the pack's own.
+    bop_saved: Bop,
+    bop_default: Bop,
     picker: Picker,
     speech: Option<Speech>,
     sound: Option<SoundRef>,
 }
 
 impl MotionPreview {
-    /// `rig` carries the saved motion; `defaults` is the pack's own.
+    /// `rig` carries the saved motion and bop; `defaults` and `pack_bop`
+    /// are the pack's own.
     pub fn new(
         id: &'static str,
         rig: Rig,
         defaults: Vec<MotionSpec>,
         lines: Lines,
         pack_lines: Lines,
+        pack_bop: Bop,
     ) -> Self {
         let specs = rig.motion().to_vec();
         Self {
+            bop_saved: rig.bop(),
+            bop_default: pack_bop,
             lines_saved: lines.clone(),
             lines,
             lines_defaults: pack_lines,
@@ -114,13 +121,51 @@ impl MotionPreview {
         self.rig.set_motion(&self.specs);
     }
 
-    pub fn mark_saved(&mut self) {
-        self.saved = self.specs.clone();
-    }
-
-    /// Shows a bop style at once (it's saved as soon as it's picked).
+    /// Picks a bop style for the draft; it shows at once and is written
+    /// with the character's Save.
     pub fn set_bop(&mut self, bop: Bop) {
         self.rig.set_bop(bop);
+    }
+
+    pub fn bop_dirty(&self) -> bool {
+        self.rig.bop() != self.bop_saved
+    }
+
+    /// Any unsaved behavior change: motion, lines or bop.
+    pub fn unsaved(&self) -> bool {
+        self.dirty() || self.lines_dirty() || self.bop_dirty()
+    }
+
+    /// The draft as overrides on top of `base`: a value matching the pack's
+    /// own is left out, so the pack's later changes still apply.
+    pub fn overrides(&self, mut base: super::pack::Overrides) -> super::pack::Overrides {
+        let mut lines = self.lines.clone();
+        // Empty lines are dropped rather than saved.
+        for t in Trigger::ALL {
+            lines.get_mut(t).retain(|l| !l.text.trim().is_empty());
+        }
+        base.motion = self.customised().then(|| self.specs.clone());
+        base.lines = (lines != self.lines_defaults).then_some(lines);
+        base.bop = (self.rig.bop() != self.bop_default).then(|| self.rig.bop());
+        base
+    }
+
+    /// After a successful save: the draft is what's saved now.
+    pub fn mark_all_saved(&mut self) {
+        for t in Trigger::ALL {
+            self.lines.get_mut(t).retain(|l| !l.text.trim().is_empty());
+        }
+        self.saved = self.specs.clone();
+        self.lines_saved = self.lines.clone();
+        self.bop_saved = self.rig.bop();
+    }
+
+    /// Back to what's saved, dropping every unsaved change.
+    pub fn discard(&mut self) {
+        self.specs = self.saved.clone();
+        self.rig.set_motion(&self.specs);
+        self.lines = self.lines_saved.clone();
+        self.rig.set_bop(self.bop_saved);
     }
 
     pub fn test(&mut self, test: Test) {
@@ -154,10 +199,6 @@ impl MotionPreview {
 
     pub fn reset_lines(&mut self) {
         self.lines = self.lines_defaults.clone();
-    }
-
-    pub fn mark_lines_saved(&mut self) {
-        self.lines_saved = self.lines.clone();
     }
 
     /// The line being said in the preview.
@@ -230,7 +271,7 @@ mod tests {
     fn yohta() -> MotionPreview {
         let rig = Rig::load();
         let defaults = rig.motion().to_vec();
-        MotionPreview::new("yohta", rig, defaults, Lines::default(), Lines::default())
+        MotionPreview::new("yohta", rig, defaults, Lines::default(), Lines::default(), Bop::default())
     }
 
     #[test]
@@ -248,10 +289,39 @@ mod tests {
         );
         assert!(p.dirty() && p.customised());
         assert_eq!(p.rig().motion()[1].preset, Preset::Wag);
-        p.mark_saved();
+        p.mark_all_saved();
         assert!(!p.dirty());
         p.reset();
         assert!(p.dirty() && !p.customised());
+    }
+
+    #[test]
+    fn one_draft_holds_motion_lines_and_bop_until_saved_or_discarded() {
+        let mut p = yohta();
+        assert!(!p.unsaved());
+        p.set_bop(Bop::Groove);
+        assert!(p.unsaved() && p.bop_dirty());
+        p.lines.get_mut(Trigger::Click).push(crate::mascot::lines::Line { text: "Hi".into(), sound: None });
+        p.lines.get_mut(Trigger::Drop).push(crate::mascot::lines::Line { text: "  ".into(), sound: None });
+        // Overrides keep only what differs from the pack, without blanks.
+        let o = p.overrides(Default::default());
+        assert_eq!(o.bop, Some(Bop::Groove));
+        assert_eq!(o.motion, None, "motion still matches the pack");
+        let lines = o.lines.expect("lines differ from the pack");
+        assert_eq!(lines.get(Trigger::Click).len(), 1);
+        assert!(lines.get(Trigger::Drop).is_empty());
+        // Discard returns to what's saved.
+        p.discard();
+        assert!(!p.unsaved());
+        assert_eq!(p.rig().bop(), Bop::default());
+        assert!(p.lines.get(Trigger::Click).is_empty());
+        // Saving makes the draft the saved state; picking the pack's own
+        // again drops the override.
+        p.set_bop(Bop::RubberHose);
+        p.mark_all_saved();
+        assert!(!p.unsaved());
+        p.set_bop(Bop::default());
+        assert_eq!(p.overrides(Default::default()).bop, None);
     }
 
     #[test]
@@ -270,7 +340,7 @@ mod tests {
             p.tick(0.05, true, false, 0.0, None);
         }
         assert!(p.speech().is_none(), "the line ends");
-        p.mark_lines_saved();
+        p.mark_all_saved();
         p.reset_lines();
         assert!(p.lines_dirty() && !p.lines_customised());
     }

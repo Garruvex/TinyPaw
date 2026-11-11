@@ -62,6 +62,21 @@ pub mod caption {
     }
 }
 
+/// Where the user asked to go while the character had unsaved changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Leave {
+    Page(Page),
+    Character(&'static str),
+    Close,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaveChoice {
+    Save,
+    Discard,
+    Stay,
+}
+
 pub struct SettingsView<'a> {
     pub registry: &'a Registry,
     pub session: &'a Session,
@@ -95,6 +110,10 @@ pub struct SettingsView<'a> {
     pub art: Option<&'a crate::mascot::editor::Editor>,
     /// The Motion tab's live preview, on the Character page.
     pub motion: Option<&'a crate::mascot::preview::MotionPreview>,
+    /// The character draft has changes Save would write.
+    pub unsaved: bool,
+    /// Save / Discard / Stay is waiting for an answer.
+    pub leaving: bool,
     /// Music response status and live level, for the meter.
     pub music: (String, f32),
     /// What music response listens to, and the choices for the picker.
@@ -1492,6 +1511,74 @@ fn check<'a>(label: &'a str, on: bool, id: &'static str) -> Element<'a, Message>
 fn character_page<'a>(
     v: &SettingsView<'a>,
 ) -> (Element<'a, Message>, Option<Element<'a, Message>>) {
+    let (page, side) = character_body(v);
+    if !v.leaving {
+        return (page, side);
+    }
+    (column![leave_prompt(v), page].spacing(16).into(), side)
+}
+
+/// Save / Discard / Stay, while leaving with unsaved character changes.
+fn leave_prompt<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
+    let name = v
+        .characters
+        .iter()
+        .find(|c| c.id == v.character)
+        .map_or("this character", |c| c.name.as_str());
+    let choice = |label: &'static str, c: LeaveChoice, primary: bool| {
+        button(text(label).size(13))
+            .padding([7, 14])
+            .style(if primary { theme::primary } else { theme::secondary })
+            .on_press_maybe((!v.character_busy).then_some(Message::Ui(UiMsg::Leave(c))))
+    };
+    container(
+        column![
+            text(format!("Save your changes to {name}?"))
+                .size(13)
+                .color(theme::AMBER_TEXT),
+            row![
+                choice("Save", LeaveChoice::Save, true),
+                choice("Discard", LeaveChoice::Discard, false),
+                choice("Stay", LeaveChoice::Stay, false),
+            ]
+            .spacing(8),
+        ]
+        .spacing(10),
+    )
+    .padding([10, 12])
+    .style(theme::fill(theme::AMBER_BG, 8.0))
+    .max_width(640)
+    .into()
+}
+
+/// One Save and Discard for the behavior draft (motion, lines, bop).
+fn save_bar<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
+    if !v.unsaved {
+        return hint("Changes show in the preview straight away and on the desktop once saved.");
+    }
+    container(
+        row![
+            text("Unsaved changes").size(13).width(Length::Fill),
+            button(text("Discard").size(12))
+                .padding([5, 10])
+                .style(theme::secondary)
+                .on_press(Message::Ui(UiMsg::CharacterDiscard)),
+            button(text("Save").font(theme::MEDIUM).size(12))
+                .padding([5, 14])
+                .style(theme::primary)
+                .on_press_maybe((!v.character_busy).then_some(Message::Ui(UiMsg::CharacterSave))),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    )
+    .padding([6, 10])
+    .style(theme::fill(theme::WELL, 10.0))
+    .into()
+}
+
+fn character_body<'a>(
+    v: &SettingsView<'a>,
+) -> (Element<'a, Message>, Option<Element<'a, Message>>) {
     if let Some(e) = v.art {
         return (
             art_page(e, v.character_busy),
@@ -1642,6 +1729,9 @@ fn character_page<'a>(
                 .padding(4)
                 .style(theme::fill(theme::WELL, 10.0)),
         );
+        if v.character_tab != CharacterTab::Desktop {
+            page = page.push(save_bar(v));
+        }
         let detail = match v.character_tab {
             CharacterTab::Motion => Some(motion_section(m)),
             CharacterTab::Speech => Some(lines_section(v, m)),
@@ -1769,15 +1859,11 @@ fn motion_section<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'
                 .padding([5, 10])
                 .style(theme::secondary)
                 .on_press_maybe(m.customised().then_some(Message::Ui(UiMsg::MotionReset))),
-            button(text("Save motion").font(theme::MEDIUM).size(12))
-                .padding([5, 12])
-                .style(theme::primary)
-                .on_press_maybe(m.dirty().then_some(Message::Ui(UiMsg::MotionSave))),
         ]
         .spacing(8)
         .align_y(Alignment::Center)
         .into(),
-        hint("Pick how each part moves. Strength scales idle, drag and music motion; Speed paces idle motion. Both run from 0 to 2; 1 is the preset as designed. Changes show in the preview straight away and on the desktop once saved."),
+        hint("Pick how each part moves. Strength scales idle, drag and music motion; Speed paces idle motion. Both run from 0 to 2; 1 is the preset as designed."),
         rows.into(),
     ])
 }
@@ -1876,10 +1962,6 @@ fn lines_section<'a>(
                 .padding([5, 10])
                 .style(theme::secondary)
                 .on_press_maybe(m.lines_customised().then_some(Message::Ui(UiMsg::LinesReset))),
-            button(text("Save lines").font(theme::MEDIUM).size(12))
-                .padding([5, 12])
-                .style(theme::primary)
-                .on_press_maybe(m.lines_dirty().then_some(Message::Ui(UiMsg::LinesSave))),
         ]
         .spacing(8)
         .align_y(Alignment::Center)
@@ -2099,7 +2181,7 @@ fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         .spacing(10)
         .align_y(Alignment::Center)
         .into(),
-        hint("Nod is relaxed. Groove dips on the beat and leans side to side. Rubber hose hops every beat, squashing and stretching like an old cartoon. Saved for this character, and carried when you export it."),
+        hint("Nod is relaxed. Groove dips on the beat and leans side to side. Rubber hose hops every beat, squashing and stretching like an old cartoon. Saved with the character's Save, and carried when you export it."),
         check("Follow beat (trial)", follow, mascot::BEAT),
         hint("Nods land on the beat instead of a steady bob. It listens to what's playing (TinyPaw's own sounds are held off while they play) and keeps nothing."),
     ]);

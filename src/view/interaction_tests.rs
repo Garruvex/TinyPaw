@@ -136,6 +136,8 @@ fn settings_view<'a>(
         character_conflict: None,
         art: None,
         motion: None,
+        unsaved: false,
+        leaving: false,
         music: ("Off".into(), 0.0),
         music_source: crate::mascot::music::Source::All,
         music_rows: vec![(crate::mascot::music::Source::All, 0.0, false)],
@@ -220,6 +222,7 @@ fn character_tabs_show_the_selected_controls_and_keep_the_preview_interactive() 
         defaults,
         Default::default(),
         Default::default(),
+        Default::default(),
     );
     let tabs = [
         CharacterTab::Desktop,
@@ -256,6 +259,40 @@ fn character_tabs_show_the_selected_controls_and_keep_the_preview_interactive() 
                 tab == owner
             );
         }
+    }
+}
+
+#[test]
+fn one_save_and_the_leave_prompt_appear_only_with_unsaved_work() {
+    use crate::mascot::{preview::MotionPreview, rig::Rig};
+    use settings::{CharacterTab, LeaveChoice};
+
+    let registry = Registry::build(crate::features::BUILTINS).unwrap();
+    let session = pointing(&registry);
+    let rig = Rig::load();
+    let defaults = rig.motion().to_vec();
+    let preview = MotionPreview::new("yohta", rig, defaults, Default::default(), Default::default(), Default::default());
+    let messages = |unsaved: bool, leaving: bool| {
+        let mut view = settings_view(&registry, &session, &[], settings::Page::Character);
+        view.motion = Some(&preview);
+        view.character_tab = CharacterTab::Motion;
+        view.unsaved = unsaved;
+        view.leaving = leaving;
+        click_layout(settings::view(view), Size::new(1040.0, 1200.0))
+    };
+    let has = |m: &[Message], f: &dyn Fn(&UiMsg) -> bool| {
+        m.iter().any(|m| matches!(m, Message::Ui(u) if f(u)))
+    };
+    let clean = messages(false, false);
+    assert!(!has(&clean, &|u| matches!(u, UiMsg::CharacterSave | UiMsg::CharacterDiscard)));
+    assert!(!has(&clean, &|u| matches!(u, UiMsg::Leave(_))));
+    let dirty = messages(true, false);
+    assert!(has(&dirty, &|u| matches!(u, UiMsg::CharacterSave)));
+    assert!(has(&dirty, &|u| matches!(u, UiMsg::CharacterDiscard)));
+    assert!(!has(&dirty, &|u| matches!(u, UiMsg::Leave(_))));
+    let leaving = messages(true, true);
+    for c in [LeaveChoice::Save, LeaveChoice::Discard, LeaveChoice::Stay] {
+        assert!(has(&leaving, &|u| matches!(u, UiMsg::Leave(x) if *x == c)), "{c:?}");
     }
 }
 

@@ -559,6 +559,10 @@ impl Editor {
         root: &Path,
         job: Option<&std::sync::atomic::AtomicU8>,
     ) -> Result<Character, String> {
+        // Bundled Yohta's pack is never rewritten; Edit a copy instead.
+        if self.id == pack::BUILTIN {
+            return Err("Yohta is built in; edit a copy instead".into());
+        }
         if let Some(error) = self.validation_error() {
             return Err(error);
         }
@@ -1440,6 +1444,18 @@ mod tests {
             reopened.parts[0].layer.image.dimensions(),
             e.parts[0].layer.image.dimensions()
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn bundled_yohta_is_never_saved_over() {
+        let dir = std::env::temp_dir().join(format!("tinypaw-builtin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (root, c) = test_install_folder(&dir, OnDuplicate::Ask);
+        let mut e = Editor::open_in(&root, &c).unwrap();
+        e.id = pack::BUILTIN;
+        assert!(e.save_into(&root).unwrap_err().contains("copy"));
+        assert!(!root.join(pack::BUILTIN).exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

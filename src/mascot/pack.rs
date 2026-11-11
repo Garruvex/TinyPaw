@@ -165,13 +165,6 @@ impl Character {
         load_overrides(self.id).bop.unwrap_or_else(|| self.pack_bop())
     }
 
-    /// Saves the user's bop style; picking the pack's own forgets the choice.
-    pub fn save_bop(&self, bop: Bop) -> Result<(), String> {
-        let mut o = load_overrides(self.id);
-        o.bop = (bop != self.pack_bop()).then_some(bop);
-        save_overrides(self.id, &o)
-    }
-
     /// Decodes the art for the desktop. Done when shown, released when hidden.
     pub fn rig(&self) -> Result<Rig, String> {
         if let Some(rig) = &self.cached_rig
@@ -1804,19 +1797,6 @@ fn save_overrides_in(root: &Path, id: &str, o: &Overrides) -> Result<(), String>
 /// Saved motion for `id`, if any. The rig checks it still fits its parts.
 pub fn load_motion(id: &str) -> Option<Vec<MotionSpec>> {
     load_overrides(id).motion
-}
-
-pub fn save_motion(id: &str, specs: &[MotionSpec]) -> Result<(), String> {
-    let mut o = load_overrides(id);
-    o.motion = Some(specs.to_vec());
-    save_overrides(id, &o)
-}
-
-/// Forgets the Motion tab settings, returning the character to its pack's.
-pub fn clear_motion(id: &str) -> Result<(), String> {
-    let mut o = load_overrides(id);
-    o.motion = None;
-    save_overrides(id, &o)
 }
 
 /// Where the user's own line sounds for `id` are kept.

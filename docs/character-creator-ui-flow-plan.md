@@ -277,7 +277,7 @@ One sequence. Steps 2 and 3 are independent of each other and can be built in ei
 
 Step 7 needs steps 2 and 4 and can be built any time after them. The [character behaviors plan](character-behaviors-plan.md) can start after step 4. Its features that deform or replace the picture while carried also need step 6.
 
-Status, 11 November 2026: steps 1 and 3 are implemented, not yet checked natively. Step 1's inventory is in [character-control-audit.md](character-control-audit.md). The resting-point mode is stored as an optional `rest_point` field inside version-1 editor metadata rather than by bumping the metadata version: an older build would reject a version-2 `editor` block, and with it the whole pack.
+Status, 11 November 2026: steps 1, 2 and 3 are implemented, not yet checked natively. Step 2 keeps the behavior draft (motion, lines, bop) alive while the artwork editor is open. Save commits the pack, then writes the overrides in one file; Discard, Cancel and Save / Discard / Stay cover switching pages, switching characters and closing Settings. Preview rebuilds on worker revisions are left for step 4, where Arrange and Test share one preview. Step 1's inventory is in [character-control-audit.md](character-control-audit.md). The resting-point mode is stored as an optional `rest_point` field inside version-1 editor metadata rather than by bumping the metadata version: an older build would reject a version-2 `editor` block, and with it the whole pack.
 
 Required automated checks:
 
