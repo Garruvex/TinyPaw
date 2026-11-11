@@ -523,6 +523,28 @@ below 0.45, hence Normal's threshold of 0.35. These are synthetic signals; real
 music with soft attacks and loopback latency still needs listening checks,
 which is why the option stays labelled a trial.
 
+### Sharing (character creation step 6)
+
+Implemented 11 November 2026.
+
+- **Export carries your changes.** Export folds the user's overrides into the
+  written pack: Motion tab settings into each part's `motion`, or into a new
+  pose-level `"motion"` for a single image's sway, and the user's lines in
+  place of the pack's, with their own WAVs copied into the folder's `lines/`
+  and renamed to pack sounds. Pack sounds the exported lines no longer use
+  are left out. What was written is validated like any import before Export
+  reports success. Bundled Yohta exports the same way.
+- **Import keeps your changes.** Overrides live beside the installed pack,
+  keyed by ID, so Replace keeps them; motion that no longer fits the new
+  parts is ignored rather than applied wrongly.
+- **Checked by** `export_carries_motion_lines_and_sounds_and_imports_the_same`:
+  a layered pack with changed motion and a line with the user's own sound,
+  exported and imported into a fresh characters folder, loads with the same
+  motion, line and sound.
+- **Not done.** The plan's optional single-file pack. Folder export and
+  import cover sharing today; an archive format (and ZIP import) is separate
+  work, as the import-and-arrange plan also notes.
+
 Completion checks:
 
 - Yohta and an imported original character both work without code changes.

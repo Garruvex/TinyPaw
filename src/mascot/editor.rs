@@ -562,6 +562,8 @@ impl Editor {
             eyes.push(eye);
         }
         let mut poses = vec![Pose {
+            // Layered poses give each part its own motion.
+            whole: None,
             name: self.pose.clone(),
             ground: self.ground,
             body: format!("{dir}/body.png"),

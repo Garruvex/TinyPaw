@@ -172,7 +172,11 @@ fn build_rig(m: &Manifest, png: impl Fn(&str) -> Result<RgbaImage, String>) -> R
     let pose = m.default_pose();
     let body = png(&pose.body)?;
     if pose.parts.is_empty() && pose.eyes.is_empty() {
-        return Ok(Rig::sprite(body, pose.ground));
+        let mut rig = Rig::sprite(body, pose.ground);
+        if let Some(w) = pose.whole {
+            rig.set_motion(&[w]);
+        }
+        return Ok(rig);
     }
     let mut parts = Vec::new();
     for part in &pose.parts {
@@ -313,6 +317,8 @@ pub(super) struct Pose {
     pub(super) body: String,
     pub(super) parts: Vec<PartDef>,
     pub(super) eyes: Vec<EyeDef>,
+    /// A body-only pose's whole-character sway, if not the default.
+    pub(super) whole: Option<MotionSpec>,
 }
 
 #[derive(Debug, Clone)]
@@ -357,6 +363,13 @@ impl Pose {
             "ground_anchor": [self.ground.0, self.ground.1],
             "body": self.body,
         });
+        if let Some(w) = &self.whole {
+            pose["motion"] = json!({
+                "preset": w.preset.name(),
+                "strength": w.strength,
+                "speed": w.speed,
+            });
+        }
         if !self.parts.is_empty() {
             pose["parts"] = Json::Array(
                 self.parts
@@ -523,6 +536,29 @@ fn parse_eye(v: &Json, n: usize) -> Result<EyeDef, String> {
 }
 
 /// Parts, eyes and their links for one pose.
+/// A body-only pose's `motion`: the head presets, which the whole image
+/// uses for its sway.
+fn parse_whole(v: &Json, pose_name: &str) -> Result<Option<MotionSpec>, String> {
+    if v.is_null() {
+        return Ok(None);
+    }
+    let mut spec = MotionSpec::default_for(PartType::Head);
+    if let Some(name) = v["preset"].as_str() {
+        spec.preset = Preset::parse(name)
+            .filter(|p| PartType::Head.presets().contains(p))
+            .ok_or(format!("the {pose_name} pose can't use the `{name}` motion"))?;
+    }
+    for (field, value) in [("strength", &mut spec.strength), ("speed", &mut spec.speed)] {
+        if let Some(x) = v[field].as_f64() {
+            if !(0.0..=2.0).contains(&x) {
+                return Err(format!("the {pose_name} pose's {field} must be between 0 and 2"));
+            }
+            *value = x as f32;
+        }
+    }
+    Ok(Some(spec))
+}
+
 fn parse_layers(pose: &Json, pose_name: &str) -> Result<(Vec<PartDef>, Vec<EyeDef>), String> {
     let mut found: Vec<(PartDef, bool)> = Vec::new();
     for (key, kind) in [("head", PartType::Head), ("tail", PartType::Tail)] {
@@ -835,7 +871,14 @@ fn parse_manifest(text: &str) -> Result<Manifest, String> {
                 "the {pose_name} pose needs a body PNG inside the pack folder"
             ))?;
         let (parts, eyes) = parse_layers(pose, pose_name)?;
+        let whole = parse_whole(&pose["motion"], pose_name)?;
+        if whole.is_some() && !parts.is_empty() {
+            return Err(format!(
+                "the {pose_name} pose's motion is for a single image; give each part its own"
+            ));
+        }
         poses.push(Pose {
+            whole,
             name: pose_name.clone(),
             ground,
             body: body.to_owned(),
@@ -1232,6 +1275,7 @@ fn install_into_guarded(
             body: "sit/body.png".into(),
             parts: Vec::new(),
             eyes: Vec::new(),
+            whole: None,
         }],
         source: Some(draft.source),
         editor: Vec::new(),
@@ -1805,32 +1849,59 @@ pub fn prune_line_sounds(id: &str, keep: &Lines) {
 
 /// Writes the character as a folder inside `into`, ready to share or
 /// re-import. Returns the folder written.
+/// Writes the character as a folder inside `into`, ready to share or
+/// re-import, including the user's Motion and Lines changes and their line
+/// sounds, so it behaves the same on another PC. Returns the folder written.
 pub fn export(c: &Character, into: &Path) -> Result<PathBuf, String> {
-    let Some(folder) = c.folder.as_ref() else {
-        let m = bundled_manifest();
-        let target = free_folder(into, &m.id);
-        fs::create_dir_all(&target).map_err(|e| e.to_string())?;
-        let result = write_bundled(&target, &m).and_then(|()| {
-            let text = serde_json::to_string_pretty(&m.to_json()).map_err(|e| e.to_string())?;
-            fs::write(target.join(MANIFEST), text).map_err(|e| e.to_string())
-        });
-        return match result {
-            Ok(()) => Ok(target),
-            Err(e) => {
-                let _ = fs::remove_dir_all(&target);
-                Err(e)
-            }
-        };
+    let root = user_dir();
+    export_with(c, into, &load_overrides(c.id), |file| {
+        root.as_ref().map(|r| user_sounds(r, c.id).join(file))
+    })
+}
+
+fn export_with(
+    c: &Character,
+    into: &Path,
+    overrides: &Overrides,
+    user_sound: impl Fn(&str) -> Option<PathBuf>,
+) -> Result<PathBuf, String> {
+    let mut m = match &c.folder {
+        Some(folder) => {
+            let m = read_manifest(folder)?;
+            m.validate_files(folder)?;
+            m
+        }
+        None => bundled_manifest(),
     };
-    let m = read_manifest(folder)?;
+    // The pack's own files, before overrides change which sounds it names.
+    let pack_files = m.files();
+    let mut user_files: Vec<(PathBuf, String)> = Vec::new();
+    bake(&mut m, overrides, &mut user_files, &user_sound)?;
     let target = free_folder(into, &m.id);
     fs::create_dir_all(&target).map_err(|e| e.to_string())?;
     let result = (|| {
-        let assets: Vec<String> = m.files();
-        m.validate_files(folder)?;
-        copy_assets(folder, &target, &assets)?;
+        match &c.folder {
+            Some(folder) => copy_assets(folder, &target, &pack_files)?,
+            None => write_bundled(&target, &m)?,
+        }
+        for (from, to) in &user_files {
+            let to = target.join(to);
+            if let Some(parent) = to.parent() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            fs::copy(from, to).map_err(|e| e.to_string())?;
+        }
+        // Drop pack sounds the exported lines no longer use.
+        let used = m.sounds().into_iter().map(str::to_owned).collect::<Vec<_>>();
+        for f in &pack_files {
+            if super::lines::valid_pack_sound(f) && !used.contains(f) {
+                let _ = fs::remove_file(target.join(f));
+            }
+        }
         let text = serde_json::to_string_pretty(&m.to_json()).map_err(|e| e.to_string())?;
-        fs::write(target.join(MANIFEST), text).map_err(|e| e.to_string())
+        fs::write(target.join(MANIFEST), text).map_err(|e| e.to_string())?;
+        // What was written must load like any pack.
+        read_manifest(&target)?.validate_files(&target)
     })();
     match result {
         Ok(()) => Ok(target),
@@ -1839,6 +1910,59 @@ pub fn export(c: &Character, into: &Path) -> Result<PathBuf, String> {
             Err(e)
         }
     }
+}
+
+/// Folds the user's overrides into a manifest: motion into each part (or
+/// the single image's sway), and their lines in place of the pack's, with
+/// their own sounds renamed into the pack's `lines/` folder.
+fn bake(
+    m: &mut Manifest,
+    o: &Overrides,
+    user_files: &mut Vec<(PathBuf, String)>,
+    user_sound: &impl Fn(&str) -> Option<PathBuf>,
+) -> Result<(), String> {
+    let default = m.default_pose.clone();
+    let pose = m
+        .poses
+        .iter_mut()
+        .find(|p| p.name == default)
+        .expect("validated default pose");
+    if let Some(specs) = &o.motion {
+        if !pose.parts.is_empty()
+            && specs.len() == pose.parts.len()
+            && pose
+                .parts
+                .iter()
+                .zip(specs)
+                .all(|(p, s)| p.kind.presets().contains(&s.preset))
+        {
+            for (p, s) in pose.parts.iter_mut().zip(specs) {
+                p.motion = *s;
+            }
+        } else if pose.parts.is_empty()
+            && let [s] = specs.as_slice()
+            && PartType::Head.presets().contains(&s.preset)
+        {
+            pose.whole = Some(*s);
+        }
+    }
+    if let Some(lines) = &o.lines {
+        let mut lines = lines.clone();
+        for t in super::lines::Trigger::ALL {
+            for line in lines.get_mut(t) {
+                if let Some(SoundRef::User(file)) = &line.sound {
+                    let from = user_sound(file).ok_or("no per-user data folder")?;
+                    let to = format!("lines/{file}");
+                    if !user_files.iter().any(|(_, t)| *t == to) {
+                        user_files.push((from, to.clone()));
+                    }
+                    line.sound = Some(SoundRef::Pack(to));
+                }
+            }
+        }
+        m.lines = lines;
+    }
+    Ok(())
 }
 
 /// `into/<id>`, or `into/<id>-2` and so on if that exists.
@@ -2473,6 +2597,106 @@ mod tests {
             .err()
             .unwrap();
         assert!(err.contains("hi.wav"), "{err}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn export_carries_motion_lines_and_sounds_and_imports_the_same() {
+        use super::super::lines::{Line, Trigger};
+        let dir = scratch("share");
+        // A layered pack (head and tail) from the fixture art.
+        let (root, plain) = test_install_folder(&dir, OnDuplicate::Ask);
+        assert!(plain.rig().is_ok());
+        let src = dir.join("layered");
+        fs::create_dir_all(src.join("sit")).unwrap();
+        let block = |x0: u32, y0: u32, x1: u32, y1: u32| {
+            RgbaImage::from_fn(100, 100, |x, y| {
+                let on = (x0..x1).contains(&x) && (y0..y1).contains(&y);
+                image::Rgba(if on { [90, 120, 200, 255] } else { [0, 0, 0, 0] })
+            })
+        };
+        block(30, 50, 70, 95).save(src.join("sit/body.png")).unwrap();
+        block(20, 10, 80, 55).save(src.join("sit/head.png")).unwrap();
+        block(65, 60, 95, 70).save(src.join("sit/tail.png")).unwrap();
+        fs::write(
+            src.join(MANIFEST),
+            r#"{"schema_version":1,"id":"fox","name":"Fox","canvas":[100,100],"default_pose":"sit",
+              "poses":{"sit":{"ground_anchor":[0.5,0.95],"body":"sit/body.png",
+                "head":{"image":"sit/head.png","pivot":[0.5,0.5]},
+                "tail":{"image":"sit/tail.png","pivot":[0.66,0.65]}}}}"#,
+        )
+        .unwrap();
+        let Imported::Installed(fox) =
+            import_folder_into(&root, &src, &[], OnDuplicate::Ask).unwrap()
+        else {
+            panic!("installed");
+        };
+        // The user's changes: new motion, a line with their own sound.
+        let sounds = dir.join("user-sounds");
+        write_wav(&sounds.join("line-1.wav"));
+        let mut lines = Lines::default();
+        lines.get_mut(Trigger::Click).push(Line {
+            text: "Yip!".into(),
+            sound: Some(SoundRef::User("line-1.wav".into())),
+        });
+        let motion = vec![
+            MotionSpec { preset: Preset::Nod, strength: 1.5, speed: 0.5 },
+            MotionSpec { preset: Preset::Wag, strength: 2.0, speed: 1.2 },
+        ];
+        let o = Overrides { motion: Some(motion.clone()), lines: Some(lines) };
+        let out = dir.join("out");
+        fs::create_dir_all(&out).unwrap();
+        let folder =
+            export_with(&fox, &out, &o, |f| Some(sounds.join(f))).unwrap();
+        assert!(folder.join("lines/line-1.wav").exists(), "the user's sound travels");
+
+        // "Another PC": a fresh characters folder, no overrides there.
+        let other = dir.join("other-pc");
+        let Imported::Installed(copy) =
+            import_folder_into(&other, &folder, &[], OnDuplicate::Ask).unwrap()
+        else {
+            panic!("installed");
+        };
+        let rig = copy.rig().unwrap();
+        assert_eq!(rig.motion(), motion.as_slice(), "same motion");
+        let lines = read_manifest(copy.folder.as_ref().unwrap()).unwrap().lines;
+        let click = &lines.get(Trigger::Click)[0];
+        assert_eq!(click.text, "Yip!");
+        assert_eq!(click.sound, Some(SoundRef::Pack("lines/line-1.wav".into())));
+        assert!(other.join("fox/lines/line-1.wav").exists());
+
+        // A single image's sway travels too.
+        let o = Overrides {
+            motion: Some(vec![MotionSpec { preset: Preset::Nod, strength: 0.4, speed: 1.0 }]),
+            lines: None,
+        };
+        let folder = export_with(&plain, &out, &o, |_| None).unwrap();
+        let Imported::Installed(sprite) =
+            import_folder_into(&other, &folder, &[], OnDuplicate::Ask).unwrap()
+        else {
+            panic!("installed");
+        };
+        assert_eq!(sprite.rig().unwrap().motion()[0].strength, 0.4);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn replacing_a_pack_keeps_the_users_overrides() {
+        let dir = scratch("replace-keeps");
+        let o = Overrides {
+            motion: Some(vec![MotionSpec { preset: Preset::Nod, strength: 1.0, speed: 1.0 }]),
+            lines: Some(Lines::default()),
+        };
+        let (root, c) = test_install_folder(&dir, OnDuplicate::Ask);
+        save_overrides_in(&root, c.id, &o).unwrap();
+        let folder = dir.join("fixture");
+        let Imported::Installed(again) =
+            import_folder_into(&root, &folder, &[c.id], OnDuplicate::Replace).unwrap()
+        else {
+            panic!("installed");
+        };
+        assert_eq!(again.id, c.id);
+        assert_eq!(load_overrides_in(&root, c.id), o, "replace keeps what the user changed");
         fs::remove_dir_all(&dir).unwrap();
     }
 }
