@@ -129,6 +129,11 @@ pub enum UiMsg {
     ReactionIdleInterval(f32, f32),
     ReactionsReset,
     ReactionVisual(crate::mascot::reactions::Event, crate::mascot::reactions::Visual),
+    /// Choose the PNG for an artwork reaction, or Pick up's held pose.
+    ReactionPicture(crate::mascot::reactions::Event),
+    ReactionHeldClear,
+    /// Align a picture: event, whether it's the held pose, x/y/scale, value.
+    ReactionPlace(crate::mascot::reactions::Event, bool, usize, f32),
     ArtEyeStyle(crate::mascot::editor::EyeStyle),
     ArtField(usize, String),
     ArtCanvas(usize, String),

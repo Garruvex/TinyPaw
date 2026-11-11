@@ -135,6 +135,8 @@ pub enum Visual {
     None,
     /// Briefly shortens and widens the picture, then restores it.
     Compress,
+    /// Shows one alternate whole-character PNG briefly (the entry's `art`).
+    Artwork,
 }
 
 impl Visual {
@@ -142,6 +144,7 @@ impl Visual {
         match self {
             Visual::None => "none",
             Visual::Compress => "compress",
+            Visual::Artwork => "artwork",
         }
     }
 }
@@ -151,8 +154,68 @@ impl std::fmt::Display for Visual {
         f.write_str(match self {
             Visual::None => "None",
             Visual::Compress => "Compress",
+            Visual::Artwork => "Use artwork",
         })
     }
+}
+
+/// A whole-character replacement picture on the character's own stage:
+/// a canvas-sized PNG and its alignment, `[x, y, scale]` with the offset
+/// in canvas fractions, so the creator can line poses up.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Art {
+    pub image: SoundRef,
+    pub place: [f32; 3],
+}
+
+impl Art {
+    pub fn new(image: SoundRef) -> Self {
+        Self { image, place: [0.0, 0.0, 1.0] }
+    }
+
+    fn to_json(&self) -> Json {
+        json!({ "image": file_json(&self.image), "place": self.place })
+    }
+}
+
+fn file_json(r: &SoundRef) -> String {
+    match r {
+        SoundRef::Pack(p) => p.clone(),
+        SoundRef::User(f) => format!("user:{f}"),
+    }
+}
+
+/// A PNG path inside a pack: relative, `/`-separated, no `..`.
+pub fn valid_pack_image(path: &str) -> bool {
+    let wav = format!("{}.wav", path.strip_suffix(".png").unwrap_or("x"));
+    path.to_ascii_lowercase().ends_with(".png") && valid_pack_sound(&wav)
+}
+
+/// A file name TinyPaw gave an imported reaction picture.
+pub fn valid_user_image(file: &str) -> bool {
+    file.strip_suffix(".png").is_some_and(|stem| valid_user_sound(&format!("{stem}.wav")))
+}
+
+fn parse_art(v: &Json, user: bool) -> Result<Art, String> {
+    let image = v["image"].as_str().ok_or("a reaction picture needs an image")?;
+    let image = match image.strip_prefix("user:") {
+        Some(file) if user && valid_user_image(file) => SoundRef::User(file.into()),
+        Some(_) => return Err(format!("`{image}` isn't a picture in this pack")),
+        None if valid_pack_image(image) => SoundRef::Pack(image.into()),
+        None => return Err(format!("reaction picture `{image}` must be a PNG inside the pack folder")),
+    };
+    let place = match v["place"].as_array().map(Vec::as_slice) {
+        None if v["place"].is_null() => [0.0, 0.0, 1.0],
+        Some([x, y, k]) => {
+            let n = |j: &Json| j.as_f64().filter(|n| n.is_finite()).map(|n| n as f32);
+            match (n(x), n(y), n(k)) {
+                (Some(x), Some(y), Some(k)) if x.abs() <= 1.0 && y.abs() <= 1.0 && (0.1..=4.0).contains(&k) => [x, y, k],
+                _ => return Err("a reaction picture's place must be [x, y, scale] within the stage".into()),
+            }
+        }
+        _ => return Err("a reaction picture's place must be [x, y, scale]".into()),
+    };
+    Ok(Art { image, place })
 }
 
 /// One event's entry in a `reactions` object: its sound and visual, plus
@@ -162,6 +225,10 @@ pub struct Entry {
     pub sound: TriggerSound,
     /// `None` when this layer doesn't set it.
     pub visual: Option<Visual>,
+    /// The picture a `Visual::Artwork` shows.
+    pub art: Option<Art>,
+    /// Pick up only: the whole-character picture shown while carried.
+    pub held: Option<Art>,
     pub other: Map<String, Json>,
 }
 
@@ -232,6 +299,28 @@ impl Config {
         out
     }
 
+    /// Every reaction picture this layer names.
+    pub fn images(&self) -> Vec<&SoundRef> {
+        let mut out: Vec<&SoundRef> = Vec::new();
+        for entry in self.events.iter().flatten() {
+            for art in [&entry.art, &entry.held].into_iter().flatten() {
+                if !out.contains(&&art.image) {
+                    out.push(&art.image);
+                }
+            }
+        }
+        out
+    }
+
+    /// Rewrites every picture reference, for export.
+    pub fn map_images(&mut self, mut f: impl FnMut(&SoundRef) -> SoundRef) {
+        for entry in self.events.iter_mut().flatten() {
+            for art in [&mut entry.art, &mut entry.held].into_iter().flatten() {
+                art.image = f(&art.image);
+            }
+        }
+    }
+
     /// Rewrites every file reference, for export.
     pub fn map_files(&mut self, mut f: impl FnMut(&SoundRef) -> SoundRef) {
         for entry in self.events.iter_mut().flatten() {
@@ -281,8 +370,20 @@ impl Config {
         for e in Event::ALL {
             if let Some(entry) = &self.events[e.index()] {
                 let mut v = entry.other.clone();
-                if let Some(visual) = entry.visual {
-                    v.insert("visual".into(), json!(visual.name()));
+                match (entry.visual, &entry.art) {
+                    (Some(Visual::Artwork), Some(art)) => {
+                        v.insert("visual".into(), art.to_json());
+                    }
+                    (Some(Visual::Artwork), None) => {
+                        v.insert("visual".into(), json!("none"));
+                    }
+                    (Some(visual), _) => {
+                        v.insert("visual".into(), json!(visual.name()));
+                    }
+                    (None, _) => {}
+                }
+                if let Some(held) = &entry.held {
+                    v.insert("held_pose".into(), held.to_json());
                 }
                 let t = &entry.sound;
                 v.insert("enabled".into(), json!(t.enabled));
@@ -367,24 +468,31 @@ fn parse_entry(v: &Json, user: bool) -> Result<Entry, String> {
         Some(n) if n <= u64::from(MAX_COOLDOWN_MS) => n as u32,
         _ => return Err(format!("a reaction's cooldown_ms must be 0–{MAX_COOLDOWN_MS}")),
     };
-    let visual = match &v["visual"] {
-        Json::String(name) => Some(match name.as_str() {
-            "none" => Visual::None,
-            "compress" => Visual::Compress,
-            other => return Err(format!("unknown reaction visual `{other}`")),
-        }),
-        // Absent here; an artwork visual is kept as written.
-        _ => None,
+    let (visual, art) = match &v["visual"] {
+        Json::Null => (None, None),
+        Json::String(name) => (
+            Some(match name.as_str() {
+                "none" => Visual::None,
+                "compress" => Visual::Compress,
+                other => return Err(format!("unknown reaction visual `{other}`")),
+            }),
+            None,
+        ),
+        o @ Json::Object(_) => (Some(Visual::Artwork), Some(parse_art(o, user)?)),
+        _ => return Err("a reaction's visual must be a name or a picture".into()),
+    };
+    let held = match &v["held_pose"] {
+        Json::Null => None,
+        o => Some(parse_art(o, user)?),
     };
     let mut other = map.clone();
-    for key in ["enabled", "sound", "gain", "cooldown_ms"] {
+    for key in ["enabled", "sound", "gain", "cooldown_ms", "visual", "held_pose"] {
         other.remove(key);
-    }
-    if visual.is_some() {
-        other.remove("visual");
     }
     Ok(Entry {
         visual,
+        art,
+        held,
         sound: TriggerSound {
             // Enabled without a sound plays nothing; it reads as off.
             enabled: enabled && sound.is_some(),
@@ -425,6 +533,23 @@ pub fn visual(pack: &Config, user: &Config, e: Event) -> Visual {
     } else {
         Visual::None
     })
+}
+
+/// The picture `e` shows, when its visual is Use artwork.
+pub fn art(pack: &Config, user: &Config, e: Event) -> Option<Art> {
+    if visual(pack, user, e) != Visual::Artwork {
+        return None;
+    }
+    let set = |c: &Config| c.entry(e).filter(|x| x.visual.is_some()).and_then(|x| x.art.clone());
+    set(user).or_else(|| set(pack))
+}
+
+/// The held pose while carried, if any: the user's Pick up entry replaces
+/// the pack's as a whole.
+pub fn held(pack: &Config, user: &Config) -> Option<Art> {
+    user.entry(Event::Pickup)
+        .or(pack.entry(Event::Pickup))
+        .and_then(|e| e.held.clone())
 }
 
 /// The explicit defaults a new character is written with: None for each
@@ -752,6 +877,28 @@ mod tests {
         let user = Config::parse(&json!({ "click": { "visual": "compress" } }), true).unwrap();
         assert_eq!(visual(&fresh, &user, Event::Click), Visual::Compress);
         assert!(Config::parse(&json!({ "click": { "visual": "wobble" } }), true).is_err());
+    }
+
+    #[test]
+    fn held_poses_and_artwork_round_trip() {
+        let v = json!({
+            "pickup": { "visual": "none", "held_pose": { "image": "reactions/held.png", "place": [0.02, -0.04, 1.0] } },
+            "drop": { "visual": { "image": "user:art-1.png", "place": [0.0, 0.0, 1.0] }, "after_release": "stay" }
+        });
+        let c = Config::parse(&v, true).unwrap();
+        assert_eq!(held(&Config::default(), &c).unwrap().place, [0.02, -0.04, 1.0]);
+        assert_eq!(visual(&Config::default(), &c, Event::Drop), Visual::Artwork);
+        assert!(art(&Config::default(), &c, Event::Drop).is_some());
+        assert_eq!(c.images().len(), 2);
+        assert_eq!(c.entry(Event::Drop).unwrap().other["after_release"], "stay");
+        assert_eq!(Config::parse(&c.to_json(), true).unwrap(), c);
+        for bad in [
+            json!({ "pickup": { "held_pose": { "image": "../x.png" } } }),
+            json!({ "pickup": { "held_pose": { "image": "held.png", "place": [0, 0, 9] } } }),
+            json!({ "drop": { "visual": { "image": "x.wav" } } }),
+        ] {
+            assert!(Config::parse(&bad, true).is_err(), "{bad}");
+        }
     }
 
     #[test]

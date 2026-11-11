@@ -892,7 +892,16 @@ impl Editor {
                 }
                 std::fs::copy(installed.join(asset), to).map_err(|e| e.to_string())?;
             }
-            // Line sounds come along unchanged.
+            // Reaction pictures and line sounds come along unchanged.
+            for image in manifest.reactions.images() {
+                if let super::lines::SoundRef::Pack(asset) = image {
+                    let to = stage.join(asset);
+                    if let Some(parent) = to.parent() {
+                        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                    }
+                    std::fs::copy(installed.join(asset), to).map_err(|e| e.to_string())?;
+                }
+            }
             for sound in manifest.sounds() {
                 let to = stage.join(sound);
                 if let Some(parent) = to.parent() {

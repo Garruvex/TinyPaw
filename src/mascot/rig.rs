@@ -584,6 +584,29 @@ impl Rig {
     }
 }
 
+/// A whole-character replacement picture (a held pose or artwork
+/// reaction): canvas-sized, drawn at `place` = `[x, y, scale]`, with the
+/// offset in canvas fractions.
+#[derive(Debug, Clone)]
+pub struct Picture {
+    pub image: Handle,
+    pub place: [f32; 3],
+}
+
+impl Rig {
+    /// Draws `picture` in place of the character, on the same stage.
+    pub fn draw_picture(&self, frame: &mut Frame, picture: &Picture) {
+        let [x, y, k] = picture.place;
+        frame.draw_image(
+            Rectangle::new(
+                Point::new(x * self.size.width, y * self.size.height),
+                Size::new(self.size.width * k, self.size.height * k),
+            ),
+            canvas::Image::new(picture.image.clone()),
+        );
+    }
+}
+
 fn place(frame: &mut Frame, p: &Piece) {
     frame.draw_image(
         Rectangle::new(p.at, p.size),

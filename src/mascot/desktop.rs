@@ -35,6 +35,19 @@ const GAP: f32 = 8.0;
 const DRAG_START: f32 = 5.0;
 /// Seconds to ease from the pose held during a press back to live motion.
 const SETTLE: f32 = 0.25;
+/// How long a Click or Drop artwork reaction shows, in seconds.
+const ART_TIME: f32 = 0.7;
+
+/// The character's replacement pictures, decoded.
+#[derive(Debug, Clone, Default)]
+pub struct Pictures {
+    /// Shown instead of the character while it is carried.
+    pub held: Option<super::rig::Picture>,
+    /// Shown briefly after a click or a drop.
+    pub click: Option<super::rig::Picture>,
+    pub drop: Option<super::rig::Picture>,
+}
+
 /// Most a carried character leans, in radians, before the window cap.
 const CARRY_LEAN: f32 = 0.15;
 /// Gaze reaches its limit this far from the eyes, as a share of the
@@ -266,6 +279,9 @@ pub struct Desktop {
     events: Vec<Event>,
     /// A click plays Compress.
     click_compress: bool,
+    pictures: Pictures,
+    /// A Click or Drop picture showing until this time.
+    showing: Option<(f32, Event)>,
     /// When motion last stepped, and where the feet were then.
     stepped: f32,
     last_anchor: (f32, f32),
@@ -340,6 +356,8 @@ impl Desktop {
             sound: None,
             events: Vec::new(),
             click_compress: true,
+            pictures: Pictures::default(),
+            showing: None,
             stepped: 0.0,
             last_anchor: (anchor.0 as f32, anchor.1 as f32),
             size,
@@ -417,6 +435,24 @@ impl Desktop {
     /// held point).
     pub fn set_click_compress(&mut self, on: bool) {
         self.click_compress = on;
+    }
+
+    pub fn set_pictures(&mut self, pictures: Pictures) {
+        self.pictures = pictures;
+        self.showing = None;
+    }
+
+    /// The picture drawn instead of the character now, if any. Carrying
+    /// shows the held pose; a recent click or drop shows its artwork.
+    fn picture(&self) -> Option<&super::rig::Picture> {
+        if self.press.as_ref().is_some_and(|p| p.dragging) {
+            return self.pictures.held.as_ref();
+        }
+        match self.showing {
+            Some((until, Event::Click)) if self.now < until => self.pictures.click.as_ref(),
+            Some((until, Event::Drop)) if self.now < until => self.pictures.drop.as_ref(),
+            _ => None,
+        }
     }
 
     /// Gesture events (Click, Pickup, Drop) since the last call.
@@ -760,6 +796,8 @@ impl Desktop {
         if press.dragging {
             // Left where it was put, unless that leaves it out of reach.
             self.place();
+            // The held pose ends; the drop's artwork, if any, shows briefly.
+            self.showing = self.pictures.drop.is_some().then_some((self.now + ART_TIME, Event::Drop));
             self.events.push(Event::Drop);
             self.say(Trigger::Drop, o);
             return Some((self.anchor.0 as f64, self.anchor.1 as f64));
@@ -769,6 +807,7 @@ impl Desktop {
         if self.click_compress {
             self.animator.compress(self.now);
         }
+        self.showing = self.pictures.click.is_some().then_some((self.now + ART_TIME, Event::Click));
         self.events.push(Event::Click);
         self.say(Trigger::Click, o);
         None
@@ -883,7 +922,10 @@ impl Desktop {
         }
         let settling = {
             let d = self.target - self.gaze;
-            d.x.hypot(d.y) > 0.01 || self.animator.settling() || self.released.is_some()
+            d.x.hypot(d.y) > 0.01
+                || self.animator.settling()
+                || self.released.is_some()
+                || self.showing.is_some_and(|(until, _)| self.now < until)
         };
         Some(Duration::from_millis(if self.press.is_some() {
             16
@@ -1063,7 +1105,10 @@ impl canvas::Program<Message> for Stage<'_> {
         frame.translate(Vector::new(l.character.x, l.character.y));
         frame.scale(l.scale);
         super::motion::place(&mut frame, pose, d.rig.anchor(), d.rig.size().height);
-        d.rig.draw_pose(&mut frame, pose);
+        match d.picture() {
+            Some(picture) => d.rig.draw_picture(&mut frame, picture),
+            None => d.rig.draw_pose(&mut frame, pose),
+        }
         vec![frame.into_geometry()]
     }
 

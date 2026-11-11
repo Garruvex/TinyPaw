@@ -446,8 +446,10 @@ fn behavior_section<'a>(
             visual_row(m, Event::Click),
             sound_row(m, Event::Click, muted),
             event_row(m, Trigger::Pickup),
+            held_row(m),
             sound_row(m, Event::Pickup, muted),
             event_row(m, Trigger::Drop),
+            visual_row(m, Event::Drop),
             sound_row(m, Event::Drop, muted),
         ]),
         section(vec![h2("On its own"), own.into(), sound_row(m, Event::Idle, muted)]),
@@ -544,18 +546,87 @@ fn character_sounds<'a>(m: &'a crate::mascot::preview::MotionPreview, muted: boo
 /// What an event does to the picture. Compress works with one PNG.
 fn visual_row<'a>(m: &'a crate::mascot::preview::MotionPreview, e: Event) -> Element<'a, Message> {
     use crate::mascot::reactions::Visual;
-    row![
-        text("Visual").size(12).color(theme::MUTED).width(48),
-        pick_list([Visual::None, Visual::Compress], Some(m.visual(e)), move |v| {
-            Message::Ui(UiMsg::ReactionVisual(e, v))
-        })
-        .text_size(13)
-        .padding([5, 8])
-        .style(theme::select),
-        hint("Compress briefly shortens and widens the picture after a click, then restores it."),
+    let choices: Vec<Visual> = if e == Event::Click {
+        vec![Visual::None, Visual::Compress, Visual::Artwork]
+    } else {
+        vec![Visual::None, Visual::Artwork]
+    };
+    let visual = m.visual(e);
+    let mut block = column![
+        row![
+            text("Visual").size(12).color(theme::MUTED).width(48),
+            pick_list(choices, Some(visual), move |v| Message::Ui(UiMsg::ReactionVisual(e, v)))
+                .text_size(13)
+                .padding([5, 8])
+                .style(theme::select),
+            hint(match visual {
+                Visual::Compress => "Briefly shortens and widens the picture after a click, then restores it.",
+                Visual::Artwork => "Shows another whole-character PNG for a moment, then the normal one.",
+                Visual::None => "The picture stays as it is.",
+            }),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center)
     ]
-    .spacing(6)
-    .align_y(Alignment::Center)
+    .spacing(6);
+    if let Some(art) = m.art(e) {
+        block = block.push(picture_controls(e, false, art.place));
+    }
+    block.into()
+}
+
+/// Pick up → Held pose: keep the artwork, or show another PNG while carried.
+fn held_row<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Element<'a, Message> {
+    let small = |label: &'static str, msg: Message| {
+        button(text(label).size(12)).padding([5, 10]).style(theme::secondary).on_press(msg)
+    };
+    match m.held() {
+        None => row![
+            text("Held pose").size(12).color(theme::MUTED).width(64),
+            text("Keep current artwork").size(13),
+            small("Choose PNG…", Message::Ui(UiMsg::ReactionPicture(Event::Pickup))),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .into(),
+        Some(art) => column![
+            row![
+                text("Held pose").size(12).color(theme::MUTED).width(64),
+                text("Custom PNG while carried").size(13),
+                small("Change…", Message::Ui(UiMsg::ReactionPicture(Event::Pickup))),
+                small("Clear", Message::Ui(UiMsg::ReactionHeldClear)),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+            picture_controls(Event::Pickup, true, art.place),
+            hint("Line the held pose up so the part people grab sits where it does in the normal pose; the preview shows it while carried."),
+        ]
+        .spacing(6)
+        .into(),
+    }
+}
+
+/// Moves and resizes a replacement picture on the stage.
+fn picture_controls<'a>(e: Event, held: bool, place: [f32; 3]) -> Element<'a, Message> {
+    let slider_row = |label: &'static str, which: usize, range: std::ops::RangeInclusive<f32>, step: f32| {
+        row![
+            text(label).size(12).color(theme::MUTED).width(64),
+            slider(range, place[which], move |v| Message::Ui(UiMsg::ReactionPlace(e, held, which, v)))
+                .step(step)
+                .style(theme::range),
+            text(if which == 2 { format!("{:.0}%", place[2] * 100.0) } else { format!("{:+.0}%", place[which] * 100.0) })
+                .size(12)
+                .width(48),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+    };
+    column![
+        slider_row("Left/right", 0, -0.5..=0.5, 0.005),
+        slider_row("Up/down", 1, -0.5..=0.5, 0.005),
+        slider_row("Size", 2, 0.25..=2.0, 0.01),
+    ]
+    .spacing(4)
     .into()
 }
 
@@ -1085,7 +1156,10 @@ impl canvas::Program<Message> for MotionStage<'_> {
         frame.translate(origin);
         frame.scale(k);
         crate::mascot::motion::place(&mut frame, &pose, feet, canvas_size.height);
-        rig.draw_pose(&mut frame, &pose);
+        match self.preview.picture() {
+            Some(picture) => rig.draw_picture(&mut frame, &picture),
+            None => rig.draw_pose(&mut frame, &pose),
+        }
         vec![frame.into_geometry()]
     }
 }

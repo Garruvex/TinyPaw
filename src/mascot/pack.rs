@@ -137,6 +137,17 @@ impl Character {
         }
     }
 
+    /// A reaction picture, decoded on the character's stage.
+    pub fn reaction_image(&self, art: &super::reactions::Art) -> Option<RgbaImage> {
+        let canvas = match &self.folder {
+            None => bundled_manifest().canvas,
+            Some(folder) => read_manifest(folder).ok()?.canvas,
+        };
+        let path = self.sound_path(&art.image)?;
+        let bytes = fs::read(&path).ok()?;
+        decode_png(&bytes, &path.to_string_lossy(), canvas).ok()
+    }
+
     /// What `e` does to the picture, pack under user.
     pub fn reaction_visual(&self, e: super::reactions::Event) -> super::reactions::Visual {
         let user = load_overrides(self.id).reactions.unwrap_or_default();
@@ -680,6 +691,15 @@ impl Manifest {
                 if !out.contains(&a) {
                     out.push(a);
                 }
+            }
+        }
+        // Held poses and artwork reactions: canvas-sized, like any layer,
+        // so they count against the image and memory limits too.
+        for r in self.reactions.images() {
+            if let SoundRef::Pack(a) = r
+                && !out.contains(&a.as_str())
+            {
+                out.push(a);
             }
         }
         out
@@ -1887,6 +1907,49 @@ pub fn import_reaction_sound(id: &str, from: &Path) -> Result<SoundRef, String> 
     Ok(SoundRef::User(file))
 }
 
+/// Copies a PNG picked for a held pose or artwork reaction into managed
+/// storage, fitted onto the character's stage: scaled to the stage height
+/// at most, centred and standing on the stage's bottom, so it starts
+/// roughly registered with the normal pose and can be aligned from there.
+pub fn import_reaction_image(id: &str, from: &Path, canvas: (u32, u32)) -> Result<SoundRef, String> {
+    let root = user_dir().ok_or("no per-user data folder")?;
+    if fs::metadata(from).map_err(|e| e.to_string())?.len() > MAX_FILE {
+        return Err("the PNG is larger than 64 MiB".into());
+    }
+    let bytes = fs::read(from).map_err(|e| e.to_string())?;
+    check_source_dimensions(&bytes)?;
+    let art = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+        .map_err(|e| format!("not a readable PNG ({e})"))?
+        .to_rgba8();
+    let (trimmed, _) = trim(&art).ok_or("that PNG is empty")?;
+    let k = (canvas.1 as f32 / trimmed.height() as f32)
+        .min(canvas.0 as f32 / trimmed.width() as f32)
+        .min(1.0);
+    let place = super::placement::Placement {
+        x: (canvas.0 as f32 - trimmed.width() as f32 * k) / 2.0,
+        y: canvas.1 as f32 - trimmed.height() as f32 * k,
+        scale: k,
+        angle: 0.0,
+    };
+    let fitted = super::placement::bake(&trimmed, place, canvas);
+    let dir = user_sounds(&root, id);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut n = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let file = loop {
+        let name = format!("art-{n}.png");
+        if !dir.join(&name).exists() {
+            break name;
+        }
+        n += 1;
+    };
+    fitted
+        .save_with_format(dir.join(&file), image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    Ok(SoundRef::User(file))
+}
+
 /// Deletes the user's sounds that neither the saved lines nor the saved
 /// reactions use any more.
 pub fn prune_line_sounds(id: &str, keep: &Lines, reactions: Option<&super::reactions::Config>) {
@@ -1895,6 +1958,7 @@ pub fn prune_line_sounds(id: &str, keep: &Lines, reactions: Option<&super::react
         .sounds()
         .into_iter()
         .chain(reactions.map(|r| r.files()).unwrap_or_default())
+        .chain(reactions.map(|r| r.images()).unwrap_or_default())
         .filter_map(|s| match s {
             SoundRef::User(f) => Some(f.as_str()),
             SoundRef::Pack(_) => None,
@@ -2042,6 +2106,21 @@ fn bake(
         merged.map_files(|r| match r {
             SoundRef::User(file) => {
                 let to = format!("sounds/{file}");
+                match user_sound(file) {
+                    Some(from) => {
+                        if !user_files.iter().any(|(_, t)| *t == to) {
+                            user_files.push((from, to.clone()));
+                        }
+                    }
+                    None => failed = Some("no per-user data folder"),
+                }
+                SoundRef::Pack(to)
+            }
+            pack => pack.clone(),
+        });
+        merged.map_images(|r| match r {
+            SoundRef::User(file) => {
+                let to = format!("reactions/{file}");
                 match user_sound(file) {
                     Some(from) => {
                         if !user_files.iter().any(|(_, t)| *t == to) {
@@ -2726,6 +2805,55 @@ mod tests {
         assert!(!s.get(Event::Drop).enabled);
         // A pack naming a missing reaction sound fails its import.
         fs::remove_file(src.join("sounds/boop.wav")).unwrap();
+        assert!(import_folder_into(&root, &src, &[], OnDuplicate::KeepBoth).is_err());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn held_poses_are_pack_images_that_install_and_export() {
+        use super::super::reactions::{Art, Config, Event};
+        let dir = scratch("held-pose");
+        let src = dir.join("src");
+        fs::create_dir_all(src.join("sit")).unwrap();
+        let block = |x0: u32, x1: u32| {
+            RgbaImage::from_fn(100, 100, |x, y| {
+                let on = (x0..x1).contains(&x) && (50..95).contains(&y);
+                image::Rgba(if on { [40, 80, 200, 255] } else { [0, 0, 0, 0] })
+            })
+        };
+        block(30, 70).save(src.join("sit/body.png")).unwrap();
+        fs::create_dir_all(src.join("reactions")).unwrap();
+        block(20, 80).save(src.join("reactions/held.png")).unwrap();
+        fs::write(
+            src.join(MANIFEST),
+            r#"{"schema_version":1,"id":"dangler","name":"Dangler","canvas":[100,100],
+              "default_pose":"sit","poses":{"sit":{"ground_anchor":[0.5,0.95],"body":"sit/body.png"}},
+              "reactions":{"pickup":{"visual":"none","held_pose":{"image":"reactions/held.png","place":[0.02,-0.04,1.0]}}}}"#,
+        )
+        .unwrap();
+        let root = dir.join("characters");
+        let Imported::Installed(c) = import_folder_into(&root, &src, &[], OnDuplicate::Ask).unwrap() else {
+            panic!("installed");
+        };
+        assert!(root.join("dangler/reactions/held.png").exists());
+        let held = super::super::reactions::held(&c.pack_reactions(), &Config::default()).unwrap();
+        assert!(c.reaction_image(&held).is_some(), "decodes on the stage");
+        // A user Use artwork picture travels with Export.
+        let user = dir.join("user");
+        fs::create_dir_all(&user).unwrap();
+        block(10, 90).save(user.join("art-5.png")).unwrap();
+        let mut layer = Config::default();
+        let mut entry = super::super::reactions::Entry::default();
+        entry.visual = Some(super::super::reactions::Visual::Artwork);
+        entry.art = Some(Art::new(SoundRef::User("art-5.png".into())));
+        layer.set_entry(Event::Drop, Some(entry));
+        let o = Overrides { reactions: Some(layer), ..Overrides::default() };
+        let out = dir.join("out");
+        fs::create_dir_all(&out).unwrap();
+        let folder = export_with(&c, &out, &o, |f| Some(user.join(f))).unwrap();
+        assert!(folder.join("reactions/art-5.png").exists() && folder.join("reactions/held.png").exists());
+        // A held pose on another stage size is refused.
+        RgbaImage::new(50, 50).save(src.join("reactions/held.png")).unwrap();
         assert!(import_folder_into(&root, &src, &[], OnDuplicate::KeepBoth).is_err());
         fs::remove_dir_all(&dir).unwrap();
     }

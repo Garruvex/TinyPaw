@@ -59,6 +59,11 @@ pub struct MotionPreview {
     pub reactions: Config,
     reactions_saved: Config,
     reactions_pack: Config,
+    /// Decoded reaction pictures by file, for the draft's held pose and
+    /// artwork reactions.
+    pictures: Vec<(super::lines::SoundRef, iced::advanced::image::Handle)>,
+    /// A Click or Drop picture showing until this time.
+    showing: Option<(f32, Event)>,
     picker: Picker,
     speech: Option<Speech>,
     sound: Option<SoundRef>,
@@ -83,6 +88,8 @@ impl MotionPreview {
             reactions_saved: reactions.clone(),
             reactions,
             reactions_pack: pack_reactions,
+            pictures: Vec::new(),
+            showing: None,
             bop_saved: rig.bop(),
             bop_default: pack_bop,
             lines_saved: lines.clone(),
@@ -225,6 +232,76 @@ impl MotionPreview {
 
     pub fn set_visual(&mut self, e: Event, v: super::reactions::Visual) {
         self.entry_mut(e).visual = Some(v);
+    }
+
+    /// Makes a decoded reaction picture available to the preview.
+    pub fn add_picture(&mut self, file: super::lines::SoundRef, image: iced::advanced::image::Handle) {
+        self.pictures.retain(|(f, _)| *f != file);
+        self.pictures.push((file, image));
+    }
+
+    /// Every picture the draft's reactions name, for loading.
+    pub fn picture_files(&self) -> Vec<super::lines::SoundRef> {
+        let mut out: Vec<super::lines::SoundRef> = Vec::new();
+        for r in self.reactions_pack.images().into_iter().chain(self.reactions.images()) {
+            if !out.contains(r) {
+                out.push(r.clone());
+            }
+        }
+        out
+    }
+
+    fn picture_for(&self, art: Option<super::reactions::Art>) -> Option<super::rig::Picture> {
+        let art = art?;
+        let image = self.pictures.iter().find(|(f, _)| *f == art.image)?.1.clone();
+        Some(super::rig::Picture { image, place: art.place })
+    }
+
+    pub fn held(&self) -> Option<super::reactions::Art> {
+        super::reactions::held(&self.reactions_pack, &self.reactions)
+    }
+
+    pub fn art(&self, e: Event) -> Option<super::reactions::Art> {
+        super::reactions::art(&self.reactions_pack, &self.reactions, e)
+    }
+
+    /// The held pose while carried (`Some`) or none; keeps pickup's other
+    /// settings.
+    pub fn set_held(&mut self, art: Option<super::reactions::Art>) {
+        self.entry_mut(Event::Pickup).held = art;
+    }
+
+    /// Use artwork for `e` with `art`, or back to no visual.
+    pub fn set_art(&mut self, e: Event, art: Option<super::reactions::Art>) {
+        let entry = self.entry_mut(e);
+        entry.visual = Some(if art.is_some() {
+            super::reactions::Visual::Artwork
+        } else {
+            super::reactions::Visual::None
+        });
+        entry.art = art;
+    }
+
+    /// Nudges a picture's alignment: `which` is 0 x, 1 y, 2 scale.
+    pub fn set_place(&mut self, e: Event, held: bool, which: usize, value: f32) {
+        let entry = self.entry_mut(e);
+        let art = if held { entry.held.as_mut() } else { entry.art.as_mut() };
+        if let Some(art) = art
+            && which < 3
+        {
+            art.place[which] = if which == 2 { value.clamp(0.1, 4.0) } else { value.clamp(-1.0, 1.0) };
+        }
+    }
+
+    /// The picture the preview draws instead of the character now.
+    pub fn picture(&self) -> Option<super::rig::Picture> {
+        if let Some((Test::DragLeft | Test::DragRight, _)) = self.test {
+            return self.picture_for(self.held());
+        }
+        match self.showing {
+            Some((until, e)) if self.now < until => self.picture_for(self.art(e)),
+            _ => None,
+        }
     }
 
     /// Back to the pack's reaction sounds (unsaved until Save).
@@ -377,8 +454,10 @@ impl MotionPreview {
                 Test::Click if t < PRESS => inputs.pressed = true,
                 Test::Click => {
                     self.animator.clicked(self.now);
-                    if self.visual(Event::Click) == super::reactions::Visual::Compress {
-                        self.animator.compress(self.now);
+                    match self.visual(Event::Click) {
+                        super::reactions::Visual::Compress => self.animator.compress(self.now),
+                        super::reactions::Visual::Artwork => self.showing = Some((self.now + 0.7, Event::Click)),
+                        super::reactions::Visual::None => {}
                     }
                     self.test = None;
                 }
@@ -394,9 +473,14 @@ impl MotionPreview {
                     inputs.music = inputs.music.max((t / MUSIC * std::f32::consts::PI).sin());
                     inputs.beat = Some((t * 2.0).fract());
                 }
-                Test::DragLeft | Test::DragRight | Test::Speak | Test::Music | Test::Say(_) => {
-                    self.test = None
+                Test::DragLeft | Test::DragRight => {
+                    // Dropped: the drop's artwork shows briefly.
+                    if self.visual(Event::Drop) == super::reactions::Visual::Artwork {
+                        self.showing = Some((self.now + 0.7, Event::Drop));
+                    }
+                    self.test = None;
                 }
+                Test::Speak | Test::Music | Test::Say(_) => self.test = None,
             }
         }
         self.pose = self.animator.step(&self.rig.motion_parts(), &inputs);
@@ -491,6 +575,34 @@ mod tests {
         assert_eq!(p.sounds().get(Event::Click).cooldown_ms, 600);
         p.discard();
         assert!(!p.unsaved() && p.overrides(Default::default()).reactions.is_none());
+    }
+
+    #[test]
+    fn the_held_pose_shows_while_carried_and_drop_art_after() {
+        use super::super::reactions::Art;
+        let mut p = yohta();
+        let file = super::super::lines::SoundRef::User("art-1.png".into());
+        p.add_picture(file.clone(), iced::advanced::image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]));
+        p.set_held(Some(Art::new(file.clone())));
+        p.set_art(Event::Drop, Some(Art::new(file.clone())));
+        p.set_place(Event::Pickup, true, 0, 0.05);
+        assert_eq!(p.held().unwrap().place[0], 0.05);
+        assert!(p.picture().is_none(), "at rest the normal art shows");
+        p.test(Test::DragRight);
+        p.tick(0.05, false, false, 0.0, None);
+        assert!(p.picture().is_some(), "carried: the held pose");
+        for _ in 0..30 {
+            p.tick(0.05, false, false, 0.0, None);
+        }
+        assert!(p.picture().is_some(), "just dropped: the drop artwork");
+        for _ in 0..30 {
+            p.tick(0.05, false, false, 0.0, None);
+        }
+        assert!(p.picture().is_none(), "then the normal art again");
+        // Clearing the held pose keeps Pick up's other settings.
+        p.set_reaction_sound(Event::Pickup, Some(Sound::Builtin("duck-toy")));
+        p.set_held(None);
+        assert!(p.held().is_none() && p.sounds().get(Event::Pickup).enabled);
     }
 
     #[test]

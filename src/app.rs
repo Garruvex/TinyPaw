@@ -53,6 +53,7 @@ pub enum Message {
     CharacterFolderPicked(Option<PathBuf>),
     CharacterWorked(u64, Result<CharacterWork, String>),
     ReactionWavPicked(crate::mascot::reactions::Event, Option<PathBuf>),
+    ReactionPicturePicked(crate::mascot::reactions::Event, Option<PathBuf>),
     /// The artwork draft built as a rig for Test character, by request.
     DraftRig(u64, Box<crate::mascot::rig::Rig>),
     CharacterExportPicked(Option<PathBuf>),
@@ -670,6 +671,31 @@ impl App {
                 }
             }
             Message::ReactionWavPicked(_, None) => {}
+            Message::ReactionPicturePicked(e, Some(path)) => {
+                use crate::mascot::reactions::{Art, Event};
+                if let Some(p) = &mut self.motion_preview {
+                    let canvas = p.rig().size();
+                    let canvas = (canvas.width as u32, canvas.height as u32);
+                    match characters::import_reaction_image(p.id, &path, canvas) {
+                        Ok(file) => {
+                            let art = Art::new(file.clone());
+                            let c = self.characters.iter().find(|c| c.id == p.id);
+                            if let Some(img) = c.and_then(|c| c.reaction_image(&art)) {
+                                p.add_picture(file, image::Handle::from_rgba(img.width(), img.height(), img.into_raw()));
+                            }
+                            if e == Event::Pickup {
+                                p.set_held(Some(art));
+                                p.test(crate::mascot::preview::Test::DragRight);
+                            } else {
+                                p.set_art(e, Some(art));
+                            }
+                            self.notice = None;
+                        }
+                        Err(err) => self.notice = Some(format!("Could not use that picture: {err}")),
+                    }
+                }
+            }
+            Message::ReactionPicturePicked(_, None) => {}
             Message::DraftRig(request, rig) => {
                 if request == self.draft_rig_request
                     && let Some(e) = &self.art
@@ -1329,6 +1355,14 @@ impl App {
                     characters::load_overrides(c.id).reactions.unwrap_or_default(),
                     c.pack_reactions(),
                 ));
+                if let Some(p) = &mut self.motion_preview {
+                    for file in p.picture_files() {
+                        let art = crate::mascot::reactions::Art::new(file.clone());
+                        if let Some(img) = c.reaction_image(&art) {
+                            p.add_picture(file, image::Handle::from_rgba(img.width(), img.height(), img.into_raw()));
+                        }
+                    }
+                }
                 self.motion_failed = None;
                 self.motion_ticked = None;
             }
@@ -1430,11 +1464,13 @@ impl App {
                     c.reaction_visual(crate::mascot::reactions::Event::Click)
                         == crate::mascot::reactions::Visual::Compress
                 });
+                let pictures = c.map(character_pictures).unwrap_or_default();
                 match &mut self.mascot {
                     Some(m) => {
                         m.set_rig(selected, rig);
                         m.set_lines(lines, &options);
                         m.set_click_compress(compress);
+                        m.set_pictures(pictures);
                     }
                     None => {
                         let (mut m, open) = crate::mascot::desktop::Desktop::open(
@@ -1442,6 +1478,7 @@ impl App {
                         );
                         m.set_lines(lines, &options);
                         m.set_click_compress(compress);
+                        m.set_pictures(pictures);
                         self.mascot = Some(m);
                         return open.map(Message::WindowOpened);
                     }
@@ -1656,10 +1693,17 @@ impl App {
             let lines = p.lines.clone();
             let rig = self.character_rig(id);
             let options = self.mascot_options();
+            let pictures = self
+                .characters
+                .iter()
+                .find(|c| c.id == id)
+                .map(character_pictures)
+                .unwrap_or_default();
             if let Some(m) = &mut self.mascot {
                 m.set_rig(id, rig);
                 m.set_lines(lines, &options);
                 m.set_click_compress(compress);
+                m.set_pictures(pictures);
             }
         }
         Ok(())
@@ -2357,6 +2401,34 @@ impl App {
             UiMsg::ReactionIdleInterval(lo, hi) => {
                 if let Some(p) = &mut self.motion_preview {
                     p.sound_settings_mut().idle_interval = (lo.min(hi), lo.max(hi));
+                }
+            }
+            UiMsg::ReactionVisual(e, crate::mascot::reactions::Visual::Artwork)
+                if self.motion_preview.as_ref().is_some_and(|p| p.art(e).is_none()) =>
+            {
+                // Use artwork starts by choosing its PNG.
+                return self.ui_message(UiMsg::ReactionPicture(e), now, out);
+            }
+            UiMsg::ReactionPicture(e) => {
+                return Task::perform(
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Choose a transparent PNG of the whole character")
+                        .add_filter("PNG image", &["png"])
+                        .pick_file(),
+                    move |f| Message::ReactionPicturePicked(e, f.map(|f| f.path().to_path_buf())),
+                );
+            }
+            UiMsg::ReactionHeldClear => {
+                if let Some(p) = &mut self.motion_preview {
+                    p.set_held(None);
+                }
+            }
+            UiMsg::ReactionPlace(e, held, which, value) => {
+                if let Some(p) = &mut self.motion_preview {
+                    p.set_place(e, held, which, value);
+                    if held {
+                        p.test(crate::mascot::preview::Test::DragRight);
+                    }
                 }
             }
             UiMsg::ReactionVisual(e, v) => {
@@ -3281,6 +3353,28 @@ impl Outcomes {
 const _: &str = wheel_feature::OPEN;
 
 /// Filesystem and PNG work runs independently of Iced's event executor.
+/// A character's replacement pictures for the desktop: its held pose and
+/// Click and Drop artwork, from the pack and the user's overrides.
+#[cfg(windows)]
+fn character_pictures(c: &Character) -> crate::mascot::desktop::Pictures {
+    use crate::mascot::reactions::{self, Event};
+    let pack = c.pack_reactions();
+    let user = characters::load_overrides(c.id).reactions.unwrap_or_default();
+    let picture = |art: Option<reactions::Art>| {
+        let art = art?;
+        let img = c.reaction_image(&art)?;
+        Some(crate::mascot::rig::Picture {
+            image: image::Handle::from_rgba(img.width(), img.height(), img.into_raw()),
+            place: art.place,
+        })
+    };
+    crate::mascot::desktop::Pictures {
+        held: picture(reactions::held(&pack, &user)),
+        click: picture(reactions::art(&pack, &user, Event::Click)),
+        drop: picture(reactions::art(&pack, &user, Event::Drop)),
+    }
+}
+
 fn character_work(
     id: u64,
     work: impl FnOnce() -> Result<CharacterWork, String> + Send + 'static,
