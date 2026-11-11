@@ -229,6 +229,9 @@ pub struct Entry {
     pub art: Option<Art>,
     /// Pick up only: the whole-character picture shown while carried.
     pub held: Option<Art>,
+    /// Drop only: `Some(true)` falls to the screen edge after release,
+    /// `Some(false)` stays where it was put.
+    pub fall: Option<bool>,
     pub other: Map<String, Json>,
 }
 
@@ -385,6 +388,9 @@ impl Config {
                 if let Some(held) = &entry.held {
                     v.insert("held_pose".into(), held.to_json());
                 }
+                if let Some(fall) = entry.fall {
+                    v.insert("after_release".into(), json!(if fall { "fall" } else { "stay" }));
+                }
                 let t = &entry.sound;
                 v.insert("enabled".into(), json!(t.enabled));
                 match &t.sound {
@@ -485,14 +491,21 @@ fn parse_entry(v: &Json, user: bool) -> Result<Entry, String> {
         Json::Null => None,
         o => Some(parse_art(o, user)?),
     };
+    let fall = match v["after_release"].as_str() {
+        None if v["after_release"].is_null() => None,
+        Some("stay") => Some(false),
+        Some("fall") => Some(true),
+        _ => return Err("after_release must be stay or fall".into()),
+    };
     let mut other = map.clone();
-    for key in ["enabled", "sound", "gain", "cooldown_ms", "visual", "held_pose"] {
+    for key in ["enabled", "sound", "gain", "cooldown_ms", "visual", "held_pose", "after_release"] {
         other.remove(key);
     }
     Ok(Entry {
         visual,
         art,
         held,
+        fall,
         sound: TriggerSound {
             // Enabled without a sound plays nothing; it reads as off.
             enabled: enabled && sound.is_some(),
@@ -542,6 +555,14 @@ pub fn art(pack: &Config, user: &Config, e: Event) -> Option<Art> {
     }
     let set = |c: &Config| c.entry(e).filter(|x| x.visual.is_some()).and_then(|x| x.art.clone());
     set(user).or_else(|| set(pack))
+}
+
+/// Whether a released character falls to the screen edge. Off unless set.
+pub fn falls(pack: &Config, user: &Config) -> bool {
+    user.entry(Event::Drop)
+        .or(pack.entry(Event::Drop))
+        .and_then(|e| e.fall)
+        .unwrap_or(false)
 }
 
 /// The held pose while carried, if any: the user's Pick up entry replaces
@@ -890,7 +911,9 @@ mod tests {
         assert_eq!(visual(&Config::default(), &c, Event::Drop), Visual::Artwork);
         assert!(art(&Config::default(), &c, Event::Drop).is_some());
         assert_eq!(c.images().len(), 2);
-        assert_eq!(c.entry(Event::Drop).unwrap().other["after_release"], "stay");
+        assert_eq!(c.entry(Event::Drop).unwrap().fall, Some(false));
+        assert!(!falls(&Config::default(), &c));
+        assert!(Config::parse(&json!({ "drop": { "after_release": "bounce" } }), true).is_err());
         assert_eq!(Config::parse(&c.to_json(), true).unwrap(), c);
         for bad in [
             json!({ "pickup": { "held_pose": { "image": "../x.png" } } }),

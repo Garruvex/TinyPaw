@@ -35,6 +35,18 @@ const GAP: f32 = 8.0;
 const DRAG_START: f32 = 5.0;
 /// Seconds to ease from the pose held during a press back to live motion.
 const SETTLE: f32 = 0.25;
+/// Fall acceleration, in logical pixels per second squared.
+const GRAVITY: f32 = 2600.0;
+
+/// A released character falling straight down to its landing row.
+#[derive(Debug, Clone, Copy)]
+struct Fall {
+    /// Physical pixels per second.
+    speed: f32,
+    /// The anchor's landing y, in physical pixels.
+    land: f32,
+}
+
 /// How long a Click or Drop artwork reaction shows, in seconds.
 const ART_TIME: f32 = 0.7;
 
@@ -282,6 +294,9 @@ pub struct Desktop {
     pictures: Pictures,
     /// A Click or Drop picture showing until this time.
     showing: Option<(f32, Event)>,
+    /// After release, fall to the screen edge instead of staying.
+    fall_on_release: bool,
+    falling: Option<Fall>,
     /// When motion last stepped, and where the feet were then.
     stepped: f32,
     last_anchor: (f32, f32),
@@ -358,6 +373,8 @@ impl Desktop {
             click_compress: true,
             pictures: Pictures::default(),
             showing: None,
+            fall_on_release: false,
+            falling: None,
             stepped: 0.0,
             last_anchor: (anchor.0 as f32, anchor.1 as f32),
             size,
@@ -437,6 +454,13 @@ impl Desktop {
         self.click_compress = on;
     }
 
+    pub fn set_fall(&mut self, on: bool) {
+        self.fall_on_release = on;
+        if !on {
+            self.falling = None;
+        }
+    }
+
     pub fn set_pictures(&mut self, pictures: Pictures) {
         self.pictures = pictures;
         self.showing = None;
@@ -514,6 +538,8 @@ impl Desktop {
                 (Task::batch(tasks), None)
             }
             Msg::Pressed => {
+                // Picking it up mid-fall stops the fall at once.
+                self.falling = None;
                 if let (Some(cursor), Some(rect)) =
                     (native::cursor_pos(), native::window_rect(self.hwnd))
                 {
@@ -569,6 +595,9 @@ impl Desktop {
         self.left_down = left;
         self.right_down = right;
         let mut save = None;
+        if self.press.is_none() && let Some(landed) = self.step_fall(k) {
+            save = Some(landed);
+        }
 
         if let Some(press) = &mut self.press {
             let delta = (cursor.0 - press.cursor.0, cursor.1 - press.cursor.1);
@@ -796,6 +825,9 @@ impl Desktop {
         if press.dragging {
             // Left where it was put, unless that leaves it out of reach.
             self.place();
+            if self.fall_on_release {
+                self.start_fall(o.reduced);
+            }
             // The held pose ends; the drop's artwork, if any, shows briefly.
             self.showing = self.pictures.drop.is_some().then_some((self.now + ART_TIME, Event::Drop));
             self.events.push(Event::Drop);
@@ -872,7 +904,43 @@ impl Desktop {
         self.place();
     }
 
+    /// Starts falling straight down from the release spot to the bottom of
+    /// the release monitor's usable area. Reduced motion lands at once.
+    fn start_fall(&mut self, reduced: bool) {
+        let (work, _) = native::monitor_at(self.anchor.0 as i32, self.anchor.1 as i32 - 1, false);
+        let land = work.3 as f32;
+        if self.anchor.1 >= land - 0.5 {
+            return;
+        }
+        if reduced {
+            self.anchor.1 = land;
+            self.place();
+        } else {
+            self.falling = Some(Fall { speed: 0.0, land });
+        }
+    }
+
+    /// One fall step; on landing, the spot to save. Landing is not a Drop.
+    fn step_fall(&mut self, k: f32) -> Option<(f64, f64)> {
+        let fall = self.falling.as_mut()?;
+        let dt = (self.now - self.stepped).clamp(0.0, 0.05);
+        fall.speed += GRAVITY * k * dt;
+        let y = (self.anchor.1 + fall.speed * dt).min(fall.land);
+        let landed = y >= fall.land;
+        self.anchor.1 = y;
+        let (x, oy) = self.layout.origin(self.anchor, k);
+        native::move_window(self.hwnd, x, oy, None);
+        if landed {
+            self.falling = None;
+            // A squash on landing, where motion allows.
+            self.animator.compress(self.now);
+            return Some((self.anchor.0 as f64, self.anchor.1 as f64));
+        }
+        None
+    }
+
     pub fn reset_position(&mut self) {
+        self.falling = None;
         self.anchor = (feature::UNPLACED as f32, feature::UNPLACED as f32);
         self.menu = None;
         self.place();
@@ -895,6 +963,7 @@ impl Desktop {
         }
         self.hidden = hidden;
         if hidden {
+            self.falling = None;
             // A cancelled gesture: no Drop is invented.
             self.speech = None;
             self.menu = None;
@@ -927,7 +996,7 @@ impl Desktop {
                 || self.released.is_some()
                 || self.showing.is_some_and(|(until, _)| self.now < until)
         };
-        Some(Duration::from_millis(if self.press.is_some() {
+        Some(Duration::from_millis(if self.press.is_some() || self.falling.is_some() {
             16
         } else if self.menu.is_some() || (o.idle && !o.reduced) || settling || o.music > 0.001 {
             33
@@ -1379,6 +1448,39 @@ mod tests {
         d.now += 0.001;
         d.step_motion(&o, 1.0);
         assert!(d.pose.carry.is_some_and(|(at, a)| at == pivot && a.abs() <= leaned + 1e-4));
+    }
+
+    #[test]
+    fn a_released_character_falls_once_and_a_pickup_catches_it() {
+        let (mut d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 300.0), 5, false);
+        let o = Options {
+            eyes: false,
+            idle: false,
+            reduced: false,
+            lines: false,
+            quiet: true,
+            idle_every: (60.0, 300.0),
+            music: 0.0,
+            beat: None,
+        };
+        d.falling = Some(Fall { speed: 0.0, land: 700.0 });
+        let mut saves = Vec::new();
+        for _ in 0..200 {
+            d.now += 0.016;
+            if let Some(spot) = d.step_fall(1.0) {
+                saves.push(spot);
+            }
+            d.step_motion(&o, 1.0);
+        }
+        assert_eq!(saves, [(500.0, 700.0)], "lands once, exactly on the edge");
+        assert!(d.take_events().is_empty(), "landing is not a Drop");
+        // Picking it up mid-fall stops the fall at once.
+        d.falling = Some(Fall { speed: 0.0, land: 900.0 });
+        let _ = d.update(Msg::Pressed, &o);
+        assert!(d.falling.is_none());
+        // Off unless the character asks for it.
+        d.set_fall(false);
+        assert!(!d.fall_on_release);
     }
 
     #[test]

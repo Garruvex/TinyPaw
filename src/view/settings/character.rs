@@ -450,6 +450,19 @@ fn behavior_section<'a>(
             sound_row(m, Event::Pickup, muted),
             event_row(m, Trigger::Drop),
             visual_row(m, Event::Drop),
+            row![
+                text("After release").size(12).color(theme::MUTED).width(84),
+                pick_list(["Stay here", "Fall"], Some(if m.falls() { "Fall" } else { "Stay here" }), |c| {
+                    Message::Ui(UiMsg::ReactionFall(c == "Fall"))
+                })
+                .text_size(13)
+                .padding([5, 8])
+                .style(theme::select),
+                hint("Fall drops it straight down to the bottom of the screen it was released on. Picking it up mid-fall catches it."),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .into(),
             sound_row(m, Event::Drop, muted),
         ]),
         section(vec![h2("On its own"), own.into(), sound_row(m, Event::Idle, muted)]),

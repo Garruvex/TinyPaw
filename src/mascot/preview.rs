@@ -282,6 +282,14 @@ impl MotionPreview {
         entry.art = art;
     }
 
+    pub fn falls(&self) -> bool {
+        super::reactions::falls(&self.reactions_pack, &self.reactions)
+    }
+
+    pub fn set_fall(&mut self, fall: bool) {
+        self.entry_mut(Event::Drop).fall = Some(fall);
+    }
+
     /// Nudges a picture's alignment: `which` is 0 x, 1 y, 2 scale.
     pub fn set_place(&mut self, e: Event, held: bool, which: usize, value: f32) {
         let entry = self.entry_mut(e);

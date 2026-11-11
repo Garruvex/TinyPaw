@@ -2843,9 +2843,11 @@ mod tests {
         fs::create_dir_all(&user).unwrap();
         block(10, 90).save(user.join("art-5.png")).unwrap();
         let mut layer = Config::default();
-        let mut entry = super::super::reactions::Entry::default();
-        entry.visual = Some(super::super::reactions::Visual::Artwork);
-        entry.art = Some(Art::new(SoundRef::User("art-5.png".into())));
+        let entry = super::super::reactions::Entry {
+            visual: Some(super::super::reactions::Visual::Artwork),
+            art: Some(Art::new(SoundRef::User("art-5.png".into()))),
+            ..Default::default()
+        };
         layer.set_entry(Event::Drop, Some(entry));
         let o = Overrides { reactions: Some(layer), ..Overrides::default() };
         let out = dir.join("out");

@@ -132,6 +132,8 @@ pub enum UiMsg {
     /// Choose the PNG for an artwork reaction, or Pick up's held pose.
     ReactionPicture(crate::mascot::reactions::Event),
     ReactionHeldClear,
+    /// Drop → After release: fall to the screen edge (true) or stay.
+    ReactionFall(bool),
     /// Align a picture: event, whether it's the held pose, x/y/scale, value.
     ReactionPlace(crate::mascot::reactions::Event, bool, usize, f32),
     ArtEyeStyle(crate::mascot::editor::EyeStyle),

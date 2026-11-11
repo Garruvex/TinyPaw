@@ -1465,12 +1465,17 @@ impl App {
                         == crate::mascot::reactions::Visual::Compress
                 });
                 let pictures = c.map(character_pictures).unwrap_or_default();
+                let fall = c.is_some_and(|c| {
+                    let user = characters::load_overrides(c.id).reactions.unwrap_or_default();
+                    crate::mascot::reactions::falls(&c.pack_reactions(), &user)
+                });
                 match &mut self.mascot {
                     Some(m) => {
                         m.set_rig(selected, rig);
                         m.set_lines(lines, &options);
                         m.set_click_compress(compress);
                         m.set_pictures(pictures);
+                        m.set_fall(fall);
                     }
                     None => {
                         let (mut m, open) = crate::mascot::desktop::Desktop::open(
@@ -1479,6 +1484,7 @@ impl App {
                         m.set_lines(lines, &options);
                         m.set_click_compress(compress);
                         m.set_pictures(pictures);
+                        m.set_fall(fall);
                         self.mascot = Some(m);
                         return open.map(Message::WindowOpened);
                     }
@@ -1686,6 +1692,7 @@ impl App {
         let saved_sounds = p.sounds();
         let compress = p.visual(crate::mascot::reactions::Event::Click)
             == crate::mascot::reactions::Visual::Compress;
+        let fall = p.falls();
         self.notice = None;
         #[cfg(windows)]
         if self.mascot.as_ref().is_some_and(|m| m.character() == id) {
@@ -1704,6 +1711,7 @@ impl App {
                 m.set_lines(lines, &options);
                 m.set_click_compress(compress);
                 m.set_pictures(pictures);
+                m.set_fall(fall);
             }
         }
         Ok(())
@@ -2417,6 +2425,11 @@ impl App {
                         .pick_file(),
                     move |f| Message::ReactionPicturePicked(e, f.map(|f| f.path().to_path_buf())),
                 );
+            }
+            UiMsg::ReactionFall(fall) => {
+                if let Some(p) = &mut self.motion_preview {
+                    p.set_fall(fall);
+                }
             }
             UiMsg::ReactionHeldClear => {
                 if let Some(p) = &mut self.motion_preview {
