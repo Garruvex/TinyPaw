@@ -280,7 +280,9 @@ impl App {
     #[cfg(windows)]
     pub(super) fn mascot_menu(&self) -> Vec<crate::mascot::desktop::Item> {
         use crate::mascot::{Msg, desktop::Item};
-        let command = |id: &'static str, label: &'static str, checked: Option<bool>| Item {
+        use crate::view::icons::Glyph;
+        let command = |id: &'static str, icon, label: &'static str, checked: Option<bool>| Item {
+            icon,
             label,
             checked,
             on_press: self
@@ -292,15 +294,17 @@ impl App {
         vec![
             command(
                 system::MASTER_TOGGLE,
-                "Annotation enabled",
+                Glyph::Pen,
+                "Annotation",
                 Some(self.session.is_enabled()),
             ),
             Item {
-                label: "Character settings…",
+                icon: Glyph::Gear,
+                label: "Settings",
                 checked: None,
                 on_press: Some(Msg::CharacterSettings),
             },
-            command(character::HIDE, "Hide character", None),
+            command(character::HIDE, Glyph::EyeOff, "Hide", None),
         ]
     }
 }

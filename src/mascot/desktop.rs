@@ -27,10 +27,46 @@ use crate::features::mascot as feature;
 use crate::platform::windows as native;
 use crate::view::theme;
 
-const MENU_W: f32 = 204.0;
-const ROW_H: f32 = 30.0;
-const MENU_PAD: f32 = 6.0;
-const GAP: f32 = 8.0;
+const MENU_W: f32 = 208.0;
+const ROW_H: f32 = 40.0;
+const MENU_PAD: f32 = 8.0;
+/// Room between the character and its menu, where the menu's tail points.
+const GAP: f32 = 16.0;
+/// How far the menu's tail reaches out of the bubble toward the character.
+const MENU_TAIL: f32 = 12.0;
+/// How tall the speech bubble's tail is.
+const SPEECH_TAIL: f32 = 10.0;
+/// Seconds the menu takes to pop open and to fade away.
+const MENU_OPEN: f32 = 0.24;
+const MENU_CLOSE: f32 = 0.12;
+/// Each row fades in this much later than the one above it.
+const ROW_STAGGER: f32 = 0.035;
+/// Seconds a new speech bubble takes to pop in.
+const SPEECH_POP: f32 = 0.28;
+
+/// Eases out past the end and settles back: a little bounce.
+fn ease_out_back(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0) - 1.0;
+    let c = 1.70158;
+    1.0 + (c + 1.0) * t * t * t + c * t * t
+}
+
+fn ease_out(t: f32) -> f32 {
+    1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
+}
+
+fn faded(c: iced::Color, a: f32) -> iced::Color {
+    iced::Color { a: c.a * a, ..c }
+}
+
+fn mix(a: iced::Color, b: iced::Color, t: f32) -> iced::Color {
+    iced::Color {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: a.a + (b.a - a.a) * t,
+    }
+}
 /// Logical pixels the cursor must travel before a press becomes a drag.
 const DRAG_START: f32 = 5.0;
 /// Seconds to ease from the pose held during a press back to live motion.
@@ -241,8 +277,9 @@ pub struct Options {
     pub beat: Option<f32>,
 }
 
-/// One menu row. `checked` draws a tick column; `on_press: None` disables it.
+/// One menu row. `checked` draws a switch; `on_press: None` disables it.
 pub struct Item {
+    pub icon: crate::view::icons::Glyph,
     pub label: &'static str,
     pub checked: Option<bool>,
     pub on_press: Option<Msg>,
@@ -325,6 +362,16 @@ pub struct Desktop {
     gaze: Vector,
     target: Vector,
     menu: Option<Side>,
+    /// When the menu last opened, in `now` seconds.
+    opened: f32,
+    /// A menu fading away after closing, and when it closed.
+    closing: Option<(Side, f32)>,
+    /// How highlighted each menu row is, 0–1, eased toward the hovered row.
+    hover: Vec<f32>,
+    /// When the line shown now first appeared, for its pop-in.
+    speech_at: f32,
+    /// Reduced motion: menus and bubbles appear without animating.
+    reduced: bool,
     press: Option<Press>,
     /// When the last press ended and the pose it held, to ease out of.
     released: Option<(f32, Pose)>,
@@ -408,6 +455,11 @@ impl Desktop {
             gaze: Vector::ZERO,
             target: Vector::ZERO,
             menu: None,
+            opened: 0.0,
+            closing: None,
+            hover: vec![0.0; rows],
+            speech_at: 0.0,
+            reduced: false,
             press: None,
             released: None,
             passthrough: None,
@@ -465,6 +517,7 @@ impl Desktop {
             && let Some(speech) = Speech::new(&line.text, self.now)
         {
             self.speech = Some(speech);
+            self.speech_at = self.now;
             self.sound = line.sound.clone();
         }
     }
@@ -555,8 +608,74 @@ impl Desktop {
         self.hwnd
     }
 
+    /// Closes the menu, letting it fade away.
     pub fn close_menu(&mut self) {
-        self.menu = None;
+        if let Some(side) = self.menu.take() {
+            self.closing = Some((side, self.now));
+        }
+    }
+
+    fn open_menu(&mut self) {
+        self.now = self.started.elapsed().as_secs_f32();
+        self.menu = Some(self.side());
+        self.opened = self.now;
+        self.closing = None;
+        self.hover = vec![0.0; self.rows];
+    }
+
+    /// The menu bubble as drawn now: its side, scale and opacity, while it
+    /// is open or still fading away.
+    fn menu_look(&self) -> Option<(Side, f32, f32)> {
+        if let Some(side) = self.menu {
+            if self.reduced {
+                return Some((side, 1.0, 1.0));
+            }
+            let t = (self.now - self.opened) / MENU_OPEN;
+            return Some((side, 0.6 + 0.4 * ease_out_back(t), (t * 2.5).min(1.0)));
+        }
+        let (side, at) = self.closing?;
+        let t = (self.now - at) / MENU_CLOSE;
+        (!self.reduced && t < 1.0).then(|| (side, 1.0 - 0.08 * ease_out(t), 1.0 - ease_out(t)))
+    }
+
+    /// How far row `i` has faded in since the menu opened, 0–1.
+    fn row_reveal(&self, i: usize) -> f32 {
+        if self.reduced {
+            return 1.0;
+        }
+        let t = self.now - self.opened - 0.06 - ROW_STAGGER * i as f32;
+        ease_out(t / 0.16)
+    }
+
+    /// Something in the menu or bubble is still moving.
+    fn animating(&self) -> bool {
+        if self.reduced {
+            return false;
+        }
+        let opening = self.menu.is_some()
+            && self.now - self.opened < MENU_OPEN + 0.25 + ROW_STAGGER * self.rows as f32;
+        let hovering = self.menu.is_some() && self.hover.iter().any(|h| *h > 0.005 && *h < 0.995);
+        let popping = self.speech.is_some() && self.now - self.speech_at < SPEECH_POP;
+        opening || hovering || popping || self.closing.is_some()
+    }
+
+    /// Eases each row's highlight toward the row under `local`.
+    fn step_hover(&mut self, local: Point, dt: f32) {
+        let target = self.menu.and_then(|side| {
+            let r = self.layout.menu(side);
+            let row = ((local.y - r.y - MENU_PAD) / ROW_H).floor();
+            (r.contains(local) && row >= 0.0).then_some(row as usize)
+        });
+        self.hover.resize(self.rows, 0.0);
+        let k = if self.reduced {
+            1.0
+        } else {
+            1.0 - (-dt * 18.0).exp()
+        };
+        for (i, h) in self.hover.iter_mut().enumerate() {
+            let goal = if target == Some(i) { 1.0 } else { 0.0 };
+            *h += (goal - *h) * k;
+        }
     }
 
     /// Handles window input and polling. Returns window operations and, when
@@ -605,10 +724,12 @@ impl Desktop {
             }
             Msg::Released => (Task::none(), self.release(o)),
             Msg::Menu => {
-                self.menu = match self.menu {
-                    Some(_) => None,
-                    None => Some(self.side()),
-                };
+                self.reduced = o.reduced;
+                if self.menu.is_some() {
+                    self.close_menu();
+                } else {
+                    self.open_menu();
+                }
                 (Task::none(), None)
             }
             Msg::Poll => self.poll(o),
@@ -618,6 +739,13 @@ impl Desktop {
 
     fn poll(&mut self, o: &Options) -> (Task<Message>, Option<(f64, f64)>) {
         self.now = self.started.elapsed().as_secs_f32();
+        self.reduced = o.reduced;
+        if self
+            .closing
+            .is_some_and(|(_, at)| self.now - at >= MENU_CLOSE)
+        {
+            self.closing = None;
+        }
         if !self.shown {
             return (Task::none(), None);
         }
@@ -651,7 +779,9 @@ impl Desktop {
             } else {
                 if !press.dragging && is_drag(delta, k) {
                     press.dragging = true;
-                    self.menu = None;
+                    if let Some(side) = self.menu.take() {
+                        self.closing = Some((side, self.now));
+                    }
                     picked_up = true;
                     if self.pictures.held.is_some() {
                         let l = &self.layout;
@@ -676,9 +806,11 @@ impl Desktop {
         {
             let outside = !self.layout.menu(side).contains(local) && !self.over_character(local);
             if native::key_down(VK_ESCAPE) || (clicked && outside) {
-                self.menu = None;
+                self.close_menu();
             }
         }
+        let dt = (self.now - self.stepped).clamp(0.0, 0.1);
+        self.step_hover(local, dt);
 
         let hit = self.press.is_some()
             || self.over_character(local)
@@ -723,10 +855,14 @@ impl Desktop {
     /// Moves a line along, and says an idle line when one is due and the
     /// character isn't busy or behind a full-screen app.
     fn step_speech(&mut self, o: &Options) {
-        if let Some(s) = &mut self.speech
-            && !s.advance(self.now)
-        {
-            self.speech = None;
+        if let Some(s) = &mut self.speech {
+            let part = s.index;
+            if !s.advance(self.now) {
+                self.speech = None;
+            } else if s.index != part {
+                // Each part of a line pops in afresh.
+                self.speech_at = self.now;
+            }
         }
         if self.now < self.next_idle {
             return;
@@ -964,7 +1100,7 @@ impl Desktop {
             self.say(Trigger::Drop, o);
             return Some((self.anchor.0 as f64, self.anchor.1 as f64));
         }
-        self.menu = None;
+        self.close_menu();
         self.animator.clicked(self.now);
         if self.click_compress {
             self.animator.compress(self.now);
@@ -1139,7 +1275,7 @@ impl Desktop {
                 || self.showing.is_some_and(|(until, _)| self.now < until)
         };
         Some(Duration::from_millis(
-            if self.press.is_some() || self.falling.is_some() {
+            if self.press.is_some() || self.falling.is_some() || self.animating() {
                 16
             } else if self.menu.is_some() || (o.idle && !o.reduced) || settling || o.music > 0.001 {
                 33
@@ -1162,16 +1298,16 @@ impl Desktop {
             match (self.menu == Some(side), items.take()) {
                 (true, Some(items)) => {
                     let r = l.menu(side);
-                    let rows = items.into_iter().map(menu_row);
+                    // The bubble itself is drawn on the stage canvas, which
+                    // repaints whole every frame, so it can pop and fade.
+                    let rows = items.into_iter().enumerate().map(|(i, item)| {
+                        let hover = self.hover.get(i).copied().unwrap_or(0.0);
+                        menu_row(item, hover, self.row_reveal(i))
+                    });
                     let menu = container(Column::with_children(rows))
                         .padding(MENU_PAD)
                         .width(MENU_W)
-                        .height(r.height)
-                        // No drop shadow: it paints outside the panel's
-                        // bounds, which the renderer's damage tracking does
-                        // not repaint on this transparent window, so a closed
-                        // menu left a stale shadow behind.
-                        .style(theme::outlined(theme::SURFACE_A, 12.0, theme::LINE_STRONG));
+                        .height(r.height);
                     let menu = container(menu).width(width).align_x(match side {
                         Side::Left => Alignment::Start,
                         Side::Right => Alignment::End,
@@ -1207,31 +1343,71 @@ impl Desktop {
         let b = self.lines.bubble;
         let width = b.max_width.min(l.window.width);
         let left = (l.anchor.x - width / 2.0).clamp(0.0, (l.window.width - width).max(0.0));
-        let bubble = container(text(speech.text().to_owned()).size(14).color(
-            iced::Color::from_rgba8(b.text[0], b.text[1], b.text[2], 1.0),
-        ))
-        .padding([8, 12])
+        // Pops up from just above the head, with a little bounce.
+        let (pop, alpha) = if self.reduced {
+            (1.0, 1.0)
+        } else {
+            let t = (self.now - self.speech_at) / SPEECH_POP;
+            (ease_out_back(t), (t * 3.0).min(1.0))
+        };
+        let lift = ((1.0 - pop) * 10.0).max(0.0);
+        let fill = faded(
+            iced::Color::from_rgb8(b.background[0], b.background[1], b.background[2]),
+            alpha,
+        );
+        let ink = faded(
+            iced::Color::from_rgb8(b.text[0], b.text[1], b.text[2]),
+            alpha,
+        );
+        let line = faded(ink, 0.28);
+        let bubble = container(
+            text(speech.text().to_owned())
+                .size(15)
+                .font(theme::MEDIUM)
+                .color(ink),
+        )
+        .padding([10, 15])
         .max_width(width)
         .style(move |_: &Theme| container::Style {
-            background: Some(
-                iced::Color::from_rgba8(b.background[0], b.background[1], b.background[2], 1.0)
-                    .into(),
-            ),
+            background: Some(fill.into()),
             border: iced::Border {
-                radius: 14.0.into(),
-                width: 1.0,
-                color: iced::Color::from_rgba8(0, 0, 0, 0.18),
+                radius: 16.0.into(),
+                width: 1.5,
+                color: line,
             },
             ..container::Style::default()
         });
+        let bottom = SPEECH_TAIL + lift;
         let band = container(row![
             space().width(left),
             container(bubble).width(width).center_x(width)
         ])
         .width(Length::Fill)
         .height(l.character.y.max(1.0))
+        .padding(iced::Padding {
+            top: 0.0,
+            right: 0.0,
+            bottom,
+            left: 0.0,
+        })
         .align_y(Alignment::End);
-        iced::widget::stack![body, band].into()
+        // The tail hangs from the middle of the bubble, leaning toward the
+        // character, and grows in with the pop.
+        let centre = left + width / 2.0;
+        let base = Point::new(centre, l.character.y - bottom);
+        let tip = Point::new(
+            l.anchor.x.clamp(centre - 12.0, centre + 12.0),
+            base.y + SPEECH_TAIL * pop.clamp(0.0, 1.0),
+        );
+        let tail = canvas_widget(SpeechTail {
+            base,
+            tip,
+            fill,
+            line,
+        })
+        .width(Length::Fill)
+        .height(Length::Fill);
+        iced::widget::stack![body, band, tail].into()
     }
 }
 
@@ -1244,24 +1420,198 @@ fn over(l: &Layout, rig: &Rig, pose: &Pose, p: Point) -> bool {
     rig.hit(local, pose).is_some()
 }
 
-fn menu_row(item: Item) -> Element<'static, Message> {
-    let tick = match item.checked {
-        Some(true) => "✓",
-        _ => "",
+/// One menu row: icon, label and, for a setting, a switch. `hover` (0–1)
+/// lights the row and nudges it right; `reveal` (0–1) fades and slides it in.
+fn menu_row(item: Item, hover: f32, reveal: f32) -> Element<'static, Message> {
+    use crate::view::icons;
+    let enabled = item.on_press.is_some();
+    let hover = if enabled { hover } else { 0.0 };
+    let (fg, glyph) = if enabled {
+        (
+            mix(theme::TEXT_SOFT, iced::Color::WHITE, hover),
+            mix(theme::TEXT_SOFT, theme::CYAN_TEXT, hover),
+        )
+    } else {
+        (theme::DISABLED, theme::DISABLED)
     };
-    button(
-        row![
-            text(tick).size(13).color(theme::CYAN_TEXT).width(18),
-            text(item.label).size(13),
-        ]
-        .align_y(Alignment::Center),
-    )
-    .width(Length::Fill)
-    .height(ROW_H)
-    .padding([5, 10])
-    .style(theme::tool_button(theme::Tone::Plain))
-    .on_press_maybe(item.on_press.map(Message::Mascot))
-    .into()
+    let mut content = row![
+        icons::icon(item.icon, 20.0, faded(glyph, reveal)),
+        text(item.label)
+            .size(15)
+            .font(theme::MEDIUM)
+            .color(faded(fg, reveal)),
+        space().width(Length::Fill),
+    ]
+    .spacing(12)
+    .height(Length::Fill)
+    .align_y(Alignment::Center);
+    if let Some(on) = item.checked {
+        content = content.push(switch(on, enabled, reveal));
+    }
+    let shift = (1.0 - reveal) * 10.0 + hover * 3.0;
+    button(content)
+        .width(Length::Fill)
+        .height(ROW_H)
+        .padding(iced::Padding {
+            top: 0.0,
+            right: 10.0,
+            bottom: 0.0,
+            left: 10.0 + shift,
+        })
+        .style(move |_: &Theme, status| {
+            let pressed = if status == button::Status::Pressed {
+                0.06
+            } else {
+                0.0
+            };
+            button::Style {
+                background: Some(
+                    iced::Color::from_rgba(1.0, 1.0, 1.0, (0.10 * hover + pressed) * reveal).into(),
+                ),
+                text_color: fg,
+                border: iced::Border {
+                    radius: 10.0.into(),
+                    ..iced::Border::default()
+                },
+                ..button::Style::default()
+            }
+        })
+        .on_press_maybe(item.on_press.map(Message::Mascot))
+        .into()
+}
+
+/// A small on/off pill for menu rows that toggle a setting.
+fn switch(on: bool, enabled: bool, alpha: f32) -> Element<'static, Message> {
+    let track = match (on, enabled) {
+        (_, false) => theme::DISABLED,
+        (true, true) => theme::CYAN,
+        (false, true) => iced::Color::from_rgb8(0x4A, 0x4E, 0x5A),
+    };
+    let knob = container(space())
+        .width(12)
+        .height(12)
+        .style(theme::fill(faded(iced::Color::WHITE, alpha), 6.0));
+    container(knob)
+        .width(30)
+        .height(18)
+        .padding(3)
+        .align_x(if on { Alignment::End } else { Alignment::Start })
+        .style(theme::fill(faded(track, alpha), 9.0))
+        .into()
+}
+
+/// The menu's speech-bubble outline: a rounded box with a tail on the side
+/// facing the character. Returns the path and the tail's tip.
+fn menu_bubble(r: Rectangle, side: Side) -> (canvas::Path, Point) {
+    // Inset so the outline's stroke stays inside the menu's bounds.
+    let (x, y, w, h) = (r.x + 1.5, r.y + 1.5, r.width - 3.0, r.height - 3.0);
+    let rad = 16.0f32.min(h / 3.0);
+    let low = y + h - rad - 2.0;
+    let high = low - 16.0;
+    let tip = match side {
+        Side::Right => Point::new(x - MENU_TAIL, low + 8.0),
+        Side::Left => Point::new(x + w + MENU_TAIL, low + 8.0),
+    };
+    let path = canvas::Path::new(|p| {
+        p.move_to(Point::new(x + rad, y));
+        p.line_to(Point::new(x + w - rad, y));
+        p.arc_to(Point::new(x + w, y), Point::new(x + w, y + rad), rad);
+        if side == Side::Left {
+            p.line_to(Point::new(x + w, high));
+            p.line_to(tip);
+            p.line_to(Point::new(x + w, low));
+        }
+        p.line_to(Point::new(x + w, y + h - rad));
+        p.arc_to(
+            Point::new(x + w, y + h),
+            Point::new(x + w - rad, y + h),
+            rad,
+        );
+        p.line_to(Point::new(x + rad, y + h));
+        p.arc_to(Point::new(x, y + h), Point::new(x, y + h - rad), rad);
+        if side == Side::Right {
+            p.line_to(Point::new(x, low));
+            p.line_to(tip);
+            p.line_to(Point::new(x, high));
+        }
+        p.line_to(Point::new(x, y + rad));
+        p.arc_to(Point::new(x, y), Point::new(x + rad, y), rad);
+        p.close();
+    });
+    (path, tip)
+}
+
+/// Draws the menu bubble scaled about its tail's tip, so it pops out of
+/// the character.
+fn draw_menu(frame: &mut Frame, r: Rectangle, side: Side, scale: f32, alpha: f32) {
+    let (path, tip) = menu_bubble(r, side);
+    frame.with_save(|f| {
+        f.translate(Vector::new(tip.x, tip.y));
+        f.scale(scale);
+        f.translate(Vector::new(-tip.x, -tip.y));
+        f.with_save(|f| {
+            f.translate(Vector::new(0.0, 3.0));
+            f.fill(&path, iced::Color::from_rgba(0.0, 0.0, 0.0, 0.28 * alpha));
+        });
+        f.fill(
+            &path,
+            iced::Color::from_rgba8(0x1D, 0x20, 0x2C, 0.97 * alpha),
+        );
+        f.stroke(
+            &path,
+            canvas::Stroke::default()
+                .with_color(iced::Color::from_rgba(1.0, 1.0, 1.0, 0.92 * alpha))
+                .with_width(2.0)
+                .with_line_join(canvas::LineJoin::Round),
+        );
+    });
+}
+
+/// The speech bubble's tail, drawn over the bubble's bottom edge so the
+/// two read as one outline. It never takes clicks.
+struct SpeechTail {
+    base: Point,
+    tip: Point,
+    fill: iced::Color,
+    line: iced::Color,
+}
+
+impl canvas::Program<Message> for SpeechTail {
+    type State = ();
+
+    fn draw(
+        &self,
+        _: &(),
+        renderer: &Renderer,
+        _: &Theme,
+        bounds: Rectangle,
+        _: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        let (b, tip) = (self.base, self.tip);
+        let left = Point::new(b.x - 8.0, b.y - 2.0);
+        let right = Point::new(b.x + 8.0, b.y - 2.0);
+        let shape = canvas::Path::new(|p| {
+            p.move_to(left);
+            p.line_to(tip);
+            p.line_to(right);
+            p.close();
+        });
+        frame.fill(&shape, self.fill);
+        let edges = canvas::Path::new(|p| {
+            p.move_to(Point::new(left.x, b.y));
+            p.line_to(tip);
+            p.line_to(Point::new(right.x, b.y));
+        });
+        frame.stroke(
+            &edges,
+            canvas::Stroke::default()
+                .with_color(self.line)
+                .with_width(1.5)
+                .with_line_join(canvas::LineJoin::Round),
+        );
+        vec![frame.into_geometry()]
+    }
 }
 
 struct Stage<'a> {
@@ -1326,14 +1676,20 @@ impl canvas::Program<Message> for Stage<'_> {
         {
             let angle = pose.carry.map_or(0.0, |(_, a)| a);
             d.rig.draw_hanging(&mut frame, held, press.pivot, angle);
-            return vec![frame.into_geometry()];
+        } else {
+            super::motion::place(&mut frame, pose, d.rig.anchor(), d.rig.size().height);
+            match d.picture() {
+                Some(picture) => d.rig.draw_picture(&mut frame, picture),
+                None => d.rig.draw_pose(&mut frame, pose),
+            }
         }
-        super::motion::place(&mut frame, pose, d.rig.anchor(), d.rig.size().height);
-        match d.picture() {
-            Some(picture) => d.rig.draw_picture(&mut frame, picture),
-            None => d.rig.draw_pose(&mut frame, pose),
+        let mut geometry = vec![frame.into_geometry()];
+        if let Some((side, scale, alpha)) = d.menu_look() {
+            let mut ui = Frame::new(renderer, bounds.size());
+            draw_menu(&mut ui, l.menu(side), side, scale, alpha);
+            geometry.push(ui.into_geometry());
         }
-        vec![frame.into_geometry()]
+        geometry
     }
 
     fn mouse_interaction(
