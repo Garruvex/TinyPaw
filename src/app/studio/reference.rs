@@ -19,27 +19,27 @@ impl App {
                 );
             }
             UiMsg::ReferenceStyle(style) => {
-                if let Some(r) = &mut self.reference {
+                if let Some(r) = &mut self.studio.reference {
                     r.style = style.chars().take(200).collect();
                 }
             }
             UiMsg::ReferenceCanvas(c) => {
-                if let Some(r) = &mut self.reference {
+                if let Some(r) = &mut self.studio.reference {
                     r.canvas = c;
                 }
             }
             UiMsg::ReferenceTail(on) => {
-                if let Some(r) = &mut self.reference {
+                if let Some(r) = &mut self.studio.reference {
                     r.tail = on;
                 }
             }
             UiMsg::ReferenceHead(on) => {
-                if let Some(r) = &mut self.reference {
+                if let Some(r) = &mut self.studio.reference {
                     r.head = on;
                 }
             }
             UiMsg::ReferenceEyes(on) => {
-                if let Some(r) = &mut self.reference {
+                if let Some(r) = &mut self.studio.reference {
                     r.eyes = on;
                     if on {
                         r.tracking = false;
@@ -49,7 +49,7 @@ impl App {
                 }
             }
             UiMsg::ReferenceTracking(on) => {
-                if let Some(r) = &mut self.reference {
+                if let Some(r) = &mut self.studio.reference {
                     r.tracking = on;
                     if on {
                         r.eyes = false;
@@ -57,12 +57,12 @@ impl App {
                 }
             }
             UiMsg::ReferenceBrows(on) => {
-                if let Some(r) = &mut self.reference {
+                if let Some(r) = &mut self.studio.reference {
                     r.brows = on;
                 }
             }
             UiMsg::ReferenceBlink(on) => {
-                if let Some(r) = &mut self.reference {
+                if let Some(r) = &mut self.studio.reference {
                     r.blink = on;
                     if on {
                         r.eyes = false;
@@ -70,7 +70,7 @@ impl App {
                 }
             }
             UiMsg::ReferenceFaces(on) => {
-                if let Some(r) = &mut self.reference {
+                if let Some(r) = &mut self.studio.reference {
                     r.faces = on;
                     if on {
                         r.eyes = false;
@@ -78,12 +78,12 @@ impl App {
                 }
             }
             UiMsg::ReferenceHeld(on) => {
-                if let Some(r) = &mut self.reference {
+                if let Some(r) = &mut self.studio.reference {
                     r.held = on;
                 }
             }
             UiMsg::ReferenceCopy(role) => {
-                if let Some(r) = &self.reference {
+                if let Some(r) = &self.studio.reference {
                     if !r.fits_canvas() {
                         self.notice =
                             Some("Choose a smaller canvas for this many feature images.".into());
@@ -117,18 +117,18 @@ impl App {
                 );
             }
             UiMsg::ReferenceAssign(i, role) => {
-                if let Some(r) = &mut self.reference {
+                if let Some(r) = &mut self.studio.reference {
                     r.assign(i, role);
                 }
             }
             UiMsg::ReferenceCancel => {
-                self.reference = None;
-                self.reference_thumb = None;
+                self.studio.reference = None;
+                self.studio.reference_thumb = None;
             }
             UiMsg::ReferenceOpen => {
                 use crate::mascot::editor::{Editor, Target};
                 use crate::mascot::reference::Role;
-                let Some(r) = self.reference.clone() else {
+                let Some(r) = self.studio.reference.clone() else {
                     return Task::none();
                 };
                 if !r.missing().is_empty() || !r.fits_canvas() {
@@ -167,8 +167,8 @@ impl App {
                         }
                     })
                     .collect();
-                self.reference = None;
-                self.reference_thumb = None;
+                self.studio.reference = None;
+                self.studio.reference_thumb = None;
                 let taken: Vec<_> = self.characters.iter().map(|c| c.id).collect();
                 let id = self.begin_character_job();
                 // The assembled draft opens in Arrange for alignment; Save

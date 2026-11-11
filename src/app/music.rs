@@ -167,7 +167,7 @@ impl App {
         {
             let on = self.session.settings().bool(character::MUSIC);
             let showing = self.mascot.as_ref().is_some_and(|m| !m.is_hidden());
-            let wanted = on && (showing || self.motion_preview.is_some());
+            let wanted = on && (showing || self.studio.motion_preview.is_some());
             use crate::mascot::music::Source;
             use platform::beat::Target;
             let source = self.music_source();
@@ -228,15 +228,19 @@ impl App {
         // Kept while the artwork editor is open: one draft spans both.
         let wanted = self.settings_window.is_some()
             && self.page == Page::Character
-            && self.character_draft.is_none();
+            && self.studio.character_draft.is_none();
         if !wanted {
-            self.motion_preview = None;
-            self.motion_ticked = None;
+            self.studio.motion_preview = None;
+            self.studio.motion_ticked = None;
             return;
         }
         let c = self.current_character().clone();
-        if self.motion_preview.as_ref().is_some_and(|p| p.id == c.id)
-            || self.motion_failed == Some(c.id)
+        if self
+            .studio
+            .motion_preview
+            .as_ref()
+            .is_some_and(|p| p.id == c.id)
+            || self.studio.motion_failed == Some(c.id)
         {
             return;
         }
@@ -248,7 +252,7 @@ impl App {
                     rig.set_motion(&specs);
                 }
                 rig.set_bop(c.bop());
-                self.motion_preview = Some(crate::mascot::preview::MotionPreview::new(
+                self.studio.motion_preview = Some(crate::mascot::preview::MotionPreview::new(
                     c.id,
                     rig,
                     defaults,
@@ -260,7 +264,7 @@ impl App {
                         .unwrap_or_default(),
                     c.pack_reactions(),
                 ));
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     for file in p.picture_files() {
                         let art = crate::mascot::reactions::Art::new(file.clone());
                         if let Some(img) = c.reaction_image(&art) {
@@ -268,12 +272,12 @@ impl App {
                         }
                     }
                 }
-                self.motion_failed = None;
-                self.motion_ticked = None;
+                self.studio.motion_failed = None;
+                self.studio.motion_ticked = None;
             }
             Err(e) => {
-                self.motion_preview = None;
-                self.motion_failed = Some(c.id);
+                self.studio.motion_preview = None;
+                self.studio.motion_failed = Some(c.id);
                 self.notice = Some(format!("Could not preview {}: {e}", c.name));
             }
         }

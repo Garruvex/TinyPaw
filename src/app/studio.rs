@@ -4,6 +4,40 @@ mod art;
 mod reactions;
 mod reference;
 
+/// State of the Settings character studio.
+#[derive(Default)]
+pub(super) struct Studio {
+    /// "Add character" in progress.
+    pub(super) character_draft: Option<characters::Draft>,
+    /// A folder import waiting on Keep both or Replace: its display name.
+    pub(super) character_conflict: Option<String>,
+    pub(super) prepared_character: Option<Arc<characters::PreparedFolder>>,
+    pub(super) character_request: u64,
+    pub(super) character_job: Option<Arc<AtomicU8>>,
+    pub(super) character_jobs: std::collections::BTreeMap<u64, Arc<AtomicU8>>,
+    /// The Art tab's open character, while editing.
+    pub(super) art: Option<crate::mascot::editor::Editor>,
+    /// The Motion tab's live preview, while Settings shows Character.
+    pub(super) motion_preview: Option<crate::mascot::preview::MotionPreview>,
+    /// Somewhere the user asked to go with unsaved character changes,
+    /// waiting on Save, Discard or Stay.
+    pub(super) leaving: Option<view::settings::Leave>,
+    /// The character whose artwork Save is writing, so its behavior
+    /// overrides follow once the pack is committed.
+    pub(super) art_saving: Option<&'static str>,
+    /// Where to go once that save finishes, from Save in the leave prompt.
+    pub(super) after_save: Option<view::settings::Leave>,
+    /// A character whose preview failed to load, so it isn't retried
+    /// on every update.
+    pub(super) motion_failed: Option<&'static str>,
+    pub(super) motion_ticked: Option<Instant>,
+    /// Create from reference in progress, and its reference thumbnail.
+    pub(super) reference: Option<crate::mascot::reference::Request>,
+    pub(super) reference_thumb: Option<image::Handle>,
+    /// The latest draft-rig request; older results are dropped.
+    pub(super) draft_rig_request: u64,
+}
+
 impl App {
     /// The character's lines: the user's if they changed them, else the pack's.
     pub(super) fn character_lines(&self, id: &str) -> crate::mascot::lines::Lines {
@@ -46,8 +80,12 @@ impl App {
     /// Whether the character draft (artwork or behavior) has changes Save
     /// would write.
     pub(super) fn character_unsaved(&self) -> bool {
-        self.motion_preview.as_ref().is_some_and(|p| p.unsaved())
+        self.studio
+            .motion_preview
+            .as_ref()
+            .is_some_and(|p| p.unsaved())
             || self
+                .studio
                 .art
                 .as_ref()
                 .is_some_and(|e| e.new_install || e.can_undo())
@@ -56,7 +94,7 @@ impl App {
     /// Writes the behavior draft to the character's overrides in one file,
     /// then shows it on the desktop. Nothing to write is a success.
     pub(super) fn save_behavior(&mut self) -> Result<(), String> {
-        let Some(p) = &mut self.motion_preview else {
+        let Some(p) = &mut self.studio.motion_preview else {
             return Ok(());
         };
         if !p.unsaved() {
@@ -99,9 +137,9 @@ impl App {
     /// change. The installed character is untouched.
     pub(super) fn discard_character(&mut self) {
         self.cancel_character_job();
-        self.art = None;
-        self.art_saving = None;
-        if let Some(p) = &mut self.motion_preview {
+        self.studio.art = None;
+        self.studio.art_saving = None;
+        if let Some(p) = &mut self.studio.motion_preview {
             p.discard();
             // Sounds the discarded draft imported are no longer needed.
             characters::prune_line_sounds(p.id, p.saved_lines(), Some(p.saved_reactions()));
@@ -110,10 +148,10 @@ impl App {
 
     pub(super) fn pick_character(&mut self, id: &'static str, out: &mut Outcomes) {
         self.cancel_character_job();
-        self.prepared_character = None;
-        self.character_conflict = None;
-        self.character_draft = None;
-        self.art = None;
+        self.studio.prepared_character = None;
+        self.studio.character_conflict = None;
+        self.studio.character_draft = None;
+        self.studio.art = None;
         out.sets.push((character::CHARACTER, Value::Choice(id)));
     }
 
@@ -150,29 +188,29 @@ impl App {
     }
 
     pub(super) fn cancel_character_job(&mut self) {
-        self.character_request += 1;
-        if let Some(job) = self.character_job.take() {
+        self.studio.character_request += 1;
+        if let Some(job) = self.studio.character_job.take() {
             let _ = job.compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst);
         }
     }
 
     pub(super) fn begin_character_job(&mut self) -> u64 {
         self.cancel_character_job();
-        self.character_job = Some(Arc::new(AtomicU8::new(0)));
-        self.character_jobs.insert(
-            self.character_request,
-            self.character_job.as_ref().unwrap().clone(),
+        self.studio.character_job = Some(Arc::new(AtomicU8::new(0)));
+        self.studio.character_jobs.insert(
+            self.studio.character_request,
+            self.studio.character_job.as_ref().unwrap().clone(),
         );
         self.notice = Some("Preparing character…".into());
-        self.character_request
+        self.studio.character_request
     }
 
     pub(super) fn import_character(&mut self, choice: characters::OnDuplicate) -> Task<Message> {
-        let Some(prepared) = self.prepared_character.clone() else {
+        let Some(prepared) = self.studio.prepared_character.clone() else {
             return Task::none();
         };
         let id = self.begin_character_job();
-        let job = self.character_job.as_ref().unwrap().clone();
+        let job = self.studio.character_job.as_ref().unwrap().clone();
         let taken: Vec<_> = self.characters.iter().map(|c| c.id).collect();
         character_work(id, move || {
             prepared
@@ -227,9 +265,9 @@ impl App {
                 Err(e) => self.notice = Some(format!("Could not load the forearm: {e}")),
             },
             Message::CharacterPicked(Some(path)) => {
-                self.character_draft = None;
-                self.prepared_character = None;
-                self.character_conflict = None;
+                self.studio.character_draft = None;
+                self.studio.prepared_character = None;
+                self.studio.character_conflict = None;
                 self.page = Page::Character;
                 let id = self.begin_character_job();
                 tasks.push(character_work(id, move || {
@@ -237,12 +275,12 @@ impl App {
                 }));
             }
             Message::CharacterFolderPicked(Some(path)) => {
-                self.character_draft = None;
-                self.prepared_character = None;
-                self.character_conflict = None;
+                self.studio.character_draft = None;
+                self.studio.prepared_character = None;
+                self.studio.character_conflict = None;
                 self.page = Page::Character;
                 let id = self.begin_character_job();
-                let request = self.reference.clone();
+                let request = self.studio.reference.clone();
                 tasks.push(character_work(id, move || {
                     if let Some(request) = request {
                         request.validate_folder(&path)?;
@@ -251,8 +289,8 @@ impl App {
                 }));
             }
             Message::CharacterWorked(id, result) => {
-                self.character_jobs.remove(&id);
-                if id != self.character_request
+                self.studio.character_jobs.remove(&id);
+                if id != self.studio.character_request
                     && let Err(e) = &result
                     && e != "Import cancelled"
                 {
@@ -263,7 +301,7 @@ impl App {
                     &result
                 {
                     if !self.session.settings().bool(character::ENABLED)
-                        && (!show || id != self.character_request)
+                        && (!show || id != self.studio.character_request)
                     {
                         c.release_prepared_rig();
                     }
@@ -276,14 +314,16 @@ impl App {
                         }
                     }
                 }
-                if id == self.character_request {
-                    self.character_job = None;
+                if id == self.studio.character_request {
+                    self.studio.character_job = None;
                     self.notice = None;
                     match result {
-                        Ok(CharacterWork::Draft(draft)) => self.character_draft = Some(draft),
+                        Ok(CharacterWork::Draft(draft)) => {
+                            self.studio.character_draft = Some(draft)
+                        }
                         Ok(CharacterWork::Editor(editor, errors)) => {
                             use view::settings::CharacterTab;
-                            self.art = Some(*editor);
+                            self.studio.art = Some(*editor);
                             // An opened editor always shows in Arrange.
                             if !matches!(
                                 self.character_tab,
@@ -296,41 +336,42 @@ impl App {
                             }
                         }
                         Ok(CharacterWork::Prepared(prepared)) => {
-                            self.reference = None;
-                            self.reference_thumb = None;
-                            self.prepared_character = Some(prepared);
+                            self.studio.reference = None;
+                            self.studio.reference_thumb = None;
+                            self.studio.prepared_character = Some(prepared);
                             tasks.push(self.import_character(characters::OnDuplicate::Ask));
                         }
                         Ok(CharacterWork::Imported(
                             characters::Imported::Duplicate { name },
                             _,
                         )) => {
-                            self.character_conflict = Some(name);
+                            self.studio.character_conflict = Some(name);
                         }
                         Ok(CharacterWork::Imported(characters::Imported::Installed(c), show)) => {
-                            self.character_conflict = None;
-                            self.prepared_character = None;
-                            self.character_draft = None;
-                            self.art = None;
+                            self.studio.character_conflict = None;
+                            self.studio.prepared_character = None;
+                            self.studio.character_draft = None;
+                            self.studio.art = None;
                             // One Save, two writes: the pack is committed, so
                             // now the behavior draft. A failure keeps it open.
-                            if self.art_saving.take() == Some(c.id) {
+                            if self.studio.art_saving.take() == Some(c.id) {
                                 match self.save_behavior() {
                                     Ok(()) => {
                                         // Rebuilt from the saved pack and overrides.
                                         if self
+                                            .studio
                                             .motion_preview
                                             .as_ref()
                                             .is_some_and(|p| p.id == c.id)
                                         {
-                                            self.motion_preview = None;
+                                            self.studio.motion_preview = None;
                                         }
-                                        if let Some(to) = self.after_save.take() {
+                                        if let Some(to) = self.studio.after_save.take() {
                                             tasks.push(self.finish_leave(to, out));
                                         }
                                     }
                                     Err(e) => {
-                                        self.after_save = None;
+                                        self.studio.after_save = None;
                                         self.notice = Some(format!(
                                             "The artwork is saved, but the behavior changes could not be: {e}. They are still open; try Save again."
                                         ));
@@ -343,15 +384,15 @@ impl App {
                             }
                         }
                         Err(e) => {
-                            self.art_saving = None;
-                            self.after_save = None;
+                            self.studio.art_saving = None;
+                            self.studio.after_save = None;
                             self.notice = Some(format!("Could not import that character: {e}"))
                         }
                     }
                 }
             }
             Message::ReactionWavPicked(e, Some(path)) => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     match characters::import_reaction_sound(p.id, &path) {
                         Ok(r) => {
                             use crate::mascot::reactions::{MAX_FILES, Sound};
@@ -373,7 +414,7 @@ impl App {
             Message::ReactionWavPicked(_, None) => {}
             Message::ReactionPicturePicked(e, Some(path)) => {
                 use crate::mascot::reactions::{Art, Event};
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     let canvas = p.rig().size();
                     let canvas = (canvas.width as u32, canvas.height as u32);
                     match characters::import_reaction_image(p.id, &path, canvas) {
@@ -400,31 +441,31 @@ impl App {
             Message::ReactionPicturePicked(_, None) => {}
             Message::ReferencePicked(Some(path)) => {
                 // A thumbnail only; the reference stays where it is.
-                self.reference_thumb = ::image::open(&path).ok().map(|img| {
+                self.studio.reference_thumb = ::image::open(&path).ok().map(|img| {
                     let img = img.thumbnail(240, 240).to_rgba8();
                     image::Handle::from_rgba(img.width(), img.height(), img.into_raw())
                 });
-                self.reference = Some(crate::mascot::reference::Request::new(path));
-                self.character_draft = None;
+                self.studio.reference = Some(crate::mascot::reference::Request::new(path));
+                self.studio.character_draft = None;
                 self.character_tab = view::settings::CharacterTab::Library;
             }
             Message::ReferencePicked(None) => {}
             Message::ReferenceResults(paths) => {
-                if let Some(r) = &mut self.reference {
+                if let Some(r) = &mut self.studio.reference {
                     r.add_results(paths);
                 }
             }
             Message::DraftRig(request, rig) => {
-                if request == self.draft_rig_request
-                    && let Some(e) = &self.art
-                    && let Some(p) = &mut self.motion_preview
+                if request == self.studio.draft_rig_request
+                    && let Some(e) = &self.studio.art
+                    && let Some(p) = &mut self.studio.motion_preview
                     && p.id == e.id
                 {
                     p.set_rig(*rig);
                 }
             }
             Message::CharacterExportPicked(Some(into)) => {
-                if !self.character_jobs.is_empty() {
+                if !self.studio.character_jobs.is_empty() {
                     self.notice = Some(
                         "Character work is still finishing. Try Export when it completes.".into(),
                     );
@@ -437,7 +478,7 @@ impl App {
                 }
             }
             Message::ArtBodyPicked(generation, Some(path))
-                if generation == self.character_request =>
+                if generation == self.studio.character_request =>
             {
                 let id = self.begin_character_job();
                 let taken: Vec<_> = self.characters.iter().map(|c| c.id).collect();
@@ -447,10 +488,10 @@ impl App {
                 }));
             }
             Message::ArtFilesPicked(generation, target, paths)
-                if generation == self.character_request =>
+                if generation == self.studio.character_request =>
             {
                 if !paths.is_empty()
-                    && let Some(mut editor) = self.art.clone()
+                    && let Some(mut editor) = self.studio.art.clone()
                 {
                     let id = self.begin_character_job();
                     tasks.push(character_work(id, move || {
@@ -461,7 +502,7 @@ impl App {
             }
             Message::ArtBodyPicked(_, _) | Message::ArtFilesPicked(_, _, _) => {}
             Message::LineSoundPicked(t, i, Some(path)) => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     match characters::import_line_sound(p.id, &path) {
                         Ok(sound) => {
                             if let Some(line) = p.lines.get_mut(t).get_mut(i) {
@@ -477,13 +518,14 @@ impl App {
             Message::MotionTick => {
                 let now_i = Instant::now();
                 let dt = self
+                    .studio
                     .motion_ticked
                     .map_or(0.0, |t| now_i.duration_since(t).as_secs_f32());
-                self.motion_ticked = Some(now_i);
+                self.studio.motion_ticked = Some(now_i);
                 let o = self.motion_options();
                 let music = self.music_level();
                 let beat = self.beat_phase();
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     p.tick(dt, o.0, o.1, music, beat);
                 }
             }
@@ -528,12 +570,16 @@ impl App {
                 // Test character shows the unsaved artwork: build it on a
                 // worker by revision, keeping the last preview meanwhile.
                 if tab == CharacterTab::Behavior
-                    && let Some(e) = self.art.clone()
-                    && self.motion_preview.as_ref().is_some_and(|p| p.id == e.id)
+                    && let Some(e) = self.studio.art.clone()
+                    && self
+                        .studio
+                        .motion_preview
+                        .as_ref()
+                        .is_some_and(|p| p.id == e.id)
                     && e.can_undo()
                 {
-                    self.draft_rig_request += 1;
-                    let request = self.draft_rig_request;
+                    self.studio.draft_rig_request += 1;
+                    let request = self.studio.draft_rig_request;
                     let (tx, rx) = iced::futures::channel::oneshot::channel();
                     std::thread::spawn(move || {
                         let _ = tx.send(e.draft_rig());
@@ -546,9 +592,9 @@ impl App {
                 // Artwork and Advanced open the editor for an installed
                 // character; built-in Yohta offers Duplicate to edit instead.
                 if matches!(tab, CharacterTab::Artwork | CharacterTab::Advanced)
-                    && self.art.is_none()
-                    && self.character_job.is_none()
-                    && self.character_draft.is_none()
+                    && self.studio.art.is_none()
+                    && self.studio.character_job.is_none()
+                    && self.studio.character_draft.is_none()
                     && !self.current_character().is_builtin()
                 {
                     return self.ui_message(UiMsg::EditArt, now, out);
@@ -556,21 +602,21 @@ impl App {
             }
             UiMsg::Nav(page) => {
                 if page != Page::Character && self.character_unsaved() {
-                    self.leaving = Some(view::settings::Leave::Page(page));
+                    self.studio.leaving = Some(view::settings::Leave::Page(page));
                 } else {
                     self.go_page(page);
                 }
             }
             UiMsg::PickCharacter(id) => {
                 if id != self.current_character().id && self.character_unsaved() {
-                    self.leaving = Some(view::settings::Leave::Character(id));
+                    self.studio.leaving = Some(view::settings::Leave::Character(id));
                 } else {
                     self.pick_character(id, out);
                 }
             }
             UiMsg::Leave(choice) => {
                 use view::settings::LeaveChoice;
-                let Some(to) = self.leaving.take() else {
+                let Some(to) = self.studio.leaving.take() else {
                     return Task::none();
                 };
                 match choice {
@@ -579,8 +625,8 @@ impl App {
                         self.discard_character();
                         return self.finish_leave(to, out);
                     }
-                    LeaveChoice::Save if self.art.is_some() => {
-                        self.after_save = Some(to);
+                    LeaveChoice::Save if self.studio.art.is_some() => {
+                        self.studio.after_save = Some(to);
                         return self.ui_message(UiMsg::ArtSave, now, out);
                     }
                     LeaveChoice::Save => match self.save_behavior() {
@@ -590,7 +636,7 @@ impl App {
                 }
             }
             UiMsg::CharacterSave => {
-                if self.art.is_some() {
+                if self.studio.art.is_some() {
                     return self.ui_message(UiMsg::ArtSave, now, out);
                 }
                 if let Err(e) = self.save_behavior() {
@@ -624,7 +670,7 @@ impl App {
                 );
             }
             UiMsg::RemoveCharacter => {
-                if !self.character_jobs.is_empty() {
+                if !self.studio.character_jobs.is_empty() {
                     self.notice = Some(
                         "Character work is still finishing. Try Remove when it completes.".into(),
                     );
@@ -642,20 +688,20 @@ impl App {
                 }
             }
             UiMsg::CharacterName(name) => {
-                if let Some(d) = &mut self.character_draft {
+                if let Some(d) = &mut self.studio.character_draft {
                     d.name = name.chars().take(60).collect();
                 }
             }
             UiMsg::CancelCharacter => {
                 self.cancel_character_job();
-                self.character_draft = None;
+                self.studio.character_draft = None;
             }
             UiMsg::SaveCharacter => {
-                if self.character_job.is_none()
-                    && let Some(draft) = self.character_draft.clone()
+                if self.studio.character_job.is_none()
+                    && let Some(draft) = self.studio.character_draft.clone()
                 {
                     let id = self.begin_character_job();
-                    let job = self.character_job.as_ref().unwrap().clone();
+                    let job = self.studio.character_job.as_ref().unwrap().clone();
                     let taken: Vec<_> = self.characters.iter().map(|c| c.id).collect();
                     return character_work(id, move || {
                         characters::install(&draft, &taken, &job).map(|c| {
@@ -665,7 +711,7 @@ impl App {
                 }
             }
             UiMsg::ResolveCharacter(keep_both) => {
-                if self.character_conflict.take().is_some() {
+                if self.studio.character_conflict.take().is_some() {
                     return self.import_character(if keep_both {
                         characters::OnDuplicate::KeepBoth
                     } else {
@@ -674,39 +720,43 @@ impl App {
                 }
             }
             UiMsg::MotionPreset(i, preset) => {
-                if let Some(p) = &mut self.motion_preview
+                if let Some(p) = &mut self.studio.motion_preview
                     && let Some(spec) = p.specs.get(i).copied()
                 {
                     p.set(i, crate::mascot::motion::MotionSpec { preset, ..spec });
                 }
             }
             UiMsg::MotionStrength(i, strength) => {
-                if let Some(p) = &mut self.motion_preview
+                if let Some(p) = &mut self.studio.motion_preview
                     && let Some(spec) = p.specs.get(i).copied()
                 {
                     p.set(i, crate::mascot::motion::MotionSpec { strength, ..spec });
                 }
             }
             UiMsg::MotionSpeed(i, speed) => {
-                if let Some(p) = &mut self.motion_preview
+                if let Some(p) = &mut self.studio.motion_preview
                     && let Some(spec) = p.specs.get(i).copied()
                 {
                     p.set(i, crate::mascot::motion::MotionSpec { speed, ..spec });
                 }
             }
             UiMsg::MotionTest(test) => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     p.test(test);
                 }
-                if let Some(sound) = self.motion_preview.as_mut().and_then(|p| p.take_sound())
+                if let Some(sound) = self
+                    .studio
+                    .motion_preview
+                    .as_mut()
+                    .and_then(|p| p.take_sound())
                     && let Some(seconds) = self.play_line_sound(&sound)
-                    && let Some(p) = &mut self.motion_preview
+                    && let Some(p) = &mut self.studio.motion_preview
                 {
                     p.hold_speech(seconds);
                 }
             }
             UiMsg::MusicBop(bop) => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     p.set_bop(bop);
                     // Show it straight away, even without music.
                     p.test(crate::mascot::preview::Test::Music);
@@ -714,6 +764,7 @@ impl App {
             }
             UiMsg::LineText(t, i, text) => {
                 if let Some(line) = self
+                    .studio
                     .motion_preview
                     .as_mut()
                     .and_then(|p| p.lines.get_mut(t).get_mut(i))
@@ -722,7 +773,7 @@ impl App {
                 }
             }
             UiMsg::LineAdd(t) => {
-                if let Some(p) = &mut self.motion_preview
+                if let Some(p) = &mut self.studio.motion_preview
                     && p.lines.total() < crate::mascot::lines::MAX_LINES
                 {
                     p.lines.get_mut(t).push(crate::mascot::lines::Line {
@@ -732,7 +783,7 @@ impl App {
                 }
             }
             UiMsg::LineRemove(t, i) => {
-                if let Some(p) = &mut self.motion_preview
+                if let Some(p) = &mut self.studio.motion_preview
                     && i < p.lines.get(t).len()
                 {
                     p.lines.get_mut(t).remove(i);
@@ -740,6 +791,7 @@ impl App {
             }
             UiMsg::LineClearSound(t, i) => {
                 if let Some(line) = self
+                    .studio
                     .motion_preview
                     .as_mut()
                     .and_then(|p| p.lines.get_mut(t).get_mut(i))
@@ -757,17 +809,17 @@ impl App {
                 );
             }
             UiMsg::BubbleBackground(c) => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     p.lines.bubble.background = c;
                 }
             }
             UiMsg::BubbleText(c) => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     p.lines.bubble.text = c;
                 }
             }
             UiMsg::BubbleWidth(w) => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     p.lines.bubble.max_width = w.clamp(
                         crate::mascot::lines::MIN_WIDTH,
                         crate::mascot::lines::MAX_WIDTH,
@@ -775,19 +827,19 @@ impl App {
                 }
             }
             UiMsg::LinesReset => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     p.reset_lines();
                 }
             }
             UiMsg::MotionReset => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     p.reset();
                 }
             }
             UiMsg::CancelCharacterImport => {
                 self.cancel_character_job();
-                self.character_conflict = None;
-                self.prepared_character = None;
+                self.studio.character_conflict = None;
+                self.studio.prepared_character = None;
             }
             other => return self.art_ui(other, now, out),
         }

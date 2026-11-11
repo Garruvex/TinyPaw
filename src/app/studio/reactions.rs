@@ -10,7 +10,7 @@ impl App {
     ) -> Task<Message> {
         match ui {
             UiMsg::ReactionSound(e, sound) => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     p.set_reaction_sound(e, sound);
                 }
             }
@@ -24,32 +24,33 @@ impl App {
                 );
             }
             UiMsg::ReactionCooldown(e, ms) => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     p.set_cooldown(e, ms.round().max(0.0) as u32);
                 }
             }
             UiMsg::ReactionSoundsOn(on) => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     p.sound_settings_mut().enabled = on;
                 }
             }
             UiMsg::ReactionVolume(v) => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     p.sound_settings_mut().volume = v.clamp(0.0, 1.0);
                 }
             }
             UiMsg::ReactionIdleOn(on) => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     p.sound_settings_mut().idle_enabled = on;
                 }
             }
             UiMsg::ReactionIdleInterval(lo, hi) => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     p.sound_settings_mut().idle_interval = (lo.min(hi), lo.max(hi));
                 }
             }
             UiMsg::ReactionVisual(e, crate::mascot::reactions::Visual::Artwork)
                 if self
+                    .studio
                     .motion_preview
                     .as_ref()
                     .is_some_and(|p| p.art(e).is_none()) =>
@@ -67,17 +68,17 @@ impl App {
                 );
             }
             UiMsg::ReactionFall(fall) => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     p.set_fall(fall);
                 }
             }
             UiMsg::ReactionHeldClear => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     p.set_held(None);
                 }
             }
             UiMsg::ReactionPlace(e, held, which, value) => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     p.set_place(e, held, which, value);
                     if held {
                         p.test(crate::mascot::preview::Test::DragRight);
@@ -85,7 +86,7 @@ impl App {
                 }
             }
             UiMsg::ReactionVisual(e, v) => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     p.set_visual(e, v);
                     if e == crate::mascot::reactions::Event::Click {
                         p.test(crate::mascot::preview::Test::Click);
@@ -93,7 +94,7 @@ impl App {
                 }
             }
             UiMsg::ReactionsReset => {
-                if let Some(p) = &mut self.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
                     p.reset_reactions();
                 }
             }
@@ -105,7 +106,7 @@ impl App {
                     self.notice = Some("Mute all sounds is on.".into());
                     return Task::none();
                 }
-                let Some(sounds) = self.motion_preview.as_ref().map(|p| p.sounds()) else {
+                let Some(sounds) = self.studio.motion_preview.as_ref().map(|p| p.sounds()) else {
                     return Task::none();
                 };
                 if !sounds.enabled {

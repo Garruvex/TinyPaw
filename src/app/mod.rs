@@ -7,6 +7,7 @@ mod mascot;
 mod music;
 mod pointing;
 mod studio;
+use studio::Studio;
 
 use std::path::PathBuf;
 use std::sync::{
@@ -135,36 +136,10 @@ pub struct App {
     pointer_draft: Option<Draft>,
     /// Bundled Yohta first, then installed characters.
     characters: Vec<Character>,
-    /// "Add character" in progress.
-    character_draft: Option<characters::Draft>,
-    /// A folder import waiting on Keep both or Replace: its display name.
-    character_conflict: Option<String>,
-    prepared_character: Option<Arc<characters::PreparedFolder>>,
-    character_request: u64,
-    character_job: Option<Arc<AtomicU8>>,
-    character_jobs: std::collections::BTreeMap<u64, Arc<AtomicU8>>,
+    /// The character studio: Add and import jobs, Art, Motion and
+    /// Create from reference.
+    studio: Studio,
     quit_pending: bool,
-    /// The Art tab's open character, while editing.
-    art: Option<crate::mascot::editor::Editor>,
-    /// The Motion tab's live preview, while Settings shows Character.
-    motion_preview: Option<crate::mascot::preview::MotionPreview>,
-    /// Somewhere the user asked to go with unsaved character changes,
-    /// waiting on Save, Discard or Stay.
-    leaving: Option<view::settings::Leave>,
-    /// The character whose artwork Save is writing, so its behavior
-    /// overrides follow once the pack is committed.
-    art_saving: Option<&'static str>,
-    /// Where to go once that save finishes, from Save in the leave prompt.
-    after_save: Option<view::settings::Leave>,
-    /// A character whose preview failed to load, so it isn't retried
-    /// on every update.
-    motion_failed: Option<&'static str>,
-    motion_ticked: Option<Instant>,
-    /// Create from reference in progress, and its reference thumbnail.
-    reference: Option<crate::mascot::reference::Request>,
-    reference_thumb: Option<image::Handle>,
-    /// The latest draft-rig request; older results are dropped.
-    draft_rig_request: u64,
     /// The character voice: cooldowns, idle deadline, what's playing.
     voice: crate::mascot::reactions::Voice,
     /// The desktop character's reaction sounds.
@@ -302,23 +277,8 @@ impl App {
             editor_focused: false,
             packs: Vec::new(),
             characters: Vec::new(),
-            character_draft: None,
-            character_conflict: None,
-            prepared_character: None,
-            character_request: 0,
-            character_job: None,
-            character_jobs: std::collections::BTreeMap::new(),
+            studio: Studio::default(),
             quit_pending: false,
-            art: None,
-            motion_preview: None,
-            leaving: None,
-            art_saving: None,
-            after_save: None,
-            motion_failed: None,
-            motion_ticked: None,
-            draft_rig_request: 0,
-            reference: None,
-            reference_thumb: None,
             voice: Default::default(),
             reaction_sounds: Default::default(),
             voice_clock: Instant::now(),
@@ -589,8 +549,8 @@ impl App {
                         }
                     }
                 } else if Some(window) == self.settings_window
-                    && self.character_job.is_none()
-                    && self.art.is_some()
+                    && self.studio.character_job.is_none()
+                    && self.studio.art.is_some()
                 {
                     let delta = match key.as_ref() {
                         keyboard::Key::Named(Named::ArrowLeft) => Some((-1.0, 0.0)),
@@ -600,14 +560,14 @@ impl App {
                         _ => None,
                     };
                     if let Some((x, y)) = delta
-                        && let Some(e) = &mut self.art
+                        && let Some(e) = &mut self.studio.art
                     {
                         // Holding an arrow is one undo step.
                         let step = if modifiers.shift() { 10.0 } else { 1.0 };
                         e.checkpoint_gesture(crate::mascot::editor::Gesture::Nudge);
                         e.nudge(x * step, y * step);
                     } else if matches!(key.as_ref(), keyboard::Key::Named(Named::Escape))
-                        && let Some(e) = &mut self.art
+                        && let Some(e) = &mut self.studio.art
                     {
                         // Escape leaves a temporary tool.
                         e.finish_joint();
@@ -716,7 +676,7 @@ impl App {
                 } else if Some(id) == self.settings_window {
                     if self.character_unsaved() {
                         self.page = Page::Character;
-                        self.leaving = Some(view::settings::Leave::Close);
+                        self.studio.leaving = Some(view::settings::Leave::Close);
                     } else {
                         tasks.push(self.close_settings());
                     }
@@ -859,7 +819,7 @@ impl App {
         #[cfg(windows)]
         platform::windows::fine_timers(self.live_on_screen());
         self.sync_music();
-        if self.quit_pending && self.character_jobs.is_empty() {
+        if self.quit_pending && self.studio.character_jobs.is_empty() {
             self.quit(now);
         }
         Task::batch(tasks)
@@ -868,8 +828,8 @@ impl App {
     fn go_page(&mut self, page: Page) {
         if page != Page::Character {
             self.cancel_character_job();
-            self.prepared_character = None;
-            self.character_conflict = None;
+            self.studio.prepared_character = None;
+            self.studio.character_conflict = None;
         }
         self.page = page;
     }
@@ -879,11 +839,11 @@ impl App {
             return Task::none();
         };
         self.cancel_character_job();
-        self.prepared_character = None;
-        self.character_conflict = None;
+        self.studio.prepared_character = None;
+        self.studio.character_conflict = None;
         self.settings_framed = false;
         self.notice = None;
-        self.leaving = None;
+        self.studio.leaving = None;
         window::close(id)
     }
 
@@ -895,7 +855,7 @@ impl App {
                 | UiMsg::ArtRemoveFace(..)
                 | UiMsg::ArtRemoveEye(..)
                 | UiMsg::ArtRemoveBlink(..)
-        ) && let Some(e) = &mut self.art
+        ) && let Some(e) = &mut self.studio.art
         {
             e.checkpoint();
         }
@@ -1152,7 +1112,9 @@ impl App {
 
     /// The single update path for settings: validate, apply, persist.
     fn apply_setting(&mut self, id: &'static str, value: Value, now: Millis) {
-        if matches!(id, character::CHARACTER | character::ENABLED) && self.character_job.is_some() {
+        if matches!(id, character::CHARACTER | character::ENABLED)
+            && self.studio.character_job.is_some()
+        {
             self.cancel_character_job();
         }
         if id == crate::features::display::TARGET {
@@ -1237,9 +1199,9 @@ impl App {
     }
 
     fn quit(&mut self, now: Millis) {
-        if !self.character_jobs.is_empty() {
+        if !self.studio.character_jobs.is_empty() {
             self.quit_pending = true;
-            for job in self.character_jobs.values() {
+            for job in self.studio.character_jobs.values() {
                 let _ = job.compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst);
             }
             self.cancel_character_job();
@@ -1331,7 +1293,7 @@ impl App {
         self.session.is_enabled()
             || self.spotlight_anywhere.on()
             || self.lens_anywhere.on()
-            || self.motion_preview.is_some()
+            || self.studio.motion_preview.is_some()
             || self
                 .mascot
                 .as_ref()
@@ -1484,17 +1446,18 @@ impl App {
                 frame: self.settings_frame(),
                 characters: &self.characters,
                 character: self.current_character().id,
-                character_draft: self.character_draft.as_ref(),
-                character_busy: self.character_job.is_some(),
-                character_conflict: self.character_conflict.as_deref(),
-                art: self.art.as_ref(),
-                motion: self.motion_preview.as_ref(),
+                character_draft: self.studio.character_draft.as_ref(),
+                character_busy: self.studio.character_job.is_some(),
+                character_conflict: self.studio.character_conflict.as_deref(),
+                art: self.studio.art.as_ref(),
+                motion: self.studio.motion_preview.as_ref(),
                 reference: self
+                    .studio
                     .reference
                     .as_ref()
-                    .map(|r| (r, self.reference_thumb.as_ref())),
+                    .map(|r| (r, self.studio.reference_thumb.as_ref())),
                 unsaved: self.character_unsaved(),
-                leaving: self.leaving.is_some(),
+                leaving: self.studio.leaving.is_some(),
                 music: self.music_status(),
                 music_source: self.music_source(),
                 music_rows: self.music_rows(),
@@ -1591,7 +1554,7 @@ impl App {
             });
         }
         // The Motion tab's preview animates while it's open.
-        if self.motion_preview.is_some() {
+        if self.studio.motion_preview.is_some() {
             subs.push(self.animation_ticks().map(|_| Message::MotionTick));
         }
         // Frames only while something animates; otherwise the process sleeps.
