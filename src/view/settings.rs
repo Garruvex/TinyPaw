@@ -115,6 +115,8 @@ pub struct SettingsView<'a> {
     pub art: Option<&'a crate::mascot::editor::Editor>,
     /// The Motion tab's live preview, on the Character page.
     pub motion: Option<&'a crate::mascot::preview::MotionPreview>,
+    /// Create from reference in progress, with the reference's thumbnail.
+    pub reference: Option<(&'a crate::mascot::reference::Request, Option<&'a iced::advanced::image::Handle>)>,
     /// The character draft has changes Save would write.
     pub unsaved: bool,
     /// Save / Discard / Stay is waiting for an answer.

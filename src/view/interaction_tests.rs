@@ -136,6 +136,7 @@ fn settings_view<'a>(
         character_conflict: None,
         art: None,
         motion: None,
+        reference: None,
         unsaved: false,
         leaving: false,
         music: ("Off".into(), 0.0),

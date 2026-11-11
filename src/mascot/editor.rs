@@ -145,6 +145,8 @@ pub enum Target {
     NewPart,
     /// A complete eye or eyebrow image: a still part riding on the head.
     EyePart,
+    /// The whole character in a carried pose, for Pick up's held pose.
+    Held,
     /// A head face: part index and face slot (blink, pressed, dragging).
     Face(usize, usize),
     Eye(usize, EyeSlot),
@@ -191,6 +193,9 @@ struct Snapshot {
     canvas: (u32, u32),
 }
 
+/// Where a held pose made in the editor is written in the pack.
+const HELD_FILE: &str = "reactions/held.png";
+
 pub const FACE_NAMES: [&str; 3] = ["Blink", "Pressed", "Dragging"];
 const DEFAULT_TRAVEL: f32 = 0.012;
 
@@ -216,6 +221,8 @@ pub struct Editor {
     pub eye_style: Option<EyeStyle>,
     /// The gesture the last undo checkpoint belongs to.
     gesture: Option<Gesture>,
+    /// A held pose added here, written as the pack's `reactions/held.png`.
+    pub held: Option<Layer>,
     pub fields: [String; 4],
     pub canvas_fields: [String; 2],
     pub new_install: bool,
@@ -303,6 +310,7 @@ impl Editor {
             background: Background::Checker,
             eye_style: None,
             gesture: None,
+            held: None,
             fields: Default::default(),
             canvas_fields: [m.canvas.0.to_string(), m.canvas.1.to_string()],
             new_install: false,
@@ -483,6 +491,9 @@ impl Editor {
                     faces: [None, None, None],
                 });
                 self.select(Selected::Part(self.parts.len() - 1));
+            }
+            Target::Held => {
+                self.held = Some(layer);
             }
             Target::EyePart => {
                 let (cx, cy, _) = layer.visible_centre(self.canvas).unwrap_or((0.5, 0.5, 0.5));
@@ -751,6 +762,15 @@ impl Editor {
         // Write each image under a name from its role, then the manifest.
         let dir = &self.pose;
         let mut files: Vec<(String, Layer)> = vec![(format!("{dir}/body.png"), self.body.clone())];
+        // A held pose made here is pack art: Pick up shows it while carried.
+        let mut reactions = self.reactions.clone();
+        if self.held.is_some() {
+            use super::reactions::{Art, Entry, Event};
+            let file = HELD_FILE.to_owned();
+            let mut entry = reactions.entry(Event::Pickup).cloned().unwrap_or_else(Entry::none);
+            entry.held = Some(Art::new(super::lines::SoundRef::Pack(file)));
+            reactions.set_entry(Event::Pickup, Some(entry));
+        }
         // Display names travel in the editor metadata, by image.
         let mut names: Vec<(String, String)> = Vec::new();
         let mut parts = Vec::new();
@@ -825,7 +845,7 @@ impl Editor {
             author: self.author.clone(),
             lines: self.lines.clone(),
             bop: self.bop,
-            reactions: self.reactions.clone(),
+            reactions,
             canvas: self.canvas,
             default_pose: self.pose.clone(),
             poses,
@@ -867,6 +887,13 @@ impl Editor {
                     .save_with_format(&to, image::ImageFormat::Png)
                     .map_err(|e| e.to_string())?;
             }
+            if let Some(held) = &self.held {
+                let to = stage.join(HELD_FILE);
+                std::fs::create_dir_all(to.parent().unwrap()).map_err(|e| e.to_string())?;
+                placement::bake(&held.image, held.placement, self.canvas)
+                    .save_with_format(&to, image::ImageFormat::Png)
+                    .map_err(|e| e.to_string())?;
+            }
             for ((_, layer), record) in files.iter().zip(&manifest.editor) {
                 let to = stage.join(&record.source);
                 std::fs::create_dir_all(to.parent().unwrap()).map_err(|e| e.to_string())?;
@@ -896,6 +923,10 @@ impl Editor {
             for image in manifest.reactions.images() {
                 if let super::lines::SoundRef::Pack(asset) = image {
                     let to = stage.join(asset);
+                    // Already written: a held pose made in this editor.
+                    if to.exists() {
+                        continue;
+                    }
                     if let Some(parent) = to.parent() {
                         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
                     }
@@ -981,6 +1012,7 @@ impl Editor {
             background: Background::Checker,
             eye_style: None,
             gesture: None,
+            held: None,
             fields: Default::default(),
             canvas_fields: [canvas.0.to_string(), canvas.1.to_string()],
             new_install: true,
@@ -1698,6 +1730,39 @@ mod tests {
         assert_eq!(e.parts[0].pivot, (0.4, 0.6));
         e.select(Selected::Body);
         assert_eq!(e.joint_part(), None, "choosing another layer leaves the tool");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn reference_results_assemble_save_and_reimport_with_their_roles() {
+        use super::super::reactions::{Config, held};
+        let dir = std::env::temp_dir().join(format!("tinypaw-reference-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // What an image tool returns: three PNGs on one 64 × 64 stage.
+        let block = |x0: u32, x1: u32, y0: u32, y1: u32| {
+            RgbaImage::from_fn(64, 64, |x, y| {
+                let on = (x0..x1).contains(&x) && (y0..y1).contains(&y);
+                image::Rgba(if on { [200, 90, 40, 255] } else { [0, 0, 0, 0] })
+            })
+        };
+        block(20, 44, 10, 60).save(dir.join("body.png")).unwrap();
+        block(44, 58, 40, 50).save(dir.join("tail.png")).unwrap();
+        block(18, 46, 4, 62).save(dir.join("held.png")).unwrap();
+        let root = dir.join("characters");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut e = Editor::from_body_into(&root, &dir.join("body.png"), &[]).unwrap();
+        assert!(e.set_images(Target::NewPart, vec![dir.join("tail.png")]).is_empty());
+        e.set_image(Target::Held, &dir.join("held.png")).unwrap();
+        let saved = e.save_into(&root).unwrap();
+        let folder = saved.folder.clone().unwrap();
+        assert!(folder.join(HELD_FILE).exists());
+        assert!(held(&saved.pack_reactions(), &Config::default()).is_some());
+        assert!(saved.reaction_image(&held(&saved.pack_reactions(), &Config::default()).unwrap()).is_some());
+        assert_eq!(saved.rig().unwrap().motion_parts().len(), 1, "the tail is a part");
+        // Opening and saving again keeps the held pose.
+        let again = Editor::open_in(&root, &saved).unwrap().save_into(&root).unwrap();
+        assert!(held(&again.pack_reactions(), &Config::default()).is_some());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

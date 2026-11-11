@@ -54,6 +54,8 @@ pub enum Message {
     CharacterWorked(u64, Result<CharacterWork, String>),
     ReactionWavPicked(crate::mascot::reactions::Event, Option<PathBuf>),
     ReactionPicturePicked(crate::mascot::reactions::Event, Option<PathBuf>),
+    ReferencePicked(Option<PathBuf>),
+    ReferenceResults(Vec<PathBuf>),
     /// The artwork draft built as a rig for Test character, by request.
     DraftRig(u64, Box<crate::mascot::rig::Rig>),
     CharacterExportPicked(Option<PathBuf>),
@@ -147,6 +149,9 @@ pub struct App {
     /// on every update.
     motion_failed: Option<&'static str>,
     motion_ticked: Option<Instant>,
+    /// Create from reference in progress, and its reference thumbnail.
+    reference: Option<crate::mascot::reference::Request>,
+    reference_thumb: Option<image::Handle>,
     /// The latest draft-rig request; older results are dropped.
     draft_rig_request: u64,
     /// The character voice: cooldowns, idle deadline, what's playing.
@@ -297,6 +302,8 @@ impl App {
             motion_failed: None,
             motion_ticked: None,
             draft_rig_request: 0,
+            reference: None,
+            reference_thumb: None,
             voice: Default::default(),
             reaction_sounds: Default::default(),
             voice_clock: Instant::now(),
@@ -696,6 +703,22 @@ impl App {
                 }
             }
             Message::ReactionPicturePicked(_, None) => {}
+            Message::ReferencePicked(Some(path)) => {
+                // A thumbnail only; the reference stays where it is.
+                self.reference_thumb = ::image::open(&path).ok().map(|img| {
+                    let img = img.thumbnail(240, 240).to_rgba8();
+                    image::Handle::from_rgba(img.width(), img.height(), img.into_raw())
+                });
+                self.reference = Some(crate::mascot::reference::Request::new(path));
+                self.character_draft = None;
+                self.character_tab = view::settings::CharacterTab::Home;
+            }
+            Message::ReferencePicked(None) => {}
+            Message::ReferenceResults(paths) => {
+                if let Some(r) = &mut self.reference {
+                    r.add_results(paths);
+                }
+            }
             Message::DraftRig(request, rig) => {
                 if request == self.draft_rig_request
                     && let Some(e) = &self.art
@@ -2241,6 +2264,7 @@ impl App {
                         "Choose a part PNG: head, tail, ear, wing or hair".to_owned()
                     }
                     Target::EyePart => "Choose complete eye or eyebrow PNGs".to_owned(),
+                    Target::Held => "Choose the held pose PNG".to_owned(),
                     Target::Face(_, slot) => {
                         format!("Choose the {} face PNG", FACE_LABELS[slot.min(2)].to_lowercase())
                     }
@@ -2430,6 +2454,103 @@ impl App {
                 if let Some(p) = &mut self.motion_preview {
                     p.set_fall(fall);
                 }
+            }
+            UiMsg::ReferenceStart => {
+                return Task::perform(
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Choose a picture of the character to use as a reference")
+                        .add_filter("Image", &["png", "jpg", "jpeg", "webp"])
+                        .pick_file(),
+                    |f| Message::ReferencePicked(f.map(|f| f.path().to_path_buf())),
+                );
+            }
+            UiMsg::ReferenceStyle(style) => {
+                if let Some(r) = &mut self.reference {
+                    r.style = style.chars().take(200).collect();
+                }
+            }
+            UiMsg::ReferenceCanvas(c) => {
+                if let Some(r) = &mut self.reference {
+                    r.canvas = c;
+                }
+            }
+            UiMsg::ReferenceTail(on) => {
+                if let Some(r) = &mut self.reference {
+                    r.tail = on;
+                }
+            }
+            UiMsg::ReferenceHeld(on) => {
+                if let Some(r) = &mut self.reference {
+                    r.held = on;
+                }
+            }
+            UiMsg::ReferenceCopy(role) => {
+                if let Some(r) = &self.reference {
+                    let text = match role {
+                        Some(role) => r.prompt(role),
+                        None => r.brief(),
+                    };
+                    self.notice = Some("Copied. Attach the reference picture in your image tool and paste.".into());
+                    return iced::clipboard::write(text);
+                }
+            }
+            UiMsg::ReferenceImport => {
+                return Task::perform(
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Choose the PNGs your image tool made")
+                        .add_filter("PNG image", &["png"])
+                        .pick_files(),
+                    |files| {
+                        Message::ReferenceResults(
+                            files.unwrap_or_default().into_iter().map(|f| f.path().to_path_buf()).collect(),
+                        )
+                    },
+                );
+            }
+            UiMsg::ReferenceAssign(i, role) => {
+                if let Some(r) = &mut self.reference {
+                    r.assign(i, role);
+                }
+            }
+            UiMsg::ReferenceCancel => {
+                self.reference = None;
+                self.reference_thumb = None;
+            }
+            UiMsg::ReferenceOpen => {
+                use crate::mascot::editor::{Editor, Target};
+                use crate::mascot::reference::Role;
+                let Some(r) = self.reference.clone() else {
+                    return Task::none();
+                };
+                let Some(body) = r.file_for(Role::Body).map(PathBuf::from) else {
+                    self.notice = Some("Assign a file to Body first.".into());
+                    return Task::none();
+                };
+                let tail = r.file_for(Role::Tail).map(PathBuf::from);
+                let held = r.file_for(Role::Held).map(PathBuf::from);
+                self.reference = None;
+                self.reference_thumb = None;
+                let taken: Vec<_> = self.characters.iter().map(|c| c.id).collect();
+                let id = self.begin_character_job();
+                // The assembled draft opens in Arrange for alignment; Save
+                // exports through the ordinary validated pack path.
+                return character_work(id, move || {
+                    let mut editor = Editor::from_body(&body, &taken)?;
+                    let mut errors = Vec::new();
+                    if let Some(tail) = tail {
+                        errors.extend(editor.set_images(Target::NewPart, vec![tail]));
+                        if let Some(p) = editor.parts.last_mut() {
+                            p.kind = crate::mascot::motion::PartType::Tail;
+                            p.name = "Tail".into();
+                        }
+                    }
+                    if let Some(held) = held
+                        && let Err(e) = editor.set_image(Target::Held, &held)
+                    {
+                        errors.push(format!("held pose: {e}"));
+                    }
+                    Ok(CharacterWork::Editor(Box::new(editor), errors))
+                });
             }
             UiMsg::ReactionHeldClear => {
                 if let Some(p) = &mut self.motion_preview {
@@ -3222,6 +3343,7 @@ impl App {
                 character_conflict: self.character_conflict.as_deref(),
                 art: self.art.as_ref(),
                 motion: self.motion_preview.as_ref(),
+                reference: self.reference.as_ref().map(|r| (r, self.reference_thumb.as_ref())),
                 unsaved: self.character_unsaved(),
                 leaving: self.leaving.is_some(),
                 music: self.music_status(),
