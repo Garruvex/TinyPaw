@@ -303,9 +303,18 @@ impl Desktop {
         (desktop, task)
     }
 
-    /// Room above the character for a bubble, when it has lines.
+    /// Room above the character for a bubble, when it has lines, and
+    /// always a little for a music hop and stretch.
     fn band(&self) -> f32 {
-        if self.lines.is_empty() { 0.0 } else { BUBBLE_BAND }
+        if self.lines.is_empty() {
+            (self.size * 0.08).ceil()
+        } else {
+            BUBBLE_BAND
+        }
+    }
+
+    pub fn set_bop(&mut self, bop: super::motion::Bop) {
+        self.rig.set_bop(bop);
     }
 
     /// The character's lines; re-lays out for the bubble band.
@@ -549,6 +558,7 @@ impl Desktop {
                 velocity,
                 music: o.music,
                 beat: o.beat,
+                bop: self.rig.bop(),
             },
         );
         // Counter-rotate the gaze into the head's space so it stays
@@ -849,20 +859,7 @@ impl canvas::Program<Message> for Stage<'_> {
         let mut frame = Frame::new(renderer, bounds.size());
         frame.translate(Vector::new(0.0, l.character.y));
         frame.scale(l.scale);
-        // Music bounce lifts the whole character.
-        frame.translate(Vector::new(0.0, -pose.bounce * d.rig.size().height));
-        if pose.squash > 0.001 || pose.lean.abs() > 0.0005 {
-            // Lean while carried, squash when pressed: both around the
-            // feet, so they stay on the ground.
-            let feet = d.rig.anchor();
-            frame.translate(Vector::new(feet.x, feet.y));
-            frame.rotate(pose.lean);
-            frame.scale_nonuniform(Vector::new(
-                1.0 + 0.06 * pose.squash,
-                1.0 - 0.08 * pose.squash,
-            ));
-            frame.translate(Vector::new(-feet.x, -feet.y));
-        }
+        super::motion::place(&mut frame, pose, d.rig.anchor(), d.rig.size().height);
         d.rig.draw_pose(&mut frame, pose);
         vec![frame.into_geometry()]
     }

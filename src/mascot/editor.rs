@@ -160,8 +160,9 @@ pub struct Editor {
     other_sources: Vec<SourceRecord>,
     source: Option<Source>,
     author: Option<String>,
-    /// The pack's lines, kept as they are by an art save.
+    /// The pack's lines and bop, kept as they are by an art save.
     lines: super::lines::Lines,
+    bop: Option<super::motion::Bop>,
     /// Poses this editor doesn't show, kept as they are.
     others: Vec<Pose>,
     pose: String,
@@ -240,6 +241,7 @@ impl Editor {
             source: m.source,
             author: m.author.clone(),
             lines: m.lines.clone(),
+            bop: m.bop,
             others: m
                 .poses
                 .iter()
@@ -576,6 +578,7 @@ impl Editor {
             name: name.chars().take(60).collect(),
             author: self.author.clone(),
             lines: self.lines.clone(),
+            bop: self.bop,
             canvas: self.canvas,
             default_pose: self.pose.clone(),
             poses,
@@ -708,6 +711,7 @@ impl Editor {
             source: None,
             author: None,
             lines: super::lines::Lines::default(),
+            bop: None,
             others: Vec::new(),
             pose: "sit".into(),
             mode: Mode::Arrange,

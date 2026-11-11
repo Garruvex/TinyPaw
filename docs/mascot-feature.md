@@ -561,3 +561,27 @@ Completion checks:
   memory/CPU cost against TinyPaw without the mascot enabled.
 - No protected third-party file parsing is needed. Our PNGs, format, renderer
   and animation behaviour are sufficient.
+
+### Bop styles
+
+Music response has three bop styles, picked per character under Music →
+**Bop style** and saved at once (with a short Music preview so the change
+shows without audio):
+
+| Style | Movement |
+| --- | --- |
+| **Nod** (default) | A small nod of each part and a light hop, as before. |
+| **Groove** | A sharp dip (squash) on each beat that eases out, and a lean to one side on one beat and the other side on the next. Parts follow the lean a little late; no hopping. |
+| **Rubber hose** | A hop every beat: squashed on landing, stretched at the top, rocking side to side, with ears, wings and hair flopping late. |
+
+Two-beat moves count beats in the animator, so they alternate sides on a
+followed beat or on the steady 120 BPM pace. Reduced motion turns all of it
+off. The squash is now signed (negative stretches), and the desktop and the
+Settings preview share one placement function, so the preview now shows the
+music hop too. Without lines the desktop window keeps a little room above
+the character for the hop.
+
+A pack sets its own style with `"music": { "bop": "groove" }` (`nod`,
+`groove` or `rubber_hose`; an unknown style bops the default way). The
+user's choice is kept in the character's overrides as `"bop"`, removed again
+when it matches the pack's, and baked into exports.

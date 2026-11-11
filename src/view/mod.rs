@@ -141,6 +141,8 @@ pub enum UiMsg {
     MotionStrength(usize, f32),
     MotionSpeed(usize, f32),
     MotionTest(crate::mascot::preview::Test),
+    /// Pick how the selected character bops to music; saved at once.
+    MusicBop(crate::mascot::motion::Bop),
     MotionSave,
     MotionReset,
     /// Lines: edit, add or remove a line, and its sound.

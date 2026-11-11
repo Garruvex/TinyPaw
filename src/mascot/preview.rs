@@ -5,7 +5,7 @@
 use iced::Vector;
 
 use super::lines::{Lines, Picker, SoundRef, Speech, Trigger};
-use super::motion::{Animator, Inputs, MotionSpec, PartType, Pose};
+use super::motion::{Animator, Bop, Inputs, MotionSpec, PartType, Pose};
 use super::rig::Rig;
 
 /// A reaction the preview can play on demand.
@@ -118,6 +118,11 @@ impl MotionPreview {
         self.saved = self.specs.clone();
     }
 
+    /// Shows a bop style at once (it's saved as soon as it's picked).
+    pub fn set_bop(&mut self, bop: Bop) {
+        self.rig.set_bop(bop);
+    }
+
     pub fn test(&mut self, test: Test) {
         if test == Test::Speak {
             let t = if self.lines.get(Trigger::Click).is_empty() {
@@ -186,6 +191,7 @@ impl MotionPreview {
             reduced,
             music,
             beat,
+            bop: self.rig.bop(),
             ..Inputs::default()
         };
         if let Some((test, started)) = self.test {

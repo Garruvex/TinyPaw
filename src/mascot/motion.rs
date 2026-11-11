@@ -144,6 +144,46 @@ impl Preset {
     }
 }
 
+/// How the whole character bops to music.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Bop {
+    /// A relaxed nod with a light hop.
+    #[default]
+    Nod,
+    /// A sharp head dip on each beat while the body leans side to side
+    /// across two beats; no hopping.
+    Groove,
+    /// Old-cartoon bounce: a hop every beat, squashing on landing and
+    /// stretching at the top, rocking side to side with parts flopping late.
+    RubberHose,
+}
+
+impl std::fmt::Display for Bop {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Bop::Nod => "Nod",
+            Bop::Groove => "Groove",
+            Bop::RubberHose => "Rubber hose",
+        })
+    }
+}
+
+impl Bop {
+    pub const ALL: [Bop; 3] = [Bop::Nod, Bop::Groove, Bop::RubberHose];
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|b| b.name() == text)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Bop::Nod => "nod",
+            Bop::Groove => "groove",
+            Bop::RubberHose => "rubber_hose",
+        }
+    }
+}
+
 /// One part's motion settings. Strength and Speed run 0–2, 1 being the
 /// preset as designed.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -213,6 +253,8 @@ pub struct Inputs {
     /// Where we are between followed beats (0 on the beat), while Follow
     /// beat has one; otherwise music bobs at a relaxed fixed pace.
     pub beat: Option<f32>,
+    /// How the character bops while music plays.
+    pub bop: Bop,
 }
 
 /// Everything the renderer needs for one frame.
@@ -222,7 +264,8 @@ pub struct Pose {
     pub angles: Vec<f32>,
     /// Whole-character rotation around the feet, from dragging.
     pub lean: f32,
-    /// Press feedback, 0 to 1.
+    /// Squash around the feet: positive is shorter and wider (a press, a
+    /// landing), negative taller and narrower (a bop's stretch).
     pub squash: f32,
     /// Music bounce: how far the whole character rises, as a fraction of
     /// its height (0 at rest).
@@ -250,6 +293,10 @@ pub struct Animator {
     velocity: Vector,
     /// The click reaction's face shows until this time.
     react_until: f32,
+    /// Beats so far and the last beat phase, so two-beat bops know which
+    /// side they're on.
+    beats: u32,
+    last_phase: f32,
 }
 
 /// Longest step, so a stall doesn't fling springs.
@@ -302,6 +349,18 @@ impl Animator {
             self.squash += (squash - self.squash) * ease(25.0);
         }
 
+        // Where the bop is: this beat's phase, and which of two beats.
+        let phase = beat_phase(i);
+        if phase < self.last_phase - 0.5 {
+            self.beats = self.beats.wrapping_add(1);
+        }
+        self.last_phase = phase;
+        let beat = Beat {
+            p: phase,
+            two: (self.beats % 2) as f32 + phase,
+        };
+        let level = i.music.min(2.0);
+
         let mut angles = vec![0.0; parts.len()];
         if !i.reduced {
             // Parents first, so a child knows how far its parent just moved.
@@ -317,7 +376,7 @@ impl Animator {
                 let base = if i.idle { idle_angle(spec.preset, t, i.dragging) } else { 0.0 };
                 let drag = drag_angle(part.kind, spec.preset, self.velocity.x, i.dragging);
                 let music = if i.music > 0.0 {
-                    music_angle(part.kind, music_phase(i)) * i.music.min(2.0)
+                    bop_angle(i.bop, part.kind, beat) * level
                 } else {
                     0.0
                 };
@@ -356,21 +415,21 @@ impl Animator {
             Expression::Idle
         };
 
-        let bounce = if i.reduced || i.music <= 0.0 {
-            0.0
+        let body = if i.reduced || i.music <= 0.0 {
+            Body::default()
         } else {
-            let lift = match i.beat {
-                // A quick hop on each beat, settling before the next.
-                Some(p) => (1.0 - p).powi(4) * 0.014,
-                None => music_phase(i).sin().abs() * 0.012,
-            };
-            lift * i.music.min(2.0)
+            let b = bop_body(i.bop, beat, i.beat.is_some());
+            Body {
+                bounce: b.bounce * level,
+                lean: b.lean * level,
+                squash: b.squash * level,
+            }
         };
         Pose {
             angles,
-            lean: self.lean,
-            squash: self.squash,
-            bounce,
+            lean: self.lean + body.lean,
+            squash: self.squash + body.squash,
+            bounce: body.bounce,
             expression,
             gaze: Vector::ZERO,
         }
@@ -417,22 +476,109 @@ fn drag_angle(kind: PartType, preset: Preset, vx: f32, dragging: bool) -> f32 {
 /// Bobs per second while music plays: a relaxed nod, not a beat match.
 const MUSIC_TEMPO: f32 = 2.0;
 
-/// The music cycle in radians: on the followed beat when there is one.
-fn music_phase(i: &Inputs) -> f32 {
+/// Where we are between beats (0 on the beat, up to 1): the followed beat
+/// when there is one, else the fixed pace.
+fn beat_phase(i: &Inputs) -> f32 {
     match i.beat {
-        Some(p) => p * std::f32::consts::TAU,
-        None => i.now * MUSIC_TEMPO * std::f32::consts::TAU,
+        Some(p) => p.rem_euclid(1.0),
+        None => (i.now * MUSIC_TEMPO).rem_euclid(1.0),
     }
 }
 
-/// How a part moves with the music at full level, at `phase` radians.
-fn music_angle(kind: PartType, phase: f32) -> f32 {
-    match kind {
-        PartType::Head => phase.sin() * 0.05,
-        PartType::Tail => (phase * 0.5).sin() * 0.1,
-        PartType::Ear => (phase + 1.0).sin() * 0.06,
-        PartType::Wing => (phase * 2.0).sin() * 0.15,
-        PartType::Hair | PartType::Other => (phase + 0.5).sin() * 0.04,
+/// A point in the bop: `p` within this beat, `two` across a pair of beats
+/// (0 to 2), for moves that go left on one beat and right on the next.
+#[derive(Debug, Clone, Copy)]
+struct Beat {
+    p: f32,
+    two: f32,
+}
+
+/// Whole-character bop at full level.
+#[derive(Debug, Clone, Copy, Default)]
+struct Body {
+    bounce: f32,
+    lean: f32,
+    squash: f32,
+}
+
+/// How a part moves with the music at full level.
+fn bop_angle(bop: Bop, kind: PartType, b: Beat) -> f32 {
+    use std::f32::consts::{PI, TAU};
+    let beat = b.p * TAU;
+    let pair = b.two * PI;
+    // Sharp on the beat, easing out before the next.
+    let hit = (1.0 - b.p).powi(3);
+    match bop {
+        Bop::Nod => match kind {
+            PartType::Head => beat.sin() * 0.05,
+            PartType::Tail => pair.sin() * 0.1,
+            PartType::Ear => (beat + 1.0).sin() * 0.06,
+            PartType::Wing => (beat * 2.0).sin() * 0.15,
+            PartType::Hair | PartType::Other => (beat + 0.5).sin() * 0.04,
+        },
+        // Parts follow the side-to-side lean a little late; the head and
+        // ears also snap on each beat.
+        Bop::Groove => match kind {
+            PartType::Head => (pair - 0.5).cos() * 0.06 + hit * 0.06,
+            PartType::Tail => -(pair - 0.9).cos() * 0.14,
+            PartType::Ear => (pair - 1.2).cos() * 0.08 + hit * 0.05,
+            PartType::Wing => (pair - 0.6).cos() * 0.1,
+            PartType::Hair | PartType::Other => (pair - 1.0).cos() * 0.06,
+        },
+        // Ears, wings and hair flop with each hop; head and tail rock with
+        // the body, late.
+        Bop::RubberHose => match kind {
+            PartType::Head => (pair - 0.3).sin() * 0.05,
+            PartType::Tail => (pair - 1.0).sin() * 0.16,
+            PartType::Ear => -(beat - 1.0).cos() * 0.12,
+            PartType::Wing => beat.sin() * 0.2,
+            PartType::Hair | PartType::Other => -(beat - 1.2).cos() * 0.08,
+        },
+    }
+}
+
+/// How the whole character moves with the music at full level.
+fn bop_body(bop: Bop, b: Beat, followed: bool) -> Body {
+    use std::f32::consts::{PI, TAU};
+    let pair = b.two * PI;
+    match bop {
+        Bop::Nod => Body {
+            bounce: if followed {
+                // A quick hop on each beat, settling before the next.
+                (1.0 - b.p).powi(4) * 0.014
+            } else {
+                (b.p * TAU).sin().abs() * 0.012
+            },
+            ..Body::default()
+        },
+        // A dip on the beat, leaning to one side, then the other.
+        Bop::Groove => Body {
+            bounce: 0.0,
+            lean: pair.cos() * 0.05,
+            squash: (1.0 - b.p).powi(3) * 0.5,
+        },
+        // Lands on the beat squashed, stretches at the top of the hop.
+        Bop::RubberHose => {
+            let air = (b.p * PI).sin();
+            Body {
+                bounce: air * 0.035,
+                lean: pair.sin() * 0.06,
+                squash: (1.0 - b.p).powi(6) * 0.9 - air * 0.6,
+            }
+        }
+    }
+}
+
+/// Places the character for `pose`: the music bounce lifts it, and lean and
+/// squash turn and scale it around its feet so they stay on the ground.
+/// Shared by the desktop and the Settings preview.
+pub fn place(frame: &mut iced::widget::canvas::Frame, pose: &Pose, feet: iced::Point, height: f32) {
+    frame.translate(Vector::new(0.0, -pose.bounce * height));
+    if pose.squash.abs() > 0.001 || pose.lean.abs() > 0.0005 {
+        frame.translate(Vector::new(feet.x, feet.y));
+        frame.rotate(pose.lean);
+        frame.scale_nonuniform(Vector::new(1.0 + 0.06 * pose.squash, 1.0 - 0.08 * pose.squash));
+        frame.translate(Vector::new(-feet.x, -feet.y));
     }
 }
 
@@ -620,6 +766,58 @@ mod tests {
         let on = at(&mut a, 0.0);
         let between = at(&mut a, 0.6);
         assert!(on > 0.01 && between < on * 0.1, "{on} {between}");
+    }
+
+    /// Two seconds of a bop at full music: the extremes of bounce, lean and
+    /// squash, and how far the tail swung.
+    fn bop_range(bop: Bop, reduced: bool) -> (f32, (f32, f32), (f32, f32), f32) {
+        let mut a = Animator::default();
+        let (mut bounce, mut lean, mut squash, mut tail_swing) =
+            (0.0f32, (0.0f32, 0.0f32), (0.0f32, 0.0f32), 0.0f32);
+        for n in 0..120 {
+            let pose = a.step(
+                &[tail()],
+                &Inputs {
+                    now: n as f32 / 60.0,
+                    dt: 1.0 / 60.0,
+                    music: 1.0,
+                    reduced,
+                    bop,
+                    ..Inputs::default()
+                },
+            );
+            bounce = bounce.max(pose.bounce);
+            lean = (lean.0.min(pose.lean), lean.1.max(pose.lean));
+            squash = (squash.0.min(pose.squash), squash.1.max(pose.squash));
+            tail_swing = tail_swing.max(pose.angles[0].abs());
+        }
+        (bounce, lean, squash, tail_swing)
+    }
+
+    #[test]
+    fn each_bop_style_moves_its_own_way() {
+        let (bounce, lean, squash, _) = bop_range(Bop::Nod, false);
+        assert!(bounce > 0.005 && lean == (0.0, 0.0) && squash == (0.0, 0.0));
+
+        // Groove: no hop, leans to both sides, dips on the beat.
+        let (bounce, lean, squash, tail) = bop_range(Bop::Groove, false);
+        assert_eq!(bounce, 0.0);
+        assert!(lean.0 < -0.03 && lean.1 > 0.03, "{lean:?}");
+        assert!(squash.1 > 0.3 && squash.0 >= 0.0, "{squash:?}");
+        assert!(tail > 0.1);
+
+        // Rubber hose: hops, rocks both ways, squashes and stretches.
+        let (bounce, lean, squash, tail) = bop_range(Bop::RubberHose, false);
+        assert!(bounce > 0.03, "{bounce}");
+        assert!(lean.0 < -0.03 && lean.1 > 0.03, "{lean:?}");
+        assert!(squash.0 < -0.3 && squash.1 > 0.5, "{squash:?}");
+        assert!(tail > 0.1);
+
+        for bop in Bop::ALL {
+            let (bounce, lean, squash, tail) = bop_range(bop, true);
+            assert_eq!((bounce, lean, squash, tail), (0.0, (0.0, 0.0), (0.0, 0.0), 0.0), "{bop}");
+            assert_eq!(Bop::parse(bop.name()), Some(bop));
+        }
     }
 
     #[test]

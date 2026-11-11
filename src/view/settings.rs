@@ -1955,6 +1955,21 @@ fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         .spacing(8)
         .align_y(Alignment::Center)
         .into(),
+        row![
+            text("Bop style").size(12).color(theme::MUTED).width(110),
+            pick_list(
+                crate::mascot::motion::Bop::ALL,
+                v.motion.map(|m| m.rig().bop()),
+                |b| Message::Ui(UiMsg::MusicBop(b)),
+            )
+            .text_size(13)
+            .padding([6, 10])
+            .style(theme::select),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center)
+        .into(),
+        hint("Nod is relaxed. Groove dips on the beat and leans side to side. Rubber hose hops every beat, squashing and stretching like an old cartoon. Saved for this character, and carried when you export it."),
         check("Follow beat (trial)", s.bool(mascot::BEAT), mascot::BEAT),
         hint("Nods land on the beat instead of a steady bob. It listens to what's playing (TinyPaw's own sounds are held off while they play) and keeps nothing."),
         row![
@@ -2092,13 +2107,7 @@ impl canvas::Program<Message> for MotionStage<'_> {
         let origin = iced::Vector::new(size.width / 2.0 - feet.x * k, size.height - pad - feet.y * k);
         frame.translate(origin);
         frame.scale(k);
-        frame.translate(iced::Vector::new(feet.x, feet.y));
-        frame.rotate(pose.lean);
-        frame.scale_nonuniform(iced::Vector::new(
-            1.0 + 0.06 * pose.squash,
-            1.0 - 0.08 * pose.squash,
-        ));
-        frame.translate(iced::Vector::new(-feet.x, -feet.y));
+        crate::mascot::motion::place(&mut frame, pose, feet, canvas_size.height);
         rig.draw_pose(&mut frame, pose);
         vec![frame.into_geometry()]
     }

@@ -1,7 +1,7 @@
 //! Character renderer. A character is one whole image, or layered: a body
 //! plus moving parts and eyes, all registered on one canvas. Bundled Yohta
 //! is an ordinary layered pack (see `yohta_pack`).
-use super::motion::{Expression, MotionSpec, PartMotion, PartType, Pose, Preset};
+use super::motion::{Bop, Expression, MotionSpec, PartMotion, PartType, Pose, Preset};
 use iced::advanced::image::Handle;
 use iced::widget::canvas::{self, Frame};
 use iced::{Point, Rectangle, Size, Vector};
@@ -26,6 +26,8 @@ pub struct Rig {
     silhouette: Silhouette,
     /// Motion per moving part, in `motion_parts` order.
     motion: Vec<MotionSpec>,
+    /// How it bops to music.
+    bop: Bop,
 }
 
 #[derive(Debug, Clone)]
@@ -265,6 +267,7 @@ impl Rig {
             silhouette,
             // The whole image sways a little, like a tilting head.
             motion: vec![MotionSpec::of(Preset::Tilt)],
+            bop: Bop::default(),
         }
     }
 
@@ -314,6 +317,7 @@ impl Rig {
         Self {
             anchor: Point::new(art.ground.0 * size.width, art.ground.1 * size.height),
             motion: parts.iter().map(|p| p.motion).collect(),
+            bop: Bop::default(),
             kind: Kind::Layered { body, parts, eyes },
             size,
             silhouette,
@@ -353,6 +357,14 @@ impl Rig {
     /// The current motion per part.
     pub fn motion(&self) -> &[MotionSpec] {
         &self.motion
+    }
+
+    pub fn bop(&self) -> Bop {
+        self.bop
+    }
+
+    pub fn set_bop(&mut self, bop: Bop) {
+        self.bop = bop;
     }
 
     /// Replaces the motion, part by part. A spec whose preset the part's type

@@ -1139,6 +1139,7 @@ impl App {
                 if let Some(specs) = characters::load_motion(c.id) {
                     rig.set_motion(&specs);
                 }
+                rig.set_bop(c.bop());
                 self.motion_preview = Some(crate::mascot::preview::MotionPreview::new(
                     c.id,
                     rig,
@@ -1615,6 +1616,28 @@ impl App {
                     && let Some(p) = &mut self.motion_preview
                 {
                     p.hold_speech(seconds);
+                }
+            }
+            UiMsg::MusicBop(bop) => {
+                let c = self.current_character().clone();
+                match c.save_bop(bop) {
+                    Ok(()) => {
+                        self.notice = None;
+                        if let Some(p) = &mut self.motion_preview
+                            && p.id == c.id
+                        {
+                            p.set_bop(bop);
+                            // Show it straight away, even without music.
+                            p.test(crate::mascot::preview::Test::Music);
+                        }
+                        #[cfg(windows)]
+                        if let Some(m) = &mut self.mascot
+                            && m.character() == c.id
+                        {
+                            m.set_bop(bop);
+                        }
+                    }
+                    Err(e) => self.notice = Some(format!("Could not save bop style: {e}")),
                 }
             }
             UiMsg::LineText(t, i, text) => {

@@ -20,7 +20,7 @@ use image::RgbaImage;
 use serde_json::{Value as Json, json};
 
 use super::lines::{Lines, SoundRef};
-use super::motion::{MotionSpec, PartType, Preset};
+use super::motion::{Bop, MotionSpec, PartType, Preset};
 use super::rig::{EyeArt, LayeredArt, PartArt, Rig};
 
 /// The bundled character's ID, also the fallback selection.
@@ -137,13 +137,39 @@ impl Character {
         }
     }
 
-    /// The rig with the user's Motion tab settings applied, if they still fit.
+    /// The rig with the user's Motion tab settings and bop applied, if
+    /// they still fit.
     pub fn rig_with_motion(&self) -> Result<Rig, String> {
         let mut rig = self.rig()?;
-        if let Some(specs) = load_motion(self.id) {
+        let o = load_overrides(self.id);
+        if let Some(specs) = o.motion {
             rig.set_motion(&specs);
         }
+        if let Some(bop) = o.bop {
+            rig.set_bop(bop);
+        }
         Ok(rig)
+    }
+
+    /// The pack's own bop style, before the user's choice.
+    pub fn pack_bop(&self) -> Bop {
+        match &self.folder {
+            None => bundled_manifest().bop,
+            Some(folder) => read_manifest(folder).ok().and_then(|m| m.bop),
+        }
+        .unwrap_or_default()
+    }
+
+    /// How the character bops: the user's choice, else the pack's.
+    pub fn bop(&self) -> Bop {
+        load_overrides(self.id).bop.unwrap_or_else(|| self.pack_bop())
+    }
+
+    /// Saves the user's bop style; picking the pack's own forgets the choice.
+    pub fn save_bop(&self, bop: Bop) -> Result<(), String> {
+        let mut o = load_overrides(self.id);
+        o.bop = (bop != self.pack_bop()).then_some(bop);
+        save_overrides(self.id, &o)
     }
 
     /// Decodes the art for the desktop. Done when shown, released when hidden.
@@ -176,6 +202,7 @@ fn build_rig(m: &Manifest, png: impl Fn(&str) -> Result<RgbaImage, String>) -> R
         if let Some(w) = pose.whole {
             rig.set_motion(&[w]);
         }
+        rig.set_bop(m.bop.unwrap_or_default());
         return Ok(rig);
     }
     let mut parts = Vec::new();
@@ -206,12 +233,14 @@ fn build_rig(m: &Manifest, png: impl Fn(&str) -> Result<RgbaImage, String>) -> R
             max_offset: eye.max_offset,
         });
     }
-    Ok(Rig::layered(LayeredArt {
+    let mut rig = Rig::layered(LayeredArt {
         body,
         ground: pose.ground,
         parts,
         eyes,
-    }))
+    });
+    rig.set_bop(m.bop.unwrap_or_default());
+    Ok(rig)
 }
 
 fn bundled(asset: &str) -> Result<&'static [u8], String> {
@@ -299,6 +328,8 @@ pub(super) struct Manifest {
     pub(super) editor: Vec<super::placement::SourceRecord>,
     /// What the character says, and its bubble's look.
     pub(super) lines: Lines,
+    /// How it bops to music, if not the default nod.
+    pub(super) bop: Option<Bop>,
 }
 
 /// The original PNG's size and the visible box quick import kept from it
@@ -717,6 +748,9 @@ impl Manifest {
             m["lines"] = lines;
             m["bubble"] = bubble;
         }
+        if let Some(bop) = self.bop {
+            m["music"] = json!({ "bop": bop.name() });
+        }
         m
     }
 }
@@ -927,6 +961,8 @@ fn parse_manifest(text: &str) -> Result<Manifest, String> {
         source,
         editor: Vec::new(),
         lines: Lines::parse(&m["lines"], &m["bubble"], false)?,
+        // A style this version doesn't know bops the default way.
+        bop: m["music"]["bop"].as_str().and_then(Bop::parse),
     };
     manifest.editor = super::placement::parse(&m["editor"], manifest.canvas, &manifest.assets())?;
     if manifest.assets().len() > MAX_IMAGES {
@@ -1280,6 +1316,7 @@ fn install_into_guarded(
         source: Some(draft.source),
         editor: Vec::new(),
         lines: Lines::default(),
+        bop: None,
     };
     let art = draft.art.clone();
     stage_and_install_guarded(
@@ -1704,6 +1741,7 @@ fn motion_file(root: &Path, id: &str) -> PathBuf {
 pub struct Overrides {
     pub motion: Option<Vec<MotionSpec>>,
     pub lines: Option<Lines>,
+    pub bop: Option<Bop>,
 }
 
 pub fn load_overrides(id: &str) -> Overrides {
@@ -1738,7 +1776,8 @@ fn load_overrides_in(root: &Path, id: &str) -> Overrides {
     let lines = (!v["lines"].is_null() || !v["bubble"].is_null())
         .then(|| Lines::parse(&v["lines"], &v["bubble"], true).ok())
         .flatten();
-    Overrides { motion, lines }
+    let bop = v["bop"].as_str().and_then(Bop::parse);
+    Overrides { motion, lines, bop }
 }
 
 pub fn save_overrides(id: &str, o: &Overrides) -> Result<(), String> {
@@ -1771,6 +1810,9 @@ fn save_overrides_in(root: &Path, id: &str, o: &Overrides) -> Result<(), String>
             .unwrap_or_else(|| (json!({}), json!({})));
         json["lines"] = l;
         json["bubble"] = b;
+    }
+    if let Some(bop) = o.bop {
+        json["bop"] = json!(bop.name());
     }
     // Write then rename, so a crash never leaves half a file.
     let partial = path.with_extension("json.partial");
@@ -1961,6 +2003,9 @@ fn bake(
             }
         }
         m.lines = lines;
+    }
+    if let Some(bop) = o.bop {
+        m.bop = Some(bop);
     }
     Ok(())
 }
@@ -2503,8 +2548,10 @@ mod tests {
         let o = Overrides {
             motion: Some(specs.to_vec()),
             lines: None,
+            bop: Some(Bop::Groove),
         };
         save_overrides_in(&dir, BUILTIN, &o).unwrap();
+        assert_eq!(load_overrides_in(&dir, BUILTIN).bop, Some(Bop::Groove));
         let loaded = load_overrides_in(&dir, BUILTIN).motion.unwrap();
         assert_eq!(loaded[0], specs[0]);
         assert_eq!(loaded[1].strength, 2.0, "clamped to the slider range");
@@ -2521,6 +2568,7 @@ mod tests {
         let quiet = Overrides {
             motion: None,
             lines: Some(Lines::default()),
+            bop: None,
         };
         save_overrides_in(&dir, BUILTIN, &quiet).unwrap();
         assert_eq!(load_overrides_in(&dir, BUILTIN), quiet);
@@ -2643,7 +2691,7 @@ mod tests {
             MotionSpec { preset: Preset::Nod, strength: 1.5, speed: 0.5 },
             MotionSpec { preset: Preset::Wag, strength: 2.0, speed: 1.2 },
         ];
-        let o = Overrides { motion: Some(motion.clone()), lines: Some(lines) };
+        let o = Overrides { motion: Some(motion.clone()), lines: Some(lines), bop: Some(Bop::RubberHose) };
         let out = dir.join("out");
         fs::create_dir_all(&out).unwrap();
         let folder =
@@ -2659,6 +2707,7 @@ mod tests {
         };
         let rig = copy.rig().unwrap();
         assert_eq!(rig.motion(), motion.as_slice(), "same motion");
+        assert_eq!(rig.bop(), Bop::RubberHose, "same bop");
         let lines = read_manifest(copy.folder.as_ref().unwrap()).unwrap().lines;
         let click = &lines.get(Trigger::Click)[0];
         assert_eq!(click.text, "Yip!");
@@ -2669,6 +2718,7 @@ mod tests {
         let o = Overrides {
             motion: Some(vec![MotionSpec { preset: Preset::Nod, strength: 0.4, speed: 1.0 }]),
             lines: None,
+            bop: None,
         };
         let folder = export_with(&plain, &out, &o, |_| None).unwrap();
         let Imported::Installed(sprite) =
@@ -2686,6 +2736,7 @@ mod tests {
         let o = Overrides {
             motion: Some(vec![MotionSpec { preset: Preset::Nod, strength: 1.0, speed: 1.0 }]),
             lines: Some(Lines::default()),
+            bop: None,
         };
         let (root, c) = test_install_folder(&dir, OnDuplicate::Ask);
         save_overrides_in(&root, c.id, &o).unwrap();
