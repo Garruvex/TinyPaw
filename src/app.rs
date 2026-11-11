@@ -338,6 +338,7 @@ impl App {
             ));
         }
         app.characters = loaded_characters;
+        app.migrate_character_height(loaded.first_run);
         app.sync_tray();
         let task = if loaded.first_run {
             // Saving now means the card shows once.
@@ -842,9 +843,16 @@ impl App {
                     if let Some((x, y)) = delta
                         && let Some(e) = &mut self.art
                     {
+                        // Holding an arrow is one undo step.
                         let step = if modifiers.shift() { 10.0 } else { 1.0 };
-                        e.checkpoint();
+                        e.checkpoint_gesture(crate::mascot::editor::Gesture::Nudge);
                         e.nudge(x * step, y * step);
+                    } else if matches!(key.as_ref(), keyboard::Key::Named(Named::Escape))
+                        && let Some(e) = &mut self.art
+                    {
+                        // Escape leaves a temporary tool.
+                        e.finish_joint();
+                        e.finish_rest();
                     }
                 } else if self.overlays.iter().any(|o| o.id == window) {
                     let escape = matches!(key.as_ref(), keyboard::Key::Named(Named::Escape));
@@ -1401,7 +1409,7 @@ impl App {
         {
             let s = self.session.settings();
             let want = s.bool(character::ENABLED);
-            let size = s.float(character::SIZE) as f32;
+            let size = s.float(character::HEIGHT) as f32;
             let hidden = self.session.overlay_state() == OverlayState::Interactive;
             // The menu is as tall as its visible rows.
             let rows = self.mascot_menu().len();
@@ -1588,6 +1596,35 @@ impl App {
         })
     }
 
+    /// Once: Size used to scale the whole canvas, so its number meant
+    /// something different per character. It now means visible height.
+    /// The active character keeps its exact on-screen size.
+    fn migrate_character_height(&mut self, first_run: bool) {
+        let s = self.session.settings();
+        if s.bool(character::HEIGHT_MIGRATED) {
+            return;
+        }
+        let mut sets = vec![(character::HEIGHT_MIGRATED, Value::Bool(true))];
+        if !first_run {
+            let old = s.float(character::SIZE);
+            let ratio = self
+                .current_character()
+                .rig()
+                .map(|r| f64::from(r.visible_height() / r.size().height))
+                .unwrap_or(1.0);
+            sets.push((
+                character::HEIGHT,
+                Value::Float((old * ratio).clamp(character::MIN_HEIGHT, character::MAX_HEIGHT)),
+            ));
+        }
+        let mut values = self.session.settings().clone();
+        for (id, value) in sets {
+            let _ = self.registry.set(&mut values, id, value);
+        }
+        self.session.handle(Event::SettingsChanged(values), 0);
+        self.preference_writer.schedule(self.session.settings());
+    }
+
     /// Whether the character draft (artwork or behavior) has changes Save
     /// would write.
     fn character_unsaved(&self) -> bool {
@@ -1771,7 +1808,6 @@ impl App {
                 | UiMsg::ArtRemoveFace(..)
                 | UiMsg::ArtRemoveEye(..)
                 | UiMsg::ArtRemoveBlink(..)
-                | UiMsg::ArtTravel(..)
         ) && let Some(e) = &mut self.art
         {
             e.checkpoint();
@@ -2248,6 +2284,9 @@ impl App {
                 }
             }
             UiMsg::ArtTravel(i, travel) => {
+                if let Some(e) = &mut self.art {
+                    e.checkpoint_gesture(crate::mascot::editor::Gesture::Travel(i));
+                }
                 if let Some(eye) = self.art.as_mut().and_then(|e| e.eyes.get_mut(i)) {
                     eye.travel = travel.clamp(0.0, 0.05);
                 }
@@ -2279,12 +2318,6 @@ impl App {
                             )
                         })
                     });
-                }
-            }
-            UiMsg::ArtMode(mode) => {
-                if let Some(e) = &mut self.art {
-                    e.mode = mode;
-                    e.finish_rest();
                 }
             }
             UiMsg::ReactionSound(e, sound) => {
@@ -2367,6 +2400,14 @@ impl App {
                     self.audio.release_idle(self.session.is_enabled());
                 }
             }
+            UiMsg::ArtJoint(part) => {
+                if let Some(e) = &mut self.art {
+                    match part {
+                        Some(i) => e.adjust_joint(i),
+                        None => e.finish_joint(),
+                    }
+                }
+            }
             UiMsg::ArtRename(i, name) => {
                 if let Some(e) = &mut self.art {
                     e.rename(i, name);
@@ -2410,7 +2451,7 @@ impl App {
             }
             UiMsg::ArtNudge(dx, dy) => {
                 if let Some(e) = &mut self.art {
-                    e.checkpoint();
+                    e.checkpoint_gesture(crate::mascot::editor::Gesture::Nudge);
                     e.nudge(dx, dy);
                 }
             }

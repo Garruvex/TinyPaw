@@ -114,9 +114,10 @@ pub enum UiMsg {
     /// Open the selected character in the Art tab.
     EditArt,
     ArtFromParts,
-    ArtMode(crate::mascot::editor::Mode),
     ArtRest(crate::mascot::editor::RestAction),
     ArtRename(usize, String),
+    /// Adjust joint for a part, or Done.
+    ArtJoint(Option<usize>),
     /// A reaction row's sound choice.
     ReactionSound(crate::mascot::reactions::Event, Option<crate::mascot::reactions::Sound>),
     ReactionImport(crate::mascot::reactions::Event),

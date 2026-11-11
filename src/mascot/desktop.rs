@@ -68,11 +68,13 @@ pub struct Layout {
 /// Room above the character for its speech bubble, in logical pixels.
 const BUBBLE_BAND: f32 = 104.0;
 
-/// `height` is the character's logical height; `canvas` the rig's size and
-/// `feet` where it meets the ground, both in rig pixels; `rows` the number of
-/// menu entries; `top` room kept above the character for its bubble.
-pub fn layout(height: f32, canvas: Size, feet: Point, rows: usize, top: f32) -> Layout {
-    let scale = height / canvas.height;
+/// `height` is the character's visible logical height and `visible` that
+/// art's height in rig pixels, so transparent padding doesn't shrink it;
+/// `canvas` the rig's size and `feet` where it meets the ground, both in rig
+/// pixels; `rows` the number of menu entries; `top` room kept above the
+/// character for its bubble.
+pub fn layout(height: f32, visible: f32, canvas: Size, feet: Point, rows: usize, top: f32) -> Layout {
+    let scale = height / visible.max(1.0);
     let size = Size::new(canvas.width * scale, canvas.height * scale);
     let below = (canvas.height - feet.y).max(0.0) * scale;
     let menu = Size::new(MENU_W, menu_height(rows));
@@ -292,7 +294,7 @@ impl Desktop {
         rows: usize,
         hidden: bool,
     ) -> (Self, Task<window::Id>) {
-        let layout = layout(size, rig.size(), rig.anchor(), rows, 0.0);
+        let layout = layout(size, rig.visible_height(), rig.size(), rig.anchor(), rows, 0.0);
         let parts = rig.motion_parts();
         let (id, task) = window::open(window::Settings {
             size: layout.window,
@@ -363,7 +365,7 @@ impl Desktop {
     pub fn set_lines(&mut self, lines: Lines, o: &Options) {
         self.lines = lines;
         self.speech = None;
-        self.layout = layout(self.size, self.rig.size(), self.rig.anchor(), self.rows, self.band());
+        self.layout = layout(self.size, self.rig.visible_height(), self.rig.size(), self.rig.anchor(), self.rows, self.band());
         self.schedule_idle(o);
         self.place();
     }
@@ -433,7 +435,7 @@ impl Desktop {
         self.rig = rig;
         self.menu = None;
         self.press = None;
-        self.layout = layout(self.size, self.rig.size(), self.rig.anchor(), self.rows, self.band());
+        self.layout = layout(self.size, self.rig.visible_height(), self.rig.size(), self.rig.anchor(), self.rows, self.band());
         self.place();
     }
 
@@ -733,7 +735,7 @@ impl Desktop {
         }
         self.size = size;
         self.rows = rows;
-        self.layout = layout(size, self.rig.size(), self.rig.anchor(), rows, self.band());
+        self.layout = layout(size, self.rig.visible_height(), self.rig.size(), self.rig.anchor(), rows, self.band());
         self.place();
     }
 
@@ -999,6 +1001,7 @@ mod tests {
     fn yohta(height: f32) -> Layout {
         layout(
             height,
+            rig::HEIGHT,
             Size::new(rig::WIDTH, rig::HEIGHT),
             Point::new(rig::WIDTH * 0.5, GROUND),
             5,
@@ -1080,7 +1083,7 @@ mod tests {
     #[test]
     fn layout_follows_a_custom_canvas_and_off_centre_feet() {
         // A wide image whose feet sit left of centre.
-        let l = layout(100.0, Size::new(400.0, 200.0), Point::new(100.0, 190.0), 3, 0.0);
+        let l = layout(100.0, 200.0, Size::new(400.0, 200.0), Point::new(100.0, 190.0), 3, 0.0);
         assert!((l.character.width - 200.0).abs() < 0.01);
         assert!((l.anchor.x - (l.character.x + 50.0)).abs() < 0.01);
         assert!((l.anchor.y - (l.character.y + 95.0)).abs() < 0.01);
@@ -1088,9 +1091,25 @@ mod tests {
 
     #[test]
     fn the_bubble_band_sits_above_the_character() {
-        let l = layout(100.0, Size::new(100.0, 100.0), Point::new(50.0, 95.0), 3, BUBBLE_BAND);
+        let l = layout(100.0, 100.0, Size::new(100.0, 100.0), Point::new(50.0, 95.0), 3, BUBBLE_BAND);
         assert!(l.character.y >= BUBBLE_BAND - 0.01);
         assert!((l.window.height - (l.character.y + 100.0)).abs() < 1.0);
+    }
+
+    #[test]
+    fn size_is_visible_height_so_padding_does_not_shrink_the_character() {
+        // The same 100-pixel figure on a tight and a heavily padded canvas.
+        let tight = layout(200.0, 100.0, Size::new(60.0, 110.0), Point::new(30.0, 105.0), 3, 0.0);
+        let padded = layout(200.0, 100.0, Size::new(600.0, 1100.0), Point::new(300.0, 900.0), 3, 0.0);
+        assert_eq!(tight.scale, padded.scale);
+        assert!((tight.scale * 100.0 - 200.0).abs() < 1e-3);
+        // Yohta: the new range shows him exactly as the old one did.
+        let r = crate::mascot::rig::Rig::load();
+        let ratio = f64::from(r.visible_height() / r.size().height);
+        use crate::features::mascot as m;
+        for (old, new) in [(m::MIN_SIZE, m::MIN_HEIGHT), (160.0, m::DEFAULT_HEIGHT), (m::MAX_SIZE, m::MAX_HEIGHT)] {
+            assert!((old * ratio - new).abs() < 1.0, "{old} × {ratio} vs {new}");
+        }
     }
 
     #[test]

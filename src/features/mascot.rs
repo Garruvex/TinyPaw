@@ -6,7 +6,13 @@ use crate::registry::{
 };
 
 pub const ENABLED: &str = "mascot.enabled";
+/// The old canvas-based size, read once to migrate to `HEIGHT`.
 pub const SIZE: &str = "mascot.size";
+/// The character's visible resting height in logical pixels, excluding
+/// transparent stage padding.
+pub const HEIGHT: &str = "mascot.height";
+/// `SIZE` has been converted to `HEIGHT`.
+pub const HEIGHT_MIGRATED: &str = "mascot.height_migrated";
 pub const EYES: &str = "mascot.eyes";
 pub const IDLE: &str = "mascot.idle";
 /// Speech lines: shown at all, and Quiet (no idle or music lines).
@@ -38,6 +44,11 @@ pub const HIDE: &str = "mascot.hide";
 
 pub const MIN_SIZE: f64 = 96.0;
 pub const MAX_SIZE: f64 = 320.0;
+/// Bundled Yohta's visible art is 786 of his 860 canvas pixels, so these
+/// give him the same smallest, default and largest size as 96, 160 and 320.
+pub const MIN_HEIGHT: f64 = 88.0;
+pub const DEFAULT_HEIGHT: f64 = 146.0;
+pub const MAX_HEIGHT: f64 = 292.0;
 /// Saved position meaning "never placed": no display reaches it, so the
 /// character starts at the default spot on the primary display.
 pub const UNPLACED: f64 = -1.0e7;
@@ -62,14 +73,33 @@ pub fn register(r: &mut Registrar) {
     });
     r.setting(SettingDef {
         id: SIZE,
-        label: "Character size",
+        label: "Character canvas size (before visible height)",
         group: "Character",
-        order: 1,
+        order: 90,
         default: Value::Float(160.0),
         constraint: Constraint::Range {
             min: MIN_SIZE,
             max: MAX_SIZE,
         },
+    });
+    r.setting(SettingDef {
+        id: HEIGHT,
+        label: "Character size",
+        group: "Character",
+        order: 1,
+        default: Value::Float(DEFAULT_HEIGHT),
+        constraint: Constraint::Range {
+            min: MIN_HEIGHT,
+            max: MAX_HEIGHT,
+        },
+    });
+    r.setting(SettingDef {
+        id: HEIGHT_MIGRATED,
+        label: "Character size uses visible height",
+        group: "Character",
+        order: 91,
+        default: Value::Bool(false),
+        constraint: Constraint::None,
     });
     r.setting(SettingDef {
         id: EYES,

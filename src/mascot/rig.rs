@@ -30,6 +30,29 @@ pub struct Rig {
     motion: Vec<MotionSpec>,
     /// How it bops to music.
     bop: Bop,
+    /// Top and bottom of the visible artwork at rest, in rig pixels:
+    /// what the character's Size measures, without transparent padding.
+    visible: (f32, f32),
+}
+
+/// Top and bottom rows of pixels at least as opaque as hit testing needs,
+/// in canvas pixels, over several canvas-sized images.
+fn visible_rows<'a>(images: impl IntoIterator<Item = (&'a RgbaImage, Point, Size)>) -> Option<(f32, f32)> {
+    let mut out: Option<(f32, f32)> = None;
+    for (pixels, at, size) in images {
+        let sy = size.height / pixels.height().max(1) as f32;
+        let rows = (0..pixels.height()).filter(|&y| (0..pixels.width()).any(|x| pixels.get_pixel(x, y)[3] >= 32));
+        let (mut top, mut bottom) = (None, None);
+        for y in rows {
+            top.get_or_insert(y);
+            bottom = Some(y);
+        }
+        if let (Some(t), Some(b)) = (top, bottom) {
+            let (t, b) = (at.y + t as f32 * sy, at.y + (b + 1) as f32 * sy);
+            out = Some(out.map_or((t, b), |(ot, ob)| (ot.min(t), ob.max(b))));
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone)]
@@ -277,6 +300,7 @@ impl Rig {
         let mut silhouette = Silhouette::new(size);
         silhouette.stamp(&pixels, (Point::ORIGIN, size));
         Self {
+            visible: visible_rows([(&pixels, Point::ORIGIN, size)]).unwrap_or((0.0, size.height)),
             silhouettes: vec![silhouette],
             anchor: Point::new(ground.0 * size.width, ground.1 * size.height),
             kind: Kind::Sprite(handle(pixels)),
@@ -306,12 +330,14 @@ impl Rig {
             )
         });
         let mut silhouettes = vec![stamped(&body, &body_pixels)];
+        let mut shown = vec![(body_pixels.clone(), body.at, body.size)];
         let mut parts = Vec::new();
         for p in &art.parts {
             let Some((main, pixels)) = piece(&p.image) else {
                 continue;
             };
             silhouettes.push(stamped(&main, &pixels));
+            shown.push((pixels.clone(), main.at, main.size));
             parts.push(Part {
                 kind: p.kind,
                 piece: main,
@@ -331,7 +357,9 @@ impl Rig {
                     .collect()
             })
             .unwrap_or_default();
+        let visible = visible_rows(shown.iter().map(|(p, at, s)| (p, *at, *s))).unwrap_or((0.0, size.height));
         Self {
+            visible,
             anchor: Point::new(art.ground.0 * size.width, art.ground.1 * size.height),
             motion: parts.iter().map(|p| p.motion).collect(),
             bop: Bop::default(),
@@ -539,6 +567,12 @@ impl Rig {
         }
     }
 
+    /// The visible artwork's height at rest, in rig pixels, excluding
+    /// transparent stage padding.
+    pub fn visible_height(&self) -> f32 {
+        (self.visible.1 - self.visible.0).max(1.0)
+    }
+
     /// Canvas size in rig pixels.
     pub fn size(&self) -> Size {
         self.size
@@ -702,6 +736,20 @@ mod tests {
         // The head counts for clicks, the empty corners don't.
         assert!(rig.opaque(Point::new(50.0, 20.0)));
         assert!(!rig.opaque(Point::new(3.0, 3.0)));
+    }
+
+    #[test]
+    fn visible_height_ignores_padding() {
+        let mut img = RgbaImage::new(40, 200);
+        for y in 50..150 {
+            for x in 10..30 {
+                img.put_pixel(x, y, Rgba([90, 120, 200, 255]));
+            }
+        }
+        assert_eq!(Rig::sprite(img, (0.5, 0.75)).visible_height(), 100.0);
+        let yohta = Rig::load();
+        assert!(yohta.visible_height() > 600.0 && yohta.visible_height() <= HEIGHT);
+        println!("yohta visible/canvas = {}", yohta.visible_height() / HEIGHT);
     }
 
     #[test]

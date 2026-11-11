@@ -150,6 +150,17 @@ pub enum Target {
     Eye(usize, EyeSlot),
 }
 
+/// A continuous edit that undo restores as one step, however many
+/// messages it took: holding an arrow key, typing a number, dragging a
+/// slider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gesture {
+    Nudge,
+    Field(usize),
+    Travel(usize),
+    Rename(usize),
+}
+
 /// Advanced → Resting point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestAction {
@@ -203,6 +214,8 @@ pub struct Editor {
     pub background: Background,
     /// The Eyes section's chosen workflow; `None` follows the art.
     pub eye_style: Option<EyeStyle>,
+    /// The gesture the last undo checkpoint belongs to.
+    gesture: Option<Gesture>,
     pub fields: [String; 4],
     pub canvas_fields: [String; 2],
     pub new_install: bool,
@@ -289,6 +302,7 @@ impl Editor {
             zoom: 1.0,
             background: Background::Checker,
             eye_style: None,
+            gesture: None,
             fields: Default::default(),
             canvas_fields: [m.canvas.0.to_string(), m.canvas.1.to_string()],
             new_install: false,
@@ -523,8 +537,41 @@ impl Editor {
     }
 
     pub fn rename(&mut self, part: usize, name: String) {
+        if part < self.parts.len() {
+            self.checkpoint_gesture(Gesture::Rename(part));
+        }
         if let Some(p) = self.parts.get_mut(part) {
             p.name = name.chars().take(placement::MAX_NAME).collect();
+        }
+    }
+
+    /// Whether a part turns, so its joint matters: anything but a still
+    /// static layer.
+    pub fn has_joint(&self, part: usize) -> bool {
+        self.parts
+            .get(part)
+            .is_some_and(|p| p.kind != PartType::Other || p.motion.preset != super::motion::Preset::Still)
+    }
+
+    /// The temporary Adjust joint tool for `part`: preview clicks move only
+    /// that joint until Done or Escape.
+    pub fn adjust_joint(&mut self, part: usize) {
+        if self.has_joint(part) {
+            self.adjusting_rest = false;
+            self.select(Selected::Part(part));
+            self.mode = Mode::Pivot;
+        }
+    }
+
+    pub fn finish_joint(&mut self) {
+        self.mode = Mode::Arrange;
+    }
+
+    /// The part whose joint is being adjusted.
+    pub fn joint_part(&self) -> Option<usize> {
+        match (self.mode, self.selected) {
+            (Mode::Pivot, Selected::Part(i)) => Some(i),
+            _ => None,
         }
     }
 
@@ -576,7 +623,9 @@ impl Editor {
             self.rest = RestMode::Manual;
             return;
         }
-        if let Selected::Part(i) | Selected::Face(i, _) = self.selected
+        // Only the Adjust joint tool moves a joint.
+        if self.mode == Mode::Pivot
+            && let Selected::Part(i) | Selected::Face(i, _) = self.selected
             && let Some(p) = self.parts.get_mut(i)
         {
             p.pivot = at;
@@ -922,6 +971,7 @@ impl Editor {
             zoom: 1.0,
             background: Background::Checker,
             eye_style: None,
+            gesture: None,
             fields: Default::default(),
             canvas_fields: [canvas.0.to_string(), canvas.1.to_string()],
             new_install: true,
@@ -955,7 +1005,17 @@ impl Editor {
         self.canvas_fields = [s.canvas.0.to_string(), s.canvas.1.to_string()];
         self.select(s.selected);
     }
+    /// One undo step per gesture: repeated messages of the same gesture
+    /// share the checkpoint the first one made.
+    pub fn checkpoint_gesture(&mut self, g: Gesture) {
+        if self.gesture != Some(g) {
+            self.checkpoint();
+            self.gesture = Some(g);
+        }
+    }
+
     pub fn checkpoint(&mut self) {
+        self.gesture = None;
         if self.undo.len() >= 30 {
             self.undo.remove(0);
         }
@@ -1020,6 +1080,10 @@ impl Editor {
         }
     }
     pub fn select(&mut self, selected: Selected) {
+        // Choosing another layer always leaves the joint tool.
+        if self.selected != selected {
+            self.mode = Mode::Arrange;
+        }
         self.selected = selected;
         self.sync_fields();
     }
@@ -1051,7 +1115,7 @@ impl Editor {
                 _ => placement.angle = number,
             }
             if placement.valid(self.canvas) {
-                self.checkpoint();
+                self.checkpoint_gesture(Gesture::Field(index));
                 self.place(placement);
             }
         }
@@ -1586,6 +1650,49 @@ mod tests {
     }
 
     #[test]
+    fn undo_restores_whole_gestures_and_joints_are_a_temporary_tool() {
+        let dir = std::env::temp_dir().join(format!("tinypaw-gesture-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (root, c) = test_install_folder(&dir, OnDuplicate::Ask);
+        let mut e = Editor::open_in(&root, &c).unwrap();
+        let start = e.body.placement;
+        // Holding an arrow: twenty nudges, one undo.
+        for _ in 0..20 {
+            e.checkpoint_gesture(Gesture::Nudge);
+            e.nudge(1.0, 0.0);
+        }
+        // Typing a number: each keystroke edits, one undo.
+        for text in ["1", "12", "12.", "12.5"] {
+            e.field(1, text.into());
+        }
+        e.undo();
+        assert_eq!(e.body.placement.y, start.y, "the typed value is one step");
+        assert!((e.body.placement.x - start.x - 20.0).abs() < 1e-3);
+        e.undo();
+        assert_eq!(e.body.placement, start, "the held arrow is one step");
+        // A joint is edited only inside Adjust joint.
+        let head = dir.join("cat-head.png");
+        RgbaImage::from_fn(100, 100, |x, y| {
+            let on = (20..80).contains(&x) && (10..55).contains(&y);
+            image::Rgba(if on { [200, 90, 40, 255] } else { [0, 0, 0, 0] })
+        })
+        .save(&head)
+        .unwrap();
+        e.set_image(Target::NewPart, &head).unwrap();
+        let joint = e.parts[0].pivot;
+        assert_eq!(e.joint_part(), None, "no joint tool by default");
+        e.click(0.1, 0.1);
+        assert_eq!(e.parts[0].pivot, joint, "an ordinary click edits no joint");
+        e.adjust_joint(0);
+        assert_eq!(e.joint_part(), Some(0));
+        e.click(0.4, 0.6);
+        assert_eq!(e.parts[0].pivot, (0.4, 0.6));
+        e.select(Selected::Body);
+        assert_eq!(e.joint_part(), None, "choosing another layer leaves the tool");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn bundled_yohta_is_never_saved_over() {
         let dir = std::env::temp_dir().join(format!("tinypaw-builtin-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1699,7 +1806,7 @@ mod tests {
             (e.parts[0].pivot.1 - 0.55).abs() < 0.01,
             "heads turn at the neck"
         );
-        e.selected = Selected::Part(1);
+        e.adjust_joint(1);
         e.click(0.66, 0.65);
         assert_eq!(e.parts[1].pivot, (0.66, 0.65));
         e.set_image(Target::Face(0, 1), &head).unwrap();

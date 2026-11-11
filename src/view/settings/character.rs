@@ -164,7 +164,7 @@ fn character_body<'a>(
         );
     }
     let s = v.session.settings();
-    let size = s.float(mascot::SIZE);
+    let size = s.float(mascot::HEIGHT);
     let selected = v
         .characters
         .iter()
@@ -322,8 +322,8 @@ fn character_body<'a>(
                 text(format!("{size:.0} px tall")).size(13)
             ]
             .into(),
-            slider(v.registry.range(mascot::SIZE), size, |x| {
-                Message::Set(mascot::SIZE, Value::Float(x))
+            slider(v.registry.range(mascot::HEIGHT), size, |x| {
+                Message::Set(mascot::HEIGHT, Value::Float(x))
             })
             .step(4.0)
             .style(theme::range)
@@ -1176,12 +1176,13 @@ fn art_page<'a>(e: &'a crate::mascot::editor::Editor, busy: bool) -> Element<'a,
         .spacing(10)
         .align_y(Alignment::Center);
         if head.is_some() && p.kind != PartType::Head {
-            line = line.push(
-                checkbox(p.on_head)
-                    .label("On head")
-                    .text_size(13)
-                    .size(15)
-                    .on_toggle(move |on| Message::Ui(UiMsg::ArtOnHead(i, on))),
+            line = line.push(hint("Moves with")).push(
+                pick_list(["Character", "Head"], Some(if p.on_head { "Head" } else { "Character" }), move |w| {
+                    Message::Ui(UiMsg::ArtOnHead(i, w == "Head"))
+                })
+                .text_size(13)
+                .padding([5, 8])
+                .style(theme::select),
             );
         }
         line = line
@@ -1275,12 +1276,10 @@ fn art_page<'a>(e: &'a crate::mascot::editor::Editor, busy: bool) -> Element<'a,
             hint("To give it a moving tail, use a body with the painted tail removed and add the tail as a part."),
         ]),
         section(vec![
-            h2("Arrange and attach"),
-            row![seg("Arrange artwork",e.mode==crate::mascot::editor::Mode::Arrange,Message::Ui(UiMsg::ArtMode(crate::mascot::editor::Mode::Arrange))),
-                seg("Set attachment point",e.mode==crate::mascot::editor::Mode::Pivot,Message::Ui(UiMsg::ArtMode(crate::mascot::editor::Mode::Pivot)))].spacing(4).into(),
+            h2("Arrange"),
             targets.into(),
+            joint_controls(e),
             placement_controls(e),
-            hint("A part turns around its attachment point: the neck for a head, the root for a tail or ear."),
         ]),
         section(vec![
             h2("Moving parts"),
@@ -1491,6 +1490,42 @@ fn canvas_controls<'a>(e: &'a crate::mascot::editor::Editor) -> Element<'a, Mess
     .into()
 }
 
+/// Adjust joint: a temporary, labelled tool for where the selected part
+/// turns. Ordinary dragging never edits a joint.
+fn joint_controls<'a>(e: &'a crate::mascot::editor::Editor) -> Element<'a, Message> {
+    use crate::mascot::editor::Selected;
+    if let Some(i) = e.joint_part() {
+        let name = e.parts.get(i).map_or("the part", |p| p.name.as_str());
+        return row![
+            container(text(format!("Adjusting the joint of {name}")).size(12).font(theme::MEDIUM))
+                .padding([4, 8])
+                .style(theme::fill(theme::AMBER_BG, 6.0)),
+            button(text("Done").size(12))
+                .padding([5, 12])
+                .style(theme::primary)
+                .on_press(Message::Ui(UiMsg::ArtJoint(None))),
+            hint("Click where it turns, such as the neck or tail root. The outlines show its swing. Escape also finishes."),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .wrap()
+        .into();
+    }
+    match e.selected {
+        Selected::Part(i) if e.has_joint(i) => row![
+            button(text("Adjust joint").size(12))
+                .padding([5, 10])
+                .style(theme::secondary)
+                .on_press(Message::Ui(UiMsg::ArtJoint(Some(i)))),
+            hint("Where this part turns when it moves."),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .into(),
+        _ => space().height(0).into(),
+    }
+}
+
 fn placement_controls<'a>(e: &'a crate::mascot::editor::Editor) -> Element<'a, Message> {
     if e.mode != crate::mascot::editor::Mode::Arrange || e.selected_layer().is_none() {
         return hint("Choose a layer and Arrange artwork to move, scale or rotate it.");
@@ -1560,7 +1595,7 @@ fn art_preview<'a>(e: &'a crate::mascot::editor::Editor, busy: bool) -> Element<
             .width(Length::Fill)
             .height(340),
         hint(placing),
-        hint("Drag visible artwork to arrange it. Attachment mode moves only the joint. Selecting a face previews that replacement."),
+        hint("Drag visible artwork to arrange it. Adjust joint moves only the joint. Selecting a face previews that replacement."),
         hint(if e.clipped() { "Some source images extend outside the stage and will be clipped when saved." } else { "Artwork fits inside the stage." }),
     ]
     .spacing(10)
@@ -1761,7 +1796,34 @@ impl canvas::Program<Message> for ArtPreview<'_> {
             frame.fill(&Path::circle(ground, 7.0), amber);
             frame.stroke(&Path::circle(ground, 7.0), ring);
         }
-        for (i, p) in e.parts.iter().enumerate() {
+        // The joint and its swing show only while Adjust joint is open.
+        if let Some(i) = e.joint_part()
+            && let Some(p) = e.parts.get(i)
+        {
+            let pivot = at(p.pivot);
+            let d = p.layer.image.dimensions();
+            let corners = [(0.0, 0.0), (d.0 as f32, 0.0), (d.0 as f32, d.1 as f32), (0.0, d.1 as f32)]
+                .map(|c| {
+                    let c = p.layer.placement.map(c, d);
+                    iced::Point::new(r.x + c.0 * r.width / e.canvas.0 as f32, r.y + c.1 * r.height / e.canvas.1 as f32)
+                });
+            for swing in [-0.3f32, 0.3] {
+                let (sn, cs) = swing.sin_cos();
+                let turned = corners.map(|c| {
+                    let (x, y) = (c.x - pivot.x, c.y - pivot.y);
+                    iced::Point::new(pivot.x + x * cs - y * sn, pivot.y + x * sn + y * cs)
+                });
+                let outline = Path::new(|path| {
+                    path.move_to(turned[0]);
+                    for c in &turned[1..] {
+                        path.line_to(*c);
+                    }
+                    path.close();
+                });
+                frame.stroke(&outline, Stroke::default().with_color(Color::from_rgba8(0x22, 0xD3, 0xEE, 0.6)).with_width(1.0));
+            }
+        }
+        for (i, p) in e.parts.iter().enumerate().filter(|(i, _)| e.joint_part() == Some(*i)) {
             let on = e.selected == Selected::Part(i);
             let c = at(p.pivot);
             let radius = if on { 7.0 } else { 5.0 };
