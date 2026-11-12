@@ -1284,17 +1284,7 @@ pub fn import_reaction_image(
     let art = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
         .map_err(|e| format!("not a readable PNG ({e})"))?
         .to_rgba8();
-    let (trimmed, _) = trim(&art).ok_or("that PNG is empty")?;
-    let k = (canvas.1 as f32 / trimmed.height() as f32)
-        .min(canvas.0 as f32 / trimmed.width() as f32)
-        .min(1.0);
-    let place = super::placement::Placement {
-        x: (canvas.0 as f32 - trimmed.width() as f32 * k) / 2.0,
-        y: canvas.1 as f32 - trimmed.height() as f32 * k,
-        scale: k,
-        angle: 0.0,
-    };
-    let fitted = super::placement::bake(&trimmed, place, canvas);
+    let fitted = fit_reaction_image(art, canvas)?;
     let dir = user_sounds(&root, id);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let mut n = std::time::SystemTime::now()
@@ -1311,6 +1301,24 @@ pub fn import_reaction_image(
         .save_with_format(dir.join(&file), image::ImageFormat::Png)
         .map_err(|e| e.to_string())?;
     Ok(SoundRef::User(file))
+}
+
+/// Shared-canvas padding is authored placement and must survive replacement.
+fn fit_reaction_image(art: RgbaImage, canvas: (u32, u32)) -> Result<RgbaImage, String> {
+    let (trimmed, _) = trim(&art).ok_or("that PNG is empty")?;
+    if art.dimensions() == canvas {
+        return Ok(art);
+    }
+    let scale = (canvas.1 as f32 / trimmed.height() as f32)
+        .min(canvas.0 as f32 / trimmed.width() as f32)
+        .min(1.0);
+    let place = super::placement::Placement {
+        x: (canvas.0 as f32 - trimmed.width() as f32 * scale) / 2.0,
+        y: canvas.1 as f32 - trimmed.height() as f32 * scale,
+        scale,
+        angle: 0.0,
+    };
+    Ok(super::placement::bake(&trimmed, place, canvas))
 }
 
 /// Deletes the user's sounds that neither the saved lines nor the saved

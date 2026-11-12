@@ -1045,3 +1045,11 @@ fn replacing_a_pack_keeps_the_users_overrides() {
     );
     fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn full_canvas_reaction_import_preserves_authored_padding() {
+    let mut art = image::RgbaImage::new(80, 60);
+    art.put_pixel(7, 13, image::Rgba([90, 140, 210, 255]));
+    assert_eq!(super::fit_reaction_image(art.clone(), (80, 60)).unwrap(), art);
+    assert!(super::fit_reaction_image(image::RgbaImage::new(80, 60), (80, 60)).is_err());
+}
