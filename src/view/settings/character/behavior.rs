@@ -99,6 +99,7 @@ pub(super) fn behavior_section<'a>(
     let muted = s.bool(crate::features::sound::MUTE_ALL);
     column![
         character_sounds(m, muted),
+        companionship_section(m, muted),
         section(vec![
             h2("When touched"),
             event_row(m, Trigger::Click),
@@ -1157,6 +1158,15 @@ impl canvas::Program<Message> for MotionStage<'_> {
             Some(picture) => rig.draw_picture(&mut frame, &picture),
             None => rig.draw_pose(&mut frame, &pose),
         }
+        crate::mascot::companionship::draw_zzz(
+            &mut frame,
+            canvas_size,
+            &self.preview.companionship(),
+            self.preview.companion_state(),
+            false,
+            self.preview.time(),
+            self.preview.control().reduced,
+        );
         let mut out = vec![frame.into_geometry()];
         if let Some(at) = marker {
             let mut ui = Frame::new(renderer, size);
@@ -1172,4 +1182,103 @@ impl canvas::Program<Message> for MotionStage<'_> {
         }
         out
     }
+}
+
+fn companionship_section<'a>(
+    m: &'a crate::mascot::preview::MotionPreview,
+    muted: bool,
+) -> Element<'a, Message> {
+    use crate::mascot::companionship::State;
+    let s = m.companionship();
+    let toggle = |label: &'static str, value: bool, key: usize| {
+        let settings = s.clone();
+        checkbox(value)
+            .label(label)
+            .text_size(13)
+            .on_toggle(move |on| {
+                let mut settings = settings.clone();
+                match key {
+                    0 => settings.petting = on,
+                    1 => settings.sleep = on,
+                    2 => settings.touch_wake = on,
+                    3 => settings.audio_wake = on,
+                    4 => settings.random_wake = on,
+                    _ => settings.zzz = on,
+                }
+                Message::Ui(UiMsg::Companionship(settings))
+            })
+    };
+    let delay = s.clone();
+    let mouth_x = s.clone();
+    let mouth_y = s.clone();
+    section(vec![
+        h2("Headpat"),
+        toggle("Enable headpat", s.petting, 0).into(),
+        hint(
+            "Rub back and forth over the character without holding a button. Continued strokes keep it happy.",
+        ),
+        button("Try headpat")
+            .style(theme::secondary)
+            .on_press(Message::Ui(UiMsg::CompanionTest(State::Petting)))
+            .into(),
+        event_row(m, crate::mascot::lines::Trigger::Headpat),
+        visual_row(m, Event::Headpat),
+        sound_row(m, Event::Headpat, muted),
+        h2("Sleep & wake"),
+        toggle("Sleep when quiet and the mouse stays away", s.sleep, 1).into(),
+        text(format!("Sleep after {:.0} minutes", s.delay / 60.0))
+            .size(13)
+            .into(),
+        slider(60.0..=3600.0, s.delay, move |v| {
+            let mut s = delay.clone();
+            s.delay = v;
+            Message::Ui(UiMsg::Companionship(s))
+        })
+        .step(60.0_f32)
+        .style(theme::range)
+        .into(),
+        hint(
+            "Typing and mouse movement elsewhere let it sleep. Audio monitoring runs while sleep is enabled. Gentle touch takes 1–3 seconds to wake it; clicks and pickup wake immediately.",
+        ),
+        toggle("Wake from gentle touch", s.touch_wake, 2).into(),
+        toggle("Wake when audio starts", s.audio_wake, 3).into(),
+        toggle("Wake randomly after 5–15 minutes", s.random_wake, 4).into(),
+        toggle("Show Zzz from the mouth", s.zzz, 5).into(),
+        hint("Mouth position on the shared canvas (left/right, then up/down)."),
+        slider(0.0..=1.0, s.mouth[0], move |v| {
+            let mut s = mouth_x.clone();
+            s.mouth[0] = v;
+            Message::Ui(UiMsg::Companionship(s))
+        })
+        .step(0.01_f32)
+        .style(theme::range)
+        .into(),
+        slider(0.0..=1.0, s.mouth[1], move |v| {
+            let mut s = mouth_y.clone();
+            s.mouth[1] = v;
+            Message::Ui(UiMsg::Companionship(s))
+        })
+        .step(0.01_f32)
+        .style(theme::range)
+        .into(),
+        row![
+            button("Sleep now")
+                .style(theme::secondary)
+                .on_press(Message::Ui(UiMsg::CompanionTest(State::Asleep))),
+            button("Try wake")
+                .style(theme::secondary)
+                .on_press(Message::Ui(UiMsg::CompanionTest(State::Awake)))
+        ]
+        .spacing(8)
+        .into(),
+        hint(
+            "Preview sleep and wake are simulated. A sleeping pose is optional; add artwork for a curled-up character.",
+        ),
+        event_row(m, crate::mascot::lines::Trigger::Sleep),
+        visual_row(m, Event::Sleep),
+        sound_row(m, Event::Sleep, muted),
+        event_row(m, crate::mascot::lines::Trigger::Wake),
+        visual_row(m, Event::Wake),
+        sound_row(m, Event::Wake, muted),
+    ])
 }

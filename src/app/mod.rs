@@ -1639,7 +1639,10 @@ impl App {
                 beat: self.beat_status(),
             });
             if std::env::var_os("TINYPAW_TRACE_DRAW").is_some() {
-                eprintln!("view settings {:.1} ms", built.elapsed().as_secs_f32() * 1000.0);
+                eprintln!(
+                    "view settings {:.1} ms",
+                    built.elapsed().as_secs_f32() * 1000.0
+                );
             }
             return element;
         }
@@ -1850,6 +1853,10 @@ fn character_pictures(c: &Character) -> crate::mascot::desktop::Pictures {
         held: picture(reactions::held(&pack, &user)),
         click: picture(reactions::art(&pack, &user, Event::Click)),
         drop: picture(reactions::art(&pack, &user, Event::Drop)),
+        headpat: picture(reactions::art(&pack, &user, Event::Headpat)),
+        sleep: picture(reactions::art(&pack, &user, Event::Sleep)),
+        wake: picture(reactions::art(&pack, &user, Event::Wake)),
+        settings: reactions::companionship(&pack, &user),
     }
 }
 

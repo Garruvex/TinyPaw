@@ -161,6 +161,8 @@ pub enum UiMsg {
     ReferenceCancel,
     /// Drop → After release: fall to the screen edge (true) or stay.
     ReactionFall(bool),
+    Companionship(crate::mascot::companionship::Settings),
+    CompanionTest(crate::mascot::companionship::State),
     /// Align a picture: event, whether it's the held pose, x/y/scale, value.
     ReactionPlace(crate::mascot::reactions::Event, bool, usize, f32),
     ArtEyeStyle(crate::mascot::editor::EyeStyle),

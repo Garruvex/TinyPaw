@@ -58,7 +58,9 @@ impl App {
             #[cfg(windows)]
             msg => {
                 let options = self.mascot_options();
+                let audio = self.companion_audio();
                 if let Some(m) = &mut self.mascot {
+                    m.set_audio(audio);
                     let (task, save) = m.update(msg, &options);
                     tasks.push(task);
                     if let Some((x, y)) = save {

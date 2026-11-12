@@ -1461,6 +1461,9 @@ fn bake(
     }
     if let Some(user) = &o.reactions {
         let mut merged = m.reactions.clone();
+        if user.companionship.is_some() {
+            merged.companionship = user.companionship.clone();
+        }
         if user.settings.is_some() {
             merged.settings = user.settings;
         }

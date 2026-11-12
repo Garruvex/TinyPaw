@@ -19,6 +19,7 @@ use iced::{
 };
 
 use super::Msg;
+use super::companionship::{self, Controller, State};
 use super::lines::{BubbleSide, Lines, MenuAlign, MenuSide, Picker, SoundRef, Speech, Trigger};
 use super::motion::{Animator, Expression, Inputs, PartMotion, Pose};
 use super::reactions::Event;
@@ -181,6 +182,10 @@ pub struct Pictures {
     /// Shown briefly after a click or a drop.
     pub click: Option<super::rig::Picture>,
     pub drop: Option<super::rig::Picture>,
+    pub headpat: Option<super::rig::Picture>,
+    pub sleep: Option<super::rig::Picture>,
+    pub wake: Option<super::rig::Picture>,
+    pub settings: companionship::Settings,
 }
 
 /// Most a carried character leans, in radians, before the window cap.
@@ -561,6 +566,9 @@ pub struct Desktop {
     /// A click plays Compress.
     click_compress: bool,
     pictures: Pictures,
+    companion: Controller,
+    audio: companionship::Audio,
+    nearby: bool,
     /// A Click or Drop picture showing until this time.
     showing: Option<(f32, Event)>,
     /// After release, fall to the screen edge instead of staying.
@@ -659,6 +667,9 @@ impl Desktop {
             events: Vec::new(),
             click_compress: true,
             pictures: Pictures::default(),
+            companion: Controller::new(Instant::now().elapsed().as_nanos() as u64 + 1),
+            audio: companionship::Audio::Unknown,
+            nearby: false,
             showing: None,
             fall_on_release: false,
             flight: None,
@@ -722,7 +733,12 @@ impl Desktop {
     /// Says a line for `t`, unless lines are off, Quiet holds back an
     /// unprompted one, or the character is hidden.
     pub fn say(&mut self, t: Trigger, o: &Options) {
-        if !o.lines || self.hidden || (t.unprompted() && o.quiet) {
+        if !o.lines
+            || self.hidden
+            || (t.unprompted() && o.quiet)
+            || (t != Trigger::Sleep
+                && matches!(self.companion.state, State::Asleep | State::Waking))
+        {
             return;
         }
         if let Some(line) = self.picker.pick(&self.lines, t)
@@ -761,6 +777,7 @@ impl Desktop {
 
     pub fn set_pictures(&mut self, pictures: Pictures) {
         self.pictures = pictures;
+        self.companion.reset();
         self.showing = None;
     }
 
@@ -770,9 +787,15 @@ impl Desktop {
         if self.press.as_ref().is_some_and(|p| p.dragging) {
             return self.pictures.held.as_ref();
         }
+        match self.companion.state {
+            State::Asleep | State::Waking => return self.pictures.sleep.as_ref(),
+            State::Petting => return self.pictures.headpat.as_ref(),
+            _ => {}
+        }
         match self.showing {
             Some((until, Event::Click)) if self.now < until => self.pictures.click.as_ref(),
             Some((until, Event::Drop)) if self.now < until => self.pictures.drop.as_ref(),
+            Some((until, Event::Wake)) if self.now < until => self.pictures.wake.as_ref(),
             _ => None,
         }
     }
@@ -784,7 +807,19 @@ impl Desktop {
 
     /// Visible and not busy with a press or its menu: idle may react.
     pub fn idle_free(&self) -> bool {
-        !self.hidden && self.shown && self.press.is_none() && self.menu.is_none()
+        !self.hidden
+            && self.shown
+            && self.press.is_none()
+            && self.menu.is_none()
+            && matches!(self.companion.state, State::Awake)
+            && !self.companion.sleep_due
+    }
+
+    pub fn sleep_enabled(&self) -> bool {
+        self.pictures.settings.sleep
+    }
+    pub fn set_audio(&mut self, audio: companionship::Audio) {
+        self.audio = audio;
     }
 
     pub fn is_hidden(&self) -> bool {
@@ -802,6 +837,7 @@ impl Desktop {
         self.parts = rig.motion_parts();
         self.animator = Animator::default();
         self.rig = rig;
+        self.companion.reset();
         self.menu = None;
         self.press = None;
         self.relayout();
@@ -926,6 +962,7 @@ impl Desktop {
                         (cursor.1 - rect.1) as f32 / k,
                     );
                     let (pivot, protected) = self.grab_chain(grab);
+                    self.companion.wake(self.now);
                     self.press = Some(Press {
                         cursor,
                         grab,
@@ -1063,6 +1100,46 @@ impl Desktop {
             let dt = (self.now - self.stepped).clamp(0.0, 0.1);
             self.gaze + (self.target - self.gaze) * (1.0 - 0.7f32.powf(dt / 0.033))
         };
+        let margin = (self.size * 0.25).max(24.0) + if self.nearby { 8.0 } else { 0.0 };
+        self.nearby = self.layout.character.expand(margin).contains(local);
+        let touching = self.over_character(local);
+        let stage_cursor = Point::new(
+            (local.x - self.layout.character.x) / self.layout.scale,
+            (local.y - self.layout.character.y) / self.layout.scale,
+        );
+        let event = self.companion.step(
+            &self.pictures.settings,
+            companionship::Input {
+                now: self.now,
+                cursor: Some(stage_cursor),
+                nearby: self.nearby,
+                touching,
+                pet_region: touching,
+                button: left || right,
+                busy: self.menu.is_some() || self.press.is_some() || self.flight.is_some(),
+                response_busy: self.speech.is_some()
+                    || self.showing.is_some_and(|(until, _)| self.now < until),
+                audio: self.audio,
+                height: self.rig.visible_height(),
+            },
+        );
+        if let Some(event) = event {
+            let e = match event {
+                companionship::Event::Headpat => Event::Headpat,
+                companionship::Event::Sleep => Event::Sleep,
+                companionship::Event::Wake => Event::Wake,
+            };
+            self.events.push(e);
+            let trigger = match e {
+                Event::Headpat => Trigger::Headpat,
+                Event::Sleep => Trigger::Sleep,
+                _ => Trigger::Wake,
+            };
+            self.say(trigger, o);
+            if e == Event::Wake {
+                self.showing = Some((self.now + 0.7, e));
+            }
+        }
         self.step_motion(o, k);
         if picked_up {
             self.events.push(Event::Pickup);
@@ -1087,7 +1164,7 @@ impl Desktop {
         if self.now < self.next_idle {
             return;
         }
-        let free = self.press.is_none() && self.menu.is_none() && self.speech.is_none();
+        let free = self.idle_free() && self.speech.is_none();
         if free && !native::foreground_fullscreen() {
             self.say(Trigger::Idle, o);
         }
@@ -1196,19 +1273,20 @@ impl Desktop {
             self.pose = pose;
             return;
         }
+        let sleeping = matches!(self.companion.state, State::Asleep | State::Waking);
         let mut pose = self.animator.step(
             &self.parts,
             &Inputs {
                 now: self.now,
                 dt,
-                idle: o.idle && !o.reduced,
+                idle: o.idle && !o.reduced && !sleeping,
                 reduced: o.reduced,
                 pressed: false,
                 // Thrown, its parts trail the flight as they did the drag.
                 dragging: self.flight.is_some(),
                 velocity,
-                music: o.music,
-                beat: o.beat,
+                music: if sleeping { 0.0 } else { o.music },
+                beat: if sleeping { None } else { o.beat },
                 bop: self.rig.bop(),
             },
         );
@@ -1221,6 +1299,21 @@ impl Desktop {
             }
         }
         pose.gaze = self.head_gaze(&pose);
+        if sleeping {
+            pose.expression = Expression::Blink;
+            pose.gaze = Vector::ZERO;
+        }
+        if self.companion.state == State::Petting && !o.reduced {
+            if let Some(index) = self
+                .parts
+                .iter()
+                .position(|p| p.kind == super::motion::PartType::Head)
+            {
+                if let Some(angle) = pose.angles.get_mut(index) {
+                    *angle += 0.06;
+                }
+            }
+        }
         self.pose = pose;
     }
 
@@ -1524,7 +1617,13 @@ impl Desktop {
                 || self.showing.is_some_and(|(until, _)| self.now < until)
         };
         Some(Duration::from_millis(
-            if self.press.is_some() || self.flight.is_some() || self.animating() {
+            if self.press.is_some()
+                || self.flight.is_some()
+                || self.animating()
+                || (self.pictures.settings.zzz
+                    && matches!(self.companion.state, State::Asleep | State::Waking)
+                    && !o.reduced)
+            {
                 16
             } else if self.menu.is_some() || (o.idle && !o.reduced) || settling || o.music > 0.001 {
                 33
@@ -1537,6 +1636,16 @@ impl Desktop {
 
     /// Whether a window-space point lies on visible artwork as drawn now.
     fn over_character(&self, p: Point) -> bool {
+        if let Some(picture) = self.picture() {
+            let l = &self.layout;
+            let q = Point::new(
+                (p.x - l.character.x) / l.scale,
+                (p.y - l.character.y) / l.scale,
+            );
+            let q =
+                super::motion::unplaced(&self.pose, self.rig.anchor(), self.rig.size().height, q);
+            return picture.hit(self.rig.size(), q);
+        }
         over(&self.layout, &self.rig, &self.pose, p)
     }
 
@@ -2041,6 +2150,15 @@ impl canvas::Program<Message> for Stage<'_> {
                 None => d.rig.draw_pose(&mut frame, pose),
             }
         }
+        companionship::draw_zzz(
+            &mut frame,
+            d.rig.size(),
+            &d.pictures.settings,
+            d.companion.state,
+            d.companion.stirring,
+            d.now,
+            d.reduced,
+        );
         let mut geometry = vec![frame.into_geometry()];
         if let Some((side, scale, alpha)) = d.menu_look() {
             let mut ui = Frame::new(renderer, bounds.size());

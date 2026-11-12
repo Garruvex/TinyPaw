@@ -342,3 +342,54 @@ mod tests {
         assert!(Settings::parse(&json!({"mouth":[2,0]})).is_err());
     }
 }
+
+/// Sleep decoration in stage coordinates. Its bounds never participate in input.
+pub fn draw_zzz(
+    frame: &mut iced::widget::canvas::Frame,
+    stage: iced::Size,
+    settings: &Settings,
+    state: State,
+    stirring: bool,
+    now: f32,
+    reduced: bool,
+) {
+    if !settings.zzz || !matches!(state, State::Asleep | State::Waking) {
+        return;
+    }
+    let origin = Point::new(
+        settings.mouth[0] * stage.width,
+        settings.mouth[1] * stage.height,
+    );
+    let alpha = if stirring || state == State::Waking {
+        0.2
+    } else {
+        0.75
+    };
+    let size = (stage.height * 0.045).max(12.0);
+    let direction = if origin.x > stage.width * 0.7 {
+        -1.0
+    } else {
+        1.0
+    };
+    let count = if reduced { 1 } else { 3 };
+    for i in 0..count {
+        let t = if reduced {
+            0.0
+        } else {
+            ((now - i as f32 * 1.2).rem_euclid(3.6)) / 2.8
+        };
+        if t > 1.0 {
+            continue;
+        }
+        let x =
+            (origin.x + direction * t * size * 2.0).clamp(0.0, (stage.width - size * 3.0).max(0.0));
+        let y = (origin.y - t * size * 2.5).clamp(size, stage.height);
+        frame.fill_text(iced::widget::canvas::Text {
+            content: if reduced { "Zzz" } else { "z" }.into(),
+            position: Point::new(x, y),
+            color: iced::Color::from_rgba(0.65, 0.70, 0.82, alpha * (1.0 - t)),
+            size: size.into(),
+            ..Default::default()
+        });
+    }
+}

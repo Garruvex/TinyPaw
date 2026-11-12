@@ -37,6 +37,7 @@ const MUSIC: f32 = 4.0;
 
 /// What changes every frame while the preview animates.
 struct Live {
+    companion: super::companionship::Controller,
     animator: Animator,
     pose: Pose,
     now: f32,
@@ -134,6 +135,7 @@ impl MotionPreview {
             defaults,
             rig,
             live: RefCell::new(Live {
+                companion: super::companionship::Controller::new(17),
                 animator: Animator::default(),
                 pose: Pose::default(),
                 now: 0.0,
@@ -146,6 +148,28 @@ impl MotionPreview {
             }),
             control: Cell::new(Control::default()),
         }
+    }
+
+    pub fn companionship(&self) -> super::companionship::Settings {
+        super::reactions::companionship(&self.reactions_pack, &self.reactions)
+    }
+    pub fn companion_test(&self, state: super::companionship::State) {
+        let settings = self.companionship();
+        let mut live = self.live.borrow_mut();
+        let now = live.now;
+        match state {
+            super::companionship::State::Asleep => live.companion.sleep_now(now, &settings),
+            super::companionship::State::Petting => live.companion.state = state,
+            _ => {
+                live.companion.wake(now);
+            }
+        }
+    }
+    pub fn time(&self) -> f32 {
+        self.live.borrow().now
+    }
+    pub fn companion_state(&self) -> super::companionship::State {
+        self.live.borrow().companion.state
     }
 
     pub fn rig(&self) -> &Rig {
@@ -385,6 +409,15 @@ impl MotionPreview {
         if let Some((Test::DragLeft | Test::DragRight, _)) = live.test {
             return None;
         }
+        match live.companion.state {
+            super::companionship::State::Asleep | super::companionship::State::Waking => {
+                return self.picture_for(self.art(Event::Sleep));
+            }
+            super::companionship::State::Petting => {
+                return self.picture_for(self.art(Event::Headpat));
+            }
+            _ => {}
+        }
         match live.showing {
             Some((until, e)) if live.now < until => self.picture_for(self.art(e)),
             _ => None,
@@ -452,6 +485,18 @@ impl MotionPreview {
                 Trigger::Click => Some(Test::Click),
                 Trigger::Pickup | Trigger::Drop => Some(Test::DragRight),
                 Trigger::MusicStart => Some(Test::Music),
+                Trigger::Headpat => {
+                    self.companion_test(super::companionship::State::Petting);
+                    None
+                }
+                Trigger::Sleep => {
+                    self.companion_test(super::companionship::State::Asleep);
+                    None
+                }
+                Trigger::Wake => {
+                    self.companion_test(super::companionship::State::Awake);
+                    None
+                }
                 Trigger::Idle | Trigger::AnnotationEnd => None,
             };
             if let Some(g) = gesture {
@@ -507,7 +552,11 @@ impl MotionPreview {
 
     /// The line being said in the preview.
     pub fn speech(&self) -> Option<String> {
-        self.live.borrow().speech.as_ref().map(|s| s.text().to_owned())
+        self.live
+            .borrow()
+            .speech
+            .as_ref()
+            .map(|s| s.text().to_owned())
     }
 
     pub fn hold_speech(&mut self, seconds: f32) {
@@ -527,13 +576,17 @@ impl MotionPreview {
     pub fn advance(&self, at: Instant) -> bool {
         let dt = {
             let mut live = self.live.borrow_mut();
-            let dt = live.last.map_or(0.0, |l| at.duration_since(l).as_secs_f32());
+            let dt = live
+                .last
+                .map_or(0.0, |l| at.duration_since(l).as_secs_f32());
             live.last = Some(at);
             dt
         };
         let c = self.control.get();
         let beat = c.beat.map(|phase| {
-            let ahead = c.sampled.map_or(0.0, |s| at.saturating_duration_since(s).as_secs_f32());
+            let ahead = c
+                .sampled
+                .map_or(0.0, |s| at.saturating_duration_since(s).as_secs_f32());
             (phase + c.beat_rate * ahead).rem_euclid(1.0)
         });
         let before = self.live.borrow().speech.is_some();
@@ -599,7 +652,20 @@ impl MotionPreview {
                 Test::Speak | Test::Music | Test::Say(_) => live.test = None,
             }
         }
+        let sleeping = matches!(
+            live.companion.state,
+            super::companionship::State::Asleep | super::companionship::State::Waking
+        );
+        if sleeping {
+            inputs.idle = false;
+            inputs.music = 0.0;
+            inputs.beat = None;
+        }
         live.pose = live.animator.step(&self.rig.motion_parts(), &inputs);
+        if sleeping {
+            live.pose.expression = super::motion::Expression::Blink;
+            live.pose.gaze = Vector::ZERO;
+        }
         // A test drag carries like the desktop: held near the top of the
         // head, leaning around that point rather than around the feet.
         if inputs.dragging {

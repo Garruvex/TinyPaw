@@ -22,10 +22,21 @@ pub enum Event {
     Drop,
     /// An eligible character reached its idle deadline.
     Idle,
+    Headpat,
+    Sleep,
+    Wake,
 }
 
 impl Event {
-    pub const ALL: [Event; 4] = [Event::Click, Event::Pickup, Event::Drop, Event::Idle];
+    pub const ALL: [Event; 7] = [
+        Event::Click,
+        Event::Pickup,
+        Event::Drop,
+        Event::Idle,
+        Event::Headpat,
+        Event::Sleep,
+        Event::Wake,
+    ];
 
     /// The key in `reactions` (see the behaviors plan).
     pub fn key(self) -> &'static str {
@@ -34,6 +45,9 @@ impl Event {
             Event::Pickup => "pickup",
             Event::Drop => "drop",
             Event::Idle => "idle",
+            Event::Headpat => "headpat",
+            Event::Sleep => "sleep",
+            Event::Wake => "wake",
         }
     }
 
@@ -91,7 +105,7 @@ pub struct Sounds {
     /// Automatic idle sounds: off until this user opts in.
     pub idle_enabled: bool,
     pub idle_interval: (f32, f32),
-    triggers: [TriggerSound; 4],
+    triggers: [TriggerSound; 7],
 }
 
 impl Default for Sounds {
@@ -125,7 +139,7 @@ pub const BUILTIN_SOUNDS: [(&str, &str); 4] = [
 ];
 
 /// Most distinct WAV files one character's reactions may use.
-pub const MAX_FILES: usize = 4;
+pub const MAX_FILES: usize = 7;
 
 /// What an event does to the picture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -288,12 +302,15 @@ impl Default for Settings {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Config {
     pub settings: Option<Settings>,
-    events: [Option<Entry>; 4],
+    pub companionship: Option<super::companionship::Settings>,
+    events: [Option<Entry>; 7],
 }
 
 impl Config {
     pub fn is_empty(&self) -> bool {
-        self.settings.is_none() && self.events.iter().all(Option::is_none)
+        self.settings.is_none()
+            && self.companionship.is_none()
+            && self.events.iter().all(Option::is_none)
     }
 
     pub fn entry(&self, e: Event) -> Option<&Entry> {
@@ -363,6 +380,10 @@ impl Config {
             _ => return Err("reactions must be an object".into()),
         };
         for (key, value) in map {
+            if key == "companionship" {
+                out.companionship = Some(super::companionship::Settings::parse(value)?);
+                continue;
+            }
             if key == "sound" {
                 out.settings = Some(parse_settings(value)?);
                 continue;
@@ -378,6 +399,9 @@ impl Config {
 
     pub fn to_json(&self) -> Json {
         let mut m = Map::new();
+        if let Some(s) = &self.companionship {
+            m.insert("companionship".into(), s.to_json());
+        }
         if let Some(s) = &self.settings {
             m.insert(
                 "sound".into(),
@@ -683,7 +707,7 @@ pub struct Play {
 #[derive(Debug, Clone, Default)]
 pub struct Voice {
     /// When each trigger last played, for its cooldown.
-    last: [Option<f64>; 4],
+    last: [Option<f64>; 7],
     /// Until when the current voice plays.
     busy_until: f64,
     next_idle: Option<f64>,
@@ -1039,4 +1063,15 @@ mod tests {
             assert_eq!(Event::parse(e.key()), Some(e));
         }
     }
+}
+
+/// Local sleep activation requires an explicit user override.
+pub fn companionship(pack: &Config, user: &Config) -> super::companionship::Settings {
+    if let Some(s) = &user.companionship {
+        return s.clone();
+    }
+    let mut s = pack.companionship.clone().unwrap_or_default();
+    s.sleep = false;
+    s.random_wake = false;
+    s
 }

@@ -9,6 +9,16 @@ impl App {
         out: &mut Outcomes,
     ) -> Task<Message> {
         match ui {
+            UiMsg::Companionship(settings) => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.reactions.companionship = Some(settings);
+                }
+            }
+            UiMsg::CompanionTest(state) => {
+                if let Some(p) = &self.studio.motion_preview {
+                    p.companion_test(state);
+                }
+            }
             UiMsg::ReactionSound(e, sound) => {
                 if let Some(p) = &mut self.studio.motion_preview {
                     p.set_reaction_sound(e, sound);

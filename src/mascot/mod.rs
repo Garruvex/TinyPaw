@@ -435,4 +435,3 @@ mod tests {
         assert!(origin.y + rig::HEIGHT * scale <= bounds.height);
     }
 }
-

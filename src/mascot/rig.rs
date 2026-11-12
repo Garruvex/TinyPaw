@@ -674,6 +674,25 @@ impl Picture {
         )
     }
 
+    /// Alpha hit testing in the same stage coordinates used for drawing.
+    pub fn hit(&self, stage: Size, point: Point) -> bool {
+        let [x, y, k] = self.place;
+        if let Handle::Rgba {
+            width,
+            height,
+            pixels,
+            ..
+        } = &self.image
+        {
+            let px = (point.x / stage.width - x) / k * *width as f32;
+            let py = (point.y / stage.height - y) / k * *height as f32;
+            if px >= 0.0 && py >= 0.0 && px < *width as f32 && py < *height as f32 {
+                return pixels[((py as u32 * width + px as u32) * 4 + 3) as usize] >= 32;
+            }
+        }
+        false
+    }
+
     /// The hold point in the stage frame, with the picture placed.
     pub fn hold_in(&self, stage: Size) -> Point {
         self.in_stage(stage, self.hold)

@@ -6,6 +6,9 @@ impl App {
     pub(super) fn music_level(&self) -> f32 {
         #[cfg(windows)]
         if let Some(m) = &self.music {
+            if !self.session.settings().bool(character::MUSIC) {
+                return 0.0;
+            }
             let strength = self.session.settings().float(character::MUSIC_STRENGTH) as f32;
             return m.level() * strength;
         }
@@ -166,15 +169,29 @@ impl App {
     /// desktop character is showing, or the Character page is open to show
     /// the meter; otherwise it's stopped and costs nothing. Also passes on
     /// "music started" to the character.
+    pub(super) fn companion_audio(&self) -> crate::mascot::companionship::Audio {
+        use crate::mascot::companionship::Audio;
+        match self.music.as_ref().map(|m| m.state()) {
+            Some(platform::music::State::Silent) => Audio::Quiet,
+            Some(platform::music::State::Playing) => Audio::Playing,
+            _ => Audio::Unknown,
+        }
+    }
+
     pub(super) fn sync_music(&mut self) {
         #[cfg(windows)]
         {
             let on = self.session.settings().bool(character::MUSIC);
             let showing = self.mascot.as_ref().is_some_and(|m| !m.is_hidden());
-            let wanted = on && (showing || self.studio.motion_preview.is_some());
+            let sleep_audio = self.mascot.as_ref().is_some_and(|m| m.sleep_enabled()) && showing;
+            let wanted = (on && (showing || self.studio.motion_preview.is_some())) || sleep_audio;
             use crate::mascot::music::Source;
             use platform::beat::Target;
-            let source = self.music_source();
+            let source = if sleep_audio && !on {
+                Source::All
+            } else {
+                self.music_source()
+            };
             match (wanted, &self.music) {
                 (true, None) => self.music = Some(platform::music::Meter::start(source.clone())),
                 (true, Some(m)) => m.set_source(&source),
@@ -201,7 +218,7 @@ impl App {
                     }
                 }
             };
-            let follow = wanted && self.session.settings().bool(character::BEAT);
+            let follow = on && wanted && self.session.settings().bool(character::BEAT);
             let sensitivity = self.beat_sensitivity();
             let engine = self.beat_engine();
             match (follow.then_some(target).flatten(), &self.beat) {

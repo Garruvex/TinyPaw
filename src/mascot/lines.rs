@@ -13,16 +13,22 @@ pub enum Trigger {
     Idle,
     MusicStart,
     AnnotationEnd,
+    Headpat,
+    Sleep,
+    Wake,
 }
 
 impl Trigger {
-    pub const ALL: [Trigger; 6] = [
+    pub const ALL: [Trigger; 9] = [
         Trigger::Click,
         Trigger::Pickup,
         Trigger::Drop,
         Trigger::Idle,
         Trigger::MusicStart,
         Trigger::AnnotationEnd,
+        Trigger::Headpat,
+        Trigger::Sleep,
+        Trigger::Wake,
     ];
 
     pub fn key(self) -> &'static str {
@@ -33,6 +39,9 @@ impl Trigger {
             Trigger::Idle => "idle",
             Trigger::MusicStart => "music",
             Trigger::AnnotationEnd => "annotation_end",
+            Trigger::Headpat => "headpat",
+            Trigger::Sleep => "sleep",
+            Trigger::Wake => "wake",
         }
     }
 
@@ -44,6 +53,9 @@ impl Trigger {
             Trigger::Idle => "Idle",
             Trigger::MusicStart => "Music starts",
             Trigger::AnnotationEnd => "Annotation ends",
+            Trigger::Headpat => "Headpat",
+            Trigger::Sleep => "Sleep",
+            Trigger::Wake => "Wake",
         }
     }
 
@@ -244,7 +256,7 @@ pub const MAX_SOUND: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Lines {
-    by_trigger: [Vec<Line>; 6],
+    by_trigger: [Vec<Line>; 9],
     pub bubble: Bubble,
     /// Where the menu sits; kept with the bubble as the character's layout.
     pub menu: MenuPlace,
@@ -472,6 +484,9 @@ pub fn template() -> Json {
         (Trigger::Idle, "…"),
         (Trigger::MusicStart, "Ooh, I like this one."),
         (Trigger::AnnotationEnd, "Nice drawing!"),
+        (Trigger::Headpat, "That feels nice."),
+        (Trigger::Sleep, "Zzz…"),
+        (Trigger::Wake, "Hmm?"),
     ];
     let mut lines = serde_json::Map::new();
     for (t, text) in examples {
@@ -561,14 +576,14 @@ pub fn reading_time(part: &str) -> f32 {
 #[derive(Debug, Clone)]
 pub struct Picker {
     state: u64,
-    last: [Option<usize>; 6],
+    last: [Option<usize>; 9],
 }
 
 impl Picker {
     pub fn new(seed: u64) -> Self {
         Self {
             state: seed | 1,
-            last: [None; 6],
+            last: [None; 9],
         }
     }
 
