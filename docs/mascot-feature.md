@@ -53,8 +53,9 @@ idle motion enabled, music response disabled. Size range: 96–320 logical pixel
 Do not add automatic walking, pose switching, reminders, alarms or pet-care
 systems. Speech lines are in scope as planned in the
 [character creation plan](character-creation-plan.md); conversations and
-scripted dialogue are not. Agreed exceptions: an opt-in straight fall to the screen edge after
-release, and for pose switching a single
+scripted dialogue are not. Agreed exceptions: an opt-in fall to the screen edge after
+release, a throw when it is let go on the move (a glide to a stop, or with
+the fall an arc that bounces off the screen edges), and for pose switching a single
 held-pose or reaction PNG, per the
 [character behaviors plan](character-behaviors-plan.md).
 

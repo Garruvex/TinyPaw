@@ -8,6 +8,7 @@
 //! cursor (needed for the eyes anyway) switches that. Clicks never activate
 //! the window, so the app underneath keeps keyboard focus.
 
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use iced::widget::canvas::{self, Frame, Geometry};
@@ -74,13 +75,99 @@ const SETTLE: f32 = 0.25;
 /// Fall acceleration, in logical pixels per second squared.
 const GRAVITY: f32 = 2600.0;
 
-/// A released character falling straight down to its landing row.
-#[derive(Debug, Clone, Copy)]
-struct Fall {
+/// Slowest release, in logical pixels per second, that throws the character
+/// rather than putting it down.
+const THROW_MIN: f32 = 350.0;
+/// Fastest throw, in logical pixels per second.
+const THROW_MAX: f32 = 4200.0;
+/// The release velocity is the cursor's over this much of the drag's end, in
+/// seconds: long enough to average out mouse jitter, short enough that
+/// stopping before letting go puts the character down.
+const THROW_WINDOW: f32 = 0.09;
+/// Share of its speed a thrown character keeps bouncing off an edge.
+const BOUNCE: f32 = 0.45;
+/// A landing slower than this, in logical pixels per second, stays down.
+const BOUNCE_MIN: f32 = 260.0;
+/// How fast a glide (no gravity, or along the ground) sheds speed, per second.
+const FRICTION: f32 = 5.0;
+/// Slower than this, in logical pixels per second, a glide has stopped.
+const REST: f32 = 30.0;
+
+/// A released character in motion: thrown, falling, or both.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Flight {
     /// Physical pixels per second.
-    speed: f32,
-    /// The anchor's landing y, in physical pixels.
-    land: f32,
+    v: (f32, f32),
+    /// Falls to the bottom edge; otherwise it glides to a stop.
+    gravity: bool,
+    /// Where the anchor may go, in physical pixels: left, top, right, bottom.
+    bounds: (f32, f32, f32, f32),
+}
+
+/// What one step of a flight did.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Flown {
+    at: (f32, f32),
+    /// It hit the ground hard enough to squash.
+    thud: bool,
+    /// It came to rest.
+    done: bool,
+}
+
+impl Flight {
+    /// Moves the anchor on from `at` by `dt` seconds, bouncing off the
+    /// bounds. A character let go past an edge is turned back without
+    /// being snapped inside. `k` is physical pixels per logical pixel.
+    fn step(&mut self, at: (f32, f32), k: f32, dt: f32) -> Flown {
+        let (left, top, right, bottom) = self.bounds;
+        let grounded = self.gravity && at.1 >= bottom - 0.5 && self.v.1 >= 0.0;
+        if grounded {
+            self.v.1 = 0.0;
+        } else if self.gravity {
+            self.v.1 += GRAVITY * k * dt;
+        }
+        if grounded || !self.gravity {
+            let keep = (-FRICTION * dt).exp();
+            self.v.0 *= keep;
+            self.v.1 *= keep;
+        }
+        let (mut x, mut y) = (at.0 + self.v.0 * dt, at.1 + self.v.1 * dt);
+        if grounded {
+            y = bottom;
+        }
+        if x < left && self.v.0 < 0.0 {
+            x = at.0.min(left);
+            self.v.0 *= -BOUNCE;
+        } else if x > right && self.v.0 > 0.0 {
+            x = at.0.max(right);
+            self.v.0 *= -BOUNCE;
+        }
+        let mut thud = false;
+        if y < top && self.v.1 < 0.0 {
+            y = at.1.min(top);
+            self.v.1 *= -BOUNCE;
+        } else if y >= bottom && self.v.1 > 0.0 {
+            y = at.1.max(bottom);
+            thud = self.v.1 > BOUNCE_MIN * k;
+            self.v.1 = if thud || !self.gravity {
+                -self.v.1 * BOUNCE
+            } else {
+                0.0
+            };
+            // The ground takes some of the sideways speed too.
+            self.v.0 *= 0.8;
+        }
+        let done = if self.gravity {
+            y >= bottom - 0.5 && self.v.1 == 0.0 && self.v.0.abs() < REST * k
+        } else {
+            self.v.0.hypot(self.v.1) < REST * k
+        };
+        Flown {
+            at: (x, y),
+            thud,
+            done,
+        }
+    }
 }
 
 /// How long a Click or Drop artwork reaction shows, in seconds.
@@ -97,11 +184,24 @@ pub struct Pictures {
 }
 
 /// Most a carried character leans, in radians, before the window cap.
-const CARRY_LEAN: f32 = 0.15;
+const CARRY_LEAN: f32 = 0.25;
 /// Most a held pose swings from its scruff.
-const HANG_SWING: f32 = 0.6;
-/// Gravity for a swinging held pose, logical pixels per second squared.
+const HANG_SWING: f32 = 0.8;
+/// Gravity for a carried character's swing, logical pixels per second
+/// squared.
 const HANG_GRAVITY: f32 = 1800.0;
+/// How fast the drag velocity that swings a carried character follows the
+/// cursor's, per second. The cursor moves in whole pixels at uneven
+/// intervals, so its raw speed (and far more its acceleration) is noisy.
+const CARRY_SMOOTH: f32 = 30.0;
+/// A carried character trails the drag by this many radians per logical
+/// pixel per second, as if through air.
+const CARRY_TRAIL: f32 = 0.0004;
+/// How a carried character swings: the share of the drag's acceleration
+/// that reaches it, how fast the swing dies (per second), and its limit.
+/// A held pose hangs loose; an upright character is stiffer.
+const HANG: (f32, f32, f32) = (0.2, 3.5, HANG_SWING);
+const UPRIGHT: (f32, f32, f32) = (0.08, 5.0, CARRY_LEAN);
 /// Gaze reaches its limit this far from the eyes, as a share of the
 /// character's height (Yohta: about 420 rig pixels).
 const GAZE_REACH: f32 = 0.49;
@@ -237,22 +337,24 @@ impl Layout {
     /// no lower than the taskbar, the window (and so any menu) no higher than
     /// the top, and the character's sides within the edges.
     pub fn clamp(&self, anchor: (f32, f32), k: f32, work: (i32, i32, i32, i32)) -> (f32, f32) {
+        let (min_x, min_y, max_x, max_y) = self.range(k, work);
+        (anchor.0.clamp(min_x, max_x), anchor.1.clamp(min_y, max_y))
+    }
+
+    /// Where `clamp` lets the anchor be on a work area, as `left, top,
+    /// right, bottom`. A work area too small for the character leaves one
+    /// spot: centred, on the bottom edge.
+    pub fn range(&self, k: f32, work: (i32, i32, i32, i32)) -> (f32, f32, f32, f32) {
         let (left, top, right, bottom) =
             (work.0 as f32, work.1 as f32, work.2 as f32, work.3 as f32);
         let min_x = left + (self.anchor.x - self.character.x) * k;
         let max_x = right - (self.character.x + self.character.width - self.anchor.x) * k;
-        let x = if min_x <= max_x {
-            anchor.0.clamp(min_x, max_x)
+        let (min_x, max_x) = if min_x <= max_x {
+            (min_x, max_x)
         } else {
-            (left + right) * 0.5
+            ((left + right) * 0.5, (left + right) * 0.5)
         };
-        let min_y = top + self.anchor.y * k;
-        let y = if min_y <= bottom {
-            anchor.1.clamp(min_y, bottom)
-        } else {
-            bottom
-        };
-        (x, y)
+        (min_x, (top + self.anchor.y * k).min(bottom), max_x, bottom)
     }
 
     /// The first spot: bottom right of the work area, standing on the taskbar.
@@ -317,6 +419,32 @@ pub fn is_drag(delta: (i32, i32), k: f32) -> bool {
     dx.hypot(dy) / k.max(0.01) > DRAG_START
 }
 
+/// The flight a release starts, if any: a throw when the cursor was moving
+/// at `v` (physical pixels per second) fast enough, capped; and with
+/// `falls`, a drop from wherever it is above the ground. `k` is physical
+/// pixels per logical pixel; `bounds` as in [`Layout::range`].
+fn flight(
+    v: (f32, f32),
+    k: f32,
+    falls: bool,
+    anchor: (f32, f32),
+    bounds: (f32, f32, f32, f32),
+) -> Option<Flight> {
+    let speed = v.0.hypot(v.1);
+    let v = if speed < THROW_MIN * k {
+        (0.0, 0.0)
+    } else {
+        let cap = (THROW_MAX * k / speed).min(1.0);
+        (v.0 * cap, v.1 * cap)
+    };
+    let thrown = v != (0.0, 0.0);
+    (thrown || (falls && anchor.1 < bounds.3 - 0.5)).then_some(Flight {
+        v,
+        gravity: falls,
+        bounds,
+    })
+}
+
 /// Character choices that change behaviour, read from settings each update.
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
@@ -361,12 +489,43 @@ struct Press {
     /// and every part it rides on, so moving them can't move the contact.
     /// Other parts trail freely.
     protected: Vec<bool>,
-    /// The current carry lean, eased toward the drag's.
+    /// The current carry lean and how fast it is swinging.
     lean: f32,
-    /// A swinging held pose: angular speed, and the last drag velocity
-    /// for the acceleration that swings it.
     swing: f32,
-    last_vx: f32,
+    /// The drag's smoothed velocity, in logical pixels per second; its
+    /// changes are the acceleration that swings the character.
+    v: Vector,
+    /// Where the cursor was over the last `THROW_WINDOW` of the drag, by
+    /// time: what a release throws with.
+    trail: VecDeque<(f32, (i32, i32))>,
+}
+
+impl Press {
+    /// Notes where the cursor is now, forgetting what is too old to count.
+    fn track(&mut self, now: f32, cursor: (i32, i32)) {
+        self.trail.push_back((now, cursor));
+        while self
+            .trail
+            .front()
+            .is_some_and(|(t, _)| now - t > THROW_WINDOW)
+        {
+            self.trail.pop_front();
+        }
+    }
+
+    /// The cursor's velocity as the drag ended, in physical pixels per
+    /// second: zero when it had stopped, or was let go too soon to tell.
+    fn velocity(&self, now: f32) -> (f32, f32) {
+        let recent = || self.trail.iter().filter(|(t, _)| now - t <= THROW_WINDOW);
+        let (Some((t0, a)), Some((t1, b))) = (recent().next(), recent().next_back()) else {
+            return (0.0, 0.0);
+        };
+        let span = t1 - t0;
+        if span < 0.01 {
+            return (0.0, 0.0);
+        }
+        ((b.0 - a.0) as f32 / span, (b.1 - a.1) as f32 / span)
+    }
 }
 
 /// Where the window goes so window point `grab` sits under `cursor`, both
@@ -406,7 +565,8 @@ pub struct Desktop {
     showing: Option<(f32, Event)>,
     /// After release, fall to the screen edge instead of staying.
     fall_on_release: bool,
-    falling: Option<Fall>,
+    /// Thrown or falling since its release.
+    flight: Option<Flight>,
     /// When motion last stepped, and where the feet were then.
     stepped: f32,
     last_anchor: (f32, f32),
@@ -501,7 +661,7 @@ impl Desktop {
             pictures: Pictures::default(),
             showing: None,
             fall_on_release: false,
-            falling: None,
+            flight: None,
             stepped: 0.0,
             last_anchor: (anchor.0 as f32, anchor.1 as f32),
             size,
@@ -595,7 +755,7 @@ impl Desktop {
     pub fn set_fall(&mut self, on: bool) {
         self.fall_on_release = on;
         if !on {
-            self.falling = None;
+            self.flight = None;
         }
     }
 
@@ -755,8 +915,8 @@ impl Desktop {
                 (Task::batch(tasks), None)
             }
             Msg::Pressed => {
-                // Picking it up mid-fall stops the fall at once.
-                self.falling = None;
+                // Picking it up mid-flight catches it at once.
+                self.flight = None;
                 if let (Some(cursor), Some(rect)) =
                     (native::cursor_pos(), native::window_rect(self.hwnd))
                 {
@@ -775,7 +935,8 @@ impl Desktop {
                         protected,
                         lean: 0.0,
                         swing: 0.0,
-                        last_vx: 0.0,
+                        v: Vector::ZERO,
+                        trail: VecDeque::new(),
                     });
                 }
                 (Task::none(), None)
@@ -824,7 +985,7 @@ impl Desktop {
         self.right_down = right;
         let mut save = None;
         if self.press.is_none()
-            && let Some(landed) = self.step_fall(k)
+            && let Some(landed) = self.step_flight(k)
         {
             save = Some(landed);
         }
@@ -853,6 +1014,7 @@ impl Desktop {
                     }
                 }
                 if press.dragging {
+                    press.track(self.now, cursor);
                     let origin = carried_origin(cursor, press.grab, k);
                     self.carry_to(origin, k);
                 }
@@ -973,48 +1135,61 @@ impl Desktop {
                         *angle = live.angles.get(i).copied().unwrap_or(*angle);
                     }
                 }
+                // Carried, it swings from the grabbed point like a damped
+                // pendulum: the drag's acceleration kicks it, so a shake
+                // shows, and it settles trailing the way it came. Held above
+                // its middle the feet swing behind; held below, the head.
                 let dt = dt.clamp(0.0, 0.05);
-                let (lean, swing) = if let Some(held) = &self.pictures.held {
-                    // A held pose hangs from its scruff: a damped pendulum
-                    // the drag's acceleration swings, so shaking it shows.
-                    let length = (held.hold_in(self.rig.size()).distance(Point::new(
-                        self.rig.size().width / 2.0,
-                        self.rig.visible_middle(),
-                    )) * self.layout.scale)
-                        .max(20.0);
-                    let accel = if dt > 0.0 {
-                        (velocity.x - press.last_vx) / dt
-                    } else {
-                        0.0
-                    };
-                    let a = press.lean;
-                    let alpha = (accel.clamp(-20_000.0, 20_000.0) * a.cos()
-                        - HANG_GRAVITY * a.sin())
-                        / length
-                        - 4.0 * press.swing;
-                    let swing = press.swing + alpha * dt;
-                    ((a + swing * dt).clamp(-HANG_SWING, HANG_SWING), swing)
+                let v = press.v + (velocity - press.v) * (1.0 - (-dt * CARRY_SMOOTH).exp());
+                let accel = if dt > 0.0 {
+                    (v - press.v) * (1.0 / dt)
                 } else {
-                    // Upright: it trails the drag. Held above its middle,
-                    // the feet swing behind; held below, the head does.
-                    let hanging = press.pivot.y < self.rig.visible_middle();
-                    let sign = if hanging { 1.0 } else { -1.0 };
-                    let want = (sign * velocity.x * 0.0005).clamp(-CARRY_LEAN, CARRY_LEAN);
-                    (
-                        press.lean + (want - press.lean) * (1.0 - (-dt * 10.0).exp()),
-                        0.0,
-                    )
+                    Vector::ZERO
                 };
-                let lean = self.fit_carry(press.grab, press.pivot, lean);
+                let (length, sign, (kick, damp, limit)) = match &self.pictures.held {
+                    // A held pose hangs from its scruff.
+                    Some(held) => (
+                        (held.hold_in(self.rig.size()).distance(Point::new(
+                            self.rig.size().width / 2.0,
+                            self.rig.visible_middle(),
+                        )) * self.layout.scale)
+                            .max(20.0),
+                        1.0,
+                        HANG,
+                    ),
+                    None => {
+                        let below = (self.rig.visible_middle() - press.pivot.y) * self.layout.scale;
+                        (
+                            below.abs().max(self.size * 0.3),
+                            if below > 0.0 { 1.0 } else { -1.0 },
+                            UPRIGHT,
+                        )
+                    }
+                };
+                let a = press.lean;
+                let trail = sign * (v.x * CARRY_TRAIL).clamp(-limit * 0.6, limit * 0.6);
+                // Yanked up it weighs more, dropped it weighs less.
+                let gravity =
+                    (HANG_GRAVITY - accel.y).clamp(HANG_GRAVITY * 0.4, HANG_GRAVITY * 2.5);
+                let alpha = (sign * kick * accel.x.clamp(-20_000.0, 20_000.0) * a.cos()
+                    - gravity * (a - trail).sin())
+                    / length
+                    - damp * press.swing;
+                let swing = press.swing + alpha * dt;
+                let free = a + swing * dt;
+                let lean = self.fit_carry(press.grab, press.pivot, free.clamp(-limit, limit));
+                // Stopped by its limit or the window, it stops swinging
+                // that way rather than pressing against it.
+                let swing = if (lean - free).abs() > 1e-4 && swing * free > 0.0 {
+                    0.0
+                } else {
+                    swing
+                };
                 pose.carry = Some((press.pivot, lean));
                 if let Some(p) = &mut self.press {
                     p.lean = lean;
-                    p.swing = if lean == 0.0 && swing != 0.0 {
-                        0.0
-                    } else {
-                        swing
-                    };
-                    p.last_vx = velocity.x;
+                    p.swing = swing;
+                    p.v = v;
                 }
             }
             pose.gaze = self.head_gaze(&pose);
@@ -1029,7 +1204,8 @@ impl Desktop {
                 idle: o.idle && !o.reduced,
                 reduced: o.reduced,
                 pressed: false,
-                dragging: false,
+                // Thrown, its parts trail the flight as they did the drag.
+                dragging: self.flight.is_some(),
                 velocity,
                 music: o.music,
                 beat: o.beat,
@@ -1119,14 +1295,24 @@ impl Desktop {
                     && q.y <= l.window.height + 0.5
             })
         };
-        let mut a = lean;
-        for _ in 0..12 {
-            if fits(a) {
-                return a;
-            }
-            a *= 0.7;
+        if fits(lean) {
+            return lean;
         }
-        0.0
+        if !fits(0.0) {
+            return 0.0;
+        }
+        // Bisect for the limit itself, so a lean held against it stays
+        // there instead of jumping between steps.
+        let (mut inside, mut outside) = (0.0, lean);
+        for _ in 0..12 {
+            let mid = (inside + outside) * 0.5;
+            if fits(mid) {
+                inside = mid;
+            } else {
+                outside = mid;
+            }
+        }
+        inside
     }
 
     /// The gaze counter-rotated into the head's space, so it stays
@@ -1143,11 +1329,10 @@ impl Desktop {
         let press = self.press.take()?;
         self.released = Some((self.now, self.pose.clone()));
         if press.dragging {
-            // Left where it was put, unless that leaves it out of reach.
+            // Left where it was put, unless that leaves it out of reach;
+            // let go on the move, it carries on from there.
             self.place();
-            if self.fall_on_release {
-                self.start_fall(o.reduced);
-            }
+            self.launch(press.velocity(self.now), o.reduced);
             // The held pose ends; the drop's artwork, if any, shows briefly.
             self.showing = self
                 .pictures
@@ -1233,43 +1418,47 @@ impl Desktop {
         self.place();
     }
 
-    /// Starts falling straight down from the release spot to the bottom of
-    /// the release monitor's usable area. Reduced motion lands at once.
-    fn start_fall(&mut self, reduced: bool) {
-        let (work, _) = native::monitor_at(self.anchor.0 as i32, self.anchor.1 as i32 - 1, false);
-        let land = work.3 as f32;
-        if self.anchor.1 >= land - 0.5 {
+    /// Sets a released character moving: thrown with the cursor's
+    /// velocity `v` (physical pixels per second) when that is fast enough,
+    /// and falling to the bottom of the release monitor's usable area when
+    /// the character falls. Reduced motion never throws and lands at once.
+    fn launch(&mut self, v: (f32, f32), reduced: bool) {
+        let v = if reduced { (0.0, 0.0) } else { v };
+        if self.hwnd == 0 || (v == (0.0, 0.0) && !self.fall_on_release) {
             return;
         }
-        if reduced {
-            self.anchor.1 = land;
+        let (work, dpi) = native::monitor_at(self.anchor.0 as i32, self.anchor.1 as i32 - 1, false);
+        let k = dpi as f32 / 96.0;
+        let bounds = self.layout.range(k, work);
+        self.flight = flight(v, k, self.fall_on_release, self.anchor, bounds);
+        if reduced && self.flight.take().is_some() {
+            self.anchor.1 = bounds.3;
             self.place();
-        } else {
-            self.falling = Some(Fall { speed: 0.0, land });
         }
     }
 
-    /// One fall step; on landing, the spot to save. Landing is not a Drop.
-    fn step_fall(&mut self, k: f32) -> Option<(f64, f64)> {
-        let fall = self.falling.as_mut()?;
+    /// One flight step; when it comes to rest, the spot to save. Landing
+    /// is not a Drop.
+    fn step_flight(&mut self, k: f32) -> Option<(f64, f64)> {
+        let flight = self.flight.as_mut()?;
         let dt = (self.now - self.stepped).clamp(0.0, 0.05);
-        fall.speed += GRAVITY * k * dt;
-        let y = (self.anchor.1 + fall.speed * dt).min(fall.land);
-        let landed = y >= fall.land;
-        self.anchor.1 = y;
-        let (x, oy) = self.layout.origin(self.anchor, k);
-        native::move_window(self.hwnd, x, oy, None);
-        if landed {
-            self.falling = None;
+        let flown = flight.step(self.anchor, k, dt);
+        self.anchor = flown.at;
+        let (x, y) = self.layout.origin(self.anchor, k);
+        native::move_window(self.hwnd, x, y, None);
+        if flown.thud {
             // A squash on landing, where motion allows.
             self.animator.compress(self.now);
+        }
+        if flown.done {
+            self.flight = None;
             return Some((self.anchor.0 as f64, self.anchor.1 as f64));
         }
         None
     }
 
     pub fn reset_position(&mut self) {
-        self.falling = None;
+        self.flight = None;
         self.anchor = (feature::UNPLACED as f32, feature::UNPLACED as f32);
         self.menu = None;
         self.place();
@@ -1282,6 +1471,8 @@ impl Desktop {
         if self.press.as_ref().is_some_and(|p| p.dragging) {
             return;
         }
+        // The edges a flight was bouncing off may be gone.
+        self.flight = None;
         self.place();
     }
 
@@ -1292,7 +1483,7 @@ impl Desktop {
         }
         self.hidden = hidden;
         if hidden {
-            self.falling = None;
+            self.flight = None;
             // A cancelled gesture: no Drop is invented.
             self.speech = None;
             self.menu = None;
@@ -1313,6 +1504,12 @@ impl Desktop {
         )
     }
 
+    /// Carried or in flight: the window itself is moving, which looks
+    /// choppy at anything less than once per display frame.
+    pub fn moving(&self) -> bool {
+        self.flight.is_some() || self.press.as_ref().is_some_and(|p| p.dragging)
+    }
+
     /// How often to poll, or `None` when nothing needs watching. Anything
     /// under 100 ms means motion: the app then polls once per display frame.
     pub fn poll_interval(&self, o: &Options) -> Option<Duration> {
@@ -1327,7 +1524,7 @@ impl Desktop {
                 || self.showing.is_some_and(|(until, _)| self.now < until)
         };
         Some(Duration::from_millis(
-            if self.press.is_some() || self.falling.is_some() || self.animating() {
+            if self.press.is_some() || self.flight.is_some() || self.animating() {
                 16
             } else if self.menu.is_some() || (o.idle && !o.reduced) || settling || o.music > 0.001 {
                 33

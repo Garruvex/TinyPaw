@@ -210,6 +210,7 @@ pub fn present(
         )
         .expect("Create pixel map");
 
+        let started = std::time::Instant::now();
         renderer.draw(
             &mut pixels,
             &mut surface.clip_mask,
@@ -217,6 +218,15 @@ pub fn present(
             &damage,
             background_color,
         );
+        if std::env::var_os("TINYPAW_TRACE_DRAW").is_some() {
+            let area: f32 = damage.iter().map(|d| d.width * d.height).sum();
+            eprintln!(
+                "draw {:.1} ms, {} regions, {:.0} sq px",
+                started.elapsed().as_secs_f32() * 1000.0,
+                damage.len(),
+                area
+            );
+        }
 
         let scale = viewport.scale_factor();
         let (width, height) = (physical_size.width, physical_size.height);

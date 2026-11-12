@@ -190,16 +190,34 @@ fn draw(
     clip_mask: Option<&tiny_skia::Mask>,
     transformation: Transformation,
 ) {
-    let position = position * transformation;
+    let mut position = position * transformation;
+
+    // TinyPaw patch: land small text's origin on whole pixels. Scrolling
+    // moves it by fractions of a pixel, and each line's glyph rows and
+    // baseline round separately, so lines stretch and wobble as it moves.
+    if buffer.metrics().font_size * transformation.scale_factor() < SNAP_BELOW {
+        position = Point::new(position.x.round(), position.y.round());
+    }
 
     let mut swash = cosmic_text::SwashCache::new();
 
     for run in buffer.layout_runs() {
         for glyph in run.glyphs {
-            let physical_glyph = glyph.physical(
+            let mut physical_glyph = glyph.physical(
                 (position.x, position.y),
                 transformation.scale_factor(),
             );
+
+            // TinyPaw patch: at UI sizes, snap glyphs to whole pixels.
+            // Quarter-pixel positions smear some stems across two columns
+            // and leave others sharp, which reads as blurry text.
+            if glyph.font_size * transformation.scale_factor() < SNAP_BELOW {
+                if physical_glyph.cache_key.x_bin.as_float() >= 0.5 {
+                    physical_glyph.x += 1;
+                }
+                physical_glyph.cache_key.x_bin =
+                    cosmic_text::SubpixelBin::Zero;
+            }
 
             if let Some((buffer, placement)) = glyph_cache.allocate(
                 physical_glyph.cache_key,
@@ -236,6 +254,16 @@ fn draw(
             }
         }
     }
+}
+
+/// Physical font size below which glyphs snap to the pixel grid.
+const SNAP_BELOW: f32 = 20.0;
+
+/// TinyPaw patch: light text on dark gets bolder coverage so thin stems
+/// don't wash out; dark text gets a milder boost.
+fn coverage(alpha: u8, light: bool) -> u8 {
+    let exponent = if light { 0.72 } else { 0.88 };
+    ((alpha as f32 / 255.0).powf(exponent) * 255.0).round() as u8
 }
 
 fn from_color(color: cosmic_text::Color) -> Color {
@@ -284,6 +312,9 @@ impl GlyphCache {
             }
 
             let mut buffer = vec![0u32; glyph_size];
+            let light =
+                (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32)
+                    > 140.0;
 
             match image.content {
                 cosmic_text::SwashContent::Mask => {
@@ -298,7 +329,7 @@ impl GlyphCache {
                                     b,
                                     g,
                                     r,
-                                    image.data[i],
+                                    coverage(image.data[i], light),
                                 )
                                 .premultiply(),
                             );

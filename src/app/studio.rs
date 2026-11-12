@@ -31,6 +31,8 @@ pub(super) struct Studio {
     /// on every update.
     pub(super) motion_failed: Option<&'static str>,
     pub(super) motion_ticked: Option<Instant>,
+    /// The beat phase and when it was last sampled, to find its pace.
+    pub(super) motion_beat: Option<(f32, Instant)>,
     /// Create from reference in progress, and its reference thumbnail.
     pub(super) reference: Option<crate::mascot::reference::Request>,
     pub(super) reference_thumb: Option<image::Handle>,
@@ -616,18 +618,39 @@ impl App {
                 }
             }
             Message::LineSoundPicked(_, _, None) => {}
+            // The preview animates itself, one canvas redraw at a time (see
+            // `MotionStage::update`), so frames never rebuild this page. This
+            // only refreshes what it can't see: the settings it follows and
+            // the music playing. It also lands when the speech bubble
+            // appears or goes away, which the page does show.
             Message::MotionTick => {
-                let now_i = Instant::now();
-                let dt = self
-                    .studio
-                    .motion_ticked
-                    .map_or(0.0, |t| now_i.duration_since(t).as_secs_f32());
-                self.studio.motion_ticked = Some(now_i);
                 let o = self.motion_options();
-                let music = self.music_level();
                 let beat = self.beat_phase();
-                if let Some(p) = &mut self.studio.motion_preview {
-                    p.tick(dt, o.0, o.1, music, beat);
+                let sampled = Instant::now();
+                // Cycles per second, from the last two samples.
+                let beat_rate = match (beat, self.studio.motion_beat) {
+                    (Some(now), Some((before, at))) => {
+                        let dt = sampled.duration_since(at).as_secs_f32().max(0.001);
+                        (((now - before + 0.5).rem_euclid(1.0) - 0.5) / dt).clamp(0.0, 6.0)
+                    }
+                    _ => 0.0,
+                };
+                self.studio.motion_beat = beat.map(|b| (b, sampled));
+                let control = crate::mascot::preview::Control {
+                    idle: o.0,
+                    reduced: o.1,
+                    music: self.music_level(),
+                    beat,
+                    beat_rate,
+                    sampled: Some(sampled),
+                    period: crate::features::mascot::frame_period(
+                        self.session
+                            .settings()
+                            .choice(crate::features::mascot::FRAME_RATE),
+                    ),
+                };
+                if let Some(p) = &self.studio.motion_preview {
+                    p.set_control(control);
                 }
             }
             Message::CharacterPicked(None)

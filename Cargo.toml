@@ -30,15 +30,11 @@ lto = "thin"
 codegen-units = 1
 strip = true
 
-# Keep CPU rasterization responsive in development too. Unoptimized path
-# drawing made the long stick/forearm take 38-53 ms per frame at 1440p.
-[profile.dev.package.tiny-skia]
-opt-level = 3
-
-[profile.dev.package.tiny-skia-path]
-opt-level = 3
-
-[profile.dev.package.iced_tiny_skia]
+# Keep the UI responsive in development too. Unoptimized path drawing made
+# the long stick/forearm take 38-53 ms per frame at 1440p, and unoptimized
+# iced layout, text shaping and glyph rasterization made the Character page
+# lag. Optimize every dependency; the app's own code stays debuggable.
+[profile.dev.package."*"]
 opt-level = 3
 
 [target.'cfg(windows)'.dependencies]

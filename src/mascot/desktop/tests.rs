@@ -377,7 +377,8 @@ fn a_carried_character_leans_around_the_grab_and_trails_unprotected_parts() {
         protected: protected.clone(),
         lean: 0.0,
         swing: 0.0,
-        last_vx: 0.0,
+        v: Vector::ZERO,
+        trail: VecDeque::new(),
     });
     let local = super::super::motion::unplaced(&held, d.rig.anchor(), d.rig.size().height, pivot);
     let mut leaned = 0.0f32;
@@ -417,7 +418,7 @@ fn a_carried_character_leans_around_the_grab_and_trails_unprotected_parts() {
 }
 
 #[test]
-fn a_released_character_falls_once_and_a_pickup_catches_it() {
+fn a_released_character_falls_to_rest_once_and_a_pickup_catches_it() {
     let (mut d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 300.0), 5, false);
     let o = Options {
         eyes: false,
@@ -429,30 +430,181 @@ fn a_released_character_falls_once_and_a_pickup_catches_it() {
         music: 0.0,
         beat: None,
     };
-    d.falling = Some(Fall {
-        speed: 0.0,
-        land: 700.0,
-    });
+    let bounds = (0.0, 0.0, 1920.0, 700.0);
+    d.flight = flight((0.0, 0.0), 1.0, true, d.anchor, bounds);
     let mut saves = Vec::new();
-    for _ in 0..200 {
+    let mut lowest = 0.0f32;
+    for _ in 0..400 {
         d.now += 0.016;
-        if let Some(spot) = d.step_fall(1.0) {
+        if let Some(spot) = d.step_flight(1.0) {
             saves.push(spot);
         }
+        lowest = lowest.max(d.anchor.1);
         d.step_motion(&o, 1.0);
     }
-    assert_eq!(saves, [(500.0, 700.0)], "lands once, exactly on the edge");
+    assert_eq!(saves, [(500.0, 700.0)], "rests once, exactly on the edge");
+    assert_eq!(lowest, 700.0, "and never goes through it");
     assert!(d.take_events().is_empty(), "landing is not a Drop");
-    // Picking it up mid-fall stops the fall at once.
-    d.falling = Some(Fall {
-        speed: 0.0,
-        land: 900.0,
-    });
+    // Picking it up mid-flight catches it at once.
+    d.flight = flight((0.0, 0.0), 1.0, true, (500.0, 300.0), bounds);
+    assert!(d.moving());
     let _ = d.update(Msg::Pressed, &o);
-    assert!(d.falling.is_none());
+    assert!(d.flight.is_none());
     // Off unless the character asks for it.
     d.set_fall(false);
     assert!(!d.fall_on_release);
+}
+
+/// Runs a flight from `at` to rest; every spot on the way.
+fn fly(mut f: Flight, mut at: (f32, f32), k: f32) -> Vec<(f32, f32)> {
+    let mut path = vec![at];
+    for _ in 0..2000 {
+        let flown = f.step(at, k, 1.0 / 60.0);
+        at = flown.at;
+        path.push(at);
+        if flown.done {
+            return path;
+        }
+    }
+    panic!("never came to rest: {f:?} at {at:?}");
+}
+
+#[test]
+fn only_a_release_on_the_move_throws() {
+    let bounds = (100.0, 200.0, 1800.0, 1040.0);
+    let air = (500.0, 600.0);
+    let ground = (500.0, 1040.0);
+    // Put down, it stays; with Fall, it drops unless it is on the ground.
+    assert_eq!(flight((0.0, 0.0), 1.0, false, air, bounds), None);
+    assert_eq!(flight((200.0, 100.0), 1.0, false, air, bounds), None);
+    assert_eq!(flight((200.0, 100.0), 1.0, true, ground, bounds), None);
+    let drop = flight((200.0, 100.0), 1.0, true, air, bounds).expect("falls");
+    assert_eq!((drop.v, drop.gravity), ((0.0, 0.0), true));
+    // Let go on the move, it keeps that velocity, up to a cap.
+    let thrown = flight((900.0, -400.0), 1.0, false, air, bounds).expect("thrown");
+    assert_eq!((thrown.v, thrown.gravity), ((900.0, -400.0), false));
+    let hard = flight((30_000.0, 0.0), 1.0, false, air, bounds).expect("thrown");
+    assert!((hard.v.0 - THROW_MAX).abs() < 1.0 && hard.v.1 == 0.0);
+    // The threshold is in logical pixels: 600 physical is slow at 200 %.
+    assert_eq!(flight((600.0, 0.0), 2.0, false, air, bounds), None);
+
+    // The velocity is the cursor's over the end of the drag.
+    let mut press = Press {
+        cursor: (0, 0),
+        grab: Point::ORIGIN,
+        pose: Pose::default(),
+        dragging: true,
+        pivot: Point::ORIGIN,
+        protected: Vec::new(),
+        lean: 0.0,
+        swing: 0.0,
+        v: Vector::ZERO,
+        trail: VecDeque::new(),
+    };
+    assert_eq!(press.velocity(0.0), (0.0, 0.0));
+    let mut now = 0.0;
+    for n in 0..30 {
+        now = n as f32 / 60.0;
+        press.track(now, (n * 10, -n * 5));
+    }
+    let v = press.velocity(now);
+    assert!(
+        (v.0 - 600.0).abs() < 5.0 && (v.1 + 300.0).abs() < 5.0,
+        "{v:?}"
+    );
+    // Stopping before letting go is putting it down.
+    for _ in 0..8 {
+        now += 1.0 / 60.0;
+        press.track(now, (290, -145));
+    }
+    assert_eq!(press.velocity(now), (0.0, 0.0));
+    // So is a release long after the last movement was seen.
+    assert_eq!(press.velocity(now + 1.0), (0.0, 0.0));
+}
+
+#[test]
+fn a_thrown_character_arcs_bounces_off_the_edges_and_comes_to_rest() {
+    let bounds = (100.0, 200.0, 1800.0, 1040.0);
+    let inside =
+        |p: &(f32, f32)| p.0 >= bounds.0 && p.0 <= bounds.2 && p.1 >= bounds.1 && p.1 <= bounds.3;
+    for k in [1.0, 2.0] {
+        // Falling: up and over, down to the ground, a bounce, then rest.
+        let f = Flight {
+            v: (900.0 * k, -1500.0 * k),
+            gravity: true,
+            bounds,
+        };
+        let path = fly(f, (500.0, 1040.0), k);
+        let end = path[path.len() - 1];
+        assert!(path.iter().all(inside), "{k}");
+        assert!(path.iter().any(|p| p.1 < 900.0), "it rises");
+        assert_eq!(end.1, 1040.0, "and rests on the ground");
+        assert!(end.0 > 700.0, "further along: {end:?}");
+        let landings = path
+            .windows(2)
+            .filter(|w| w[0].1 < 1040.0 && w[1].1 == 1040.0)
+            .count();
+        assert!(landings >= 2, "it bounces: {landings}");
+
+        // Thrown hard at a wall and the ceiling, it comes back off both.
+        let f = Flight {
+            v: (4000.0 * k, -4000.0 * k),
+            gravity: true,
+            bounds,
+        };
+        let path = fly(f, (1500.0, 800.0), k);
+        assert!(path.iter().all(inside), "{k}");
+        assert!(path.iter().any(|p| p.0 == 1800.0) && path.iter().any(|p| p.1 == 200.0));
+        assert!(path[path.len() - 1].0 < 1800.0, "off the wall");
+
+        // Staying: it glides to a stop, further the harder it is thrown.
+        let glide = |v: f32| {
+            let f = Flight {
+                v: (-v * k, 0.0),
+                gravity: false,
+                bounds,
+            };
+            let path = fly(f, (1500.0, 600.0), k);
+            assert!(path.iter().all(|p| p.1 == 600.0 && inside(p)));
+            1500.0 - path[path.len() - 1].0
+        };
+        let (soft, firm) = (glide(500.0), glide(1500.0));
+        assert!(soft > 40.0 * k && firm > soft * 2.0, "{soft} {firm}");
+    }
+    // Let go hanging past an edge and thrown further out, it turns back
+    // from where it is instead of snapping inside.
+    let f = Flight {
+        v: (800.0, 0.0),
+        gravity: false,
+        bounds,
+    };
+    let path = fly(f, (1900.0, 600.0), 1.0);
+    assert_eq!(path[1].0, 1900.0);
+    assert!(path.windows(2).all(|w| w[1].0 <= w[0].0), "only back in");
+    assert!(path[path.len() - 1].0 < 1900.0);
+}
+
+#[test]
+fn the_carry_limit_is_the_window_edge_not_a_step_short_of_it() {
+    let (d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 500.0), 5, false);
+    let l = d.layout;
+    // Held by the body, low down: the window's bottom edge stops the swing.
+    let pivot = Point::new(310.0, 650.0);
+    let grab = Point::new(
+        l.character.x + pivot.x * l.scale,
+        l.character.y + pivot.y * l.scale,
+    );
+    let limit = d.fit_carry(grab, pivot, HANG_SWING);
+    assert!(limit > 0.0 && limit < HANG_SWING, "{limit}");
+    // Asking for a little more or a lot more gives the same limit, and
+    // anything inside it is left alone.
+    for ask in [limit + 0.01, limit * 1.5, HANG_SWING] {
+        assert!(
+            (d.fit_carry(grab, pivot, ask) - limit).abs() < 0.002,
+            "{ask}"
+        );
+    }
+    assert_eq!(d.fit_carry(grab, pivot, limit * 0.5), limit * 0.5);
 }
 
 #[test]
@@ -496,7 +648,8 @@ fn a_held_pose_swings_from_its_scruff_when_shaken_and_settles() {
         protected: vec![true; 2],
         lean: 0.0,
         swing: 0.0,
-        last_vx: 0.0,
+        v: Vector::ZERO,
+        trail: VecDeque::new(),
     });
     let (mut most, mut least) = (0.0f32, 0.0f32);
     // Shake side to side, then hold still.
@@ -551,7 +704,8 @@ fn gestures_emit_each_event_once_and_cancellation_none() {
         protected: Vec::new(),
         lean: 0.0,
         swing: 0.0,
-        last_vx: 0.0,
+        v: Vector::ZERO,
+        trail: VecDeque::new(),
     };
     // A short press is one Click.
     d.press = Some(press(false));
@@ -600,7 +754,8 @@ fn a_held_press_keeps_its_pose_and_eases_out_on_release() {
         protected: vec![true; held.angles.len()],
         lean: 0.0,
         swing: 0.0,
-        last_vx: 0.0,
+        v: Vector::ZERO,
+        trail: VecDeque::new(),
     });
     for (dragging, o) in [(false, o), (true, reduced)] {
         d.press.as_mut().unwrap().dragging = dragging;

@@ -117,7 +117,7 @@ pub(super) fn behavior_section<'a>(
                 .text_size(13)
                 .padding([5, 8])
                 .style(theme::select),
-                hint("Fall drops it straight down to the bottom of the screen it was released on. Picking it up mid-fall catches it."),
+                hint("Fall drops it to the bottom of the screen it was released on. Let go while moving, it is thrown: it glides to a stop, or with Fall arcs and bounces. Picking it up mid-flight catches it."),
             ]
             .spacing(6)
             .align_y(Alignment::Center)
@@ -1049,7 +1049,9 @@ impl MotionStage<'_> {
 impl canvas::Program<Message> for MotionStage<'_> {
     type State = ();
 
-    /// While picking the bubble's anchor, a click on the stage sets it.
+    /// Drives the animation: each redraw advances the preview and asks for
+    /// the next one, so only this canvas repaints per frame. While picking
+    /// the bubble's anchor, a click on the stage sets it.
     fn update(
         &self,
         _state: &mut (),
@@ -1058,6 +1060,21 @@ impl canvas::Program<Message> for MotionStage<'_> {
         cursor: iced::mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
         use iced::mouse::{Button, Event};
+        if let canvas::Event::Window(iced::window::Event::RedrawRequested(now)) = event {
+            // The page shows the speech bubble, so it needs rebuilding when
+            // the bubble appears or goes.
+            if self.preview.advance(*now) {
+                return Some(canvas::Action::publish(Message::MotionTick));
+            }
+            // Match the display with a short wait: an immediate redraw would
+            // spin faster than the screen refreshes.
+            let wait = self
+                .preview
+                .control()
+                .period
+                .unwrap_or(std::time::Duration::from_millis(7));
+            return Some(canvas::Action::request_redraw_at(*now + wait));
+        }
         if !self.preview.placing_bubble {
             return None;
         }

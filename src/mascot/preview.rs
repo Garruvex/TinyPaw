@@ -2,6 +2,9 @@
 //! Settings by the same rig and animator as the desktop, with test reactions
 //! that feed the animator exactly as a real click or drag would.
 
+use std::cell::{Cell, RefCell};
+use std::time::{Duration, Instant};
+
 use iced::Vector;
 
 use super::lines::{Lines, Picker, SoundRef, Speech, Trigger};
@@ -32,6 +35,36 @@ const DRAG_SPEED: f32 = 700.0;
 /// How long the simulated music plays.
 const MUSIC: f32 = 4.0;
 
+/// What changes every frame while the preview animates.
+struct Live {
+    animator: Animator,
+    pose: Pose,
+    now: f32,
+    test: Option<(Test, f32)>,
+    /// A Click or Drop picture showing until this time.
+    showing: Option<(f32, Event)>,
+    picker: Picker,
+    speech: Option<Speech>,
+    sound: Option<SoundRef>,
+    /// When the canvas last advanced it.
+    last: Option<Instant>,
+}
+
+/// Idle, reduced motion, music and the frame pace, as of the last refresh.
+#[derive(Clone, Copy, Default)]
+pub struct Control {
+    pub idle: bool,
+    pub reduced: bool,
+    pub music: f32,
+    pub beat: Option<f32>,
+    /// How fast the beat phase advances (cycles per second) and when it was
+    /// sampled, so frames between samples carry it forward smoothly.
+    pub beat_rate: f32,
+    pub sampled: Option<Instant>,
+    /// Time between frames; `None` follows the display.
+    pub period: Option<Duration>,
+}
+
 pub struct MotionPreview {
     pub id: &'static str,
     rig: Rig,
@@ -43,10 +76,11 @@ pub struct MotionPreview {
     defaults: Vec<MotionSpec>,
     pub labels: Vec<String>,
     pub kinds: Vec<PartType>,
-    animator: Animator,
-    pose: Pose,
-    now: f32,
-    test: Option<(Test, f32)>,
+    /// The animation state. The Motion canvas advances it on its own redraws
+    /// (see `advance`), so animating never rebuilds the settings page.
+    live: RefCell<Live>,
+    /// Inputs the app refreshes now and then; the canvas reads them per frame.
+    control: Cell<Control>,
     /// The lines being edited, what's saved, and the pack's own.
     pub lines: Lines,
     lines_saved: Lines,
@@ -62,11 +96,6 @@ pub struct MotionPreview {
     /// Decoded reaction pictures by file, for the draft's held pose and
     /// artwork reactions.
     pictures: Vec<(super::lines::SoundRef, super::rig::Picture)>,
-    /// A Click or Drop picture showing until this time.
-    showing: Option<(f32, Event)>,
-    picker: Picker,
-    speech: Option<Speech>,
-    sound: Option<SoundRef>,
     /// A click on the preview sets where the bubble's tail aims.
     pub placing_bubble: bool,
 }
@@ -91,15 +120,11 @@ impl MotionPreview {
             reactions,
             reactions_pack: pack_reactions,
             pictures: Vec::new(),
-            showing: None,
             bop_saved: rig.bop(),
             bop_default: pack_bop,
             lines_saved: lines.clone(),
             lines,
             lines_defaults: pack_lines,
-            picker: Picker::default(),
-            speech: None,
-            sound: None,
             placing_bubble: false,
             id,
             labels: rig.motion_labels(),
@@ -108,10 +133,18 @@ impl MotionPreview {
             specs,
             defaults,
             rig,
-            animator: Animator::default(),
-            pose: Pose::default(),
-            now: 0.0,
-            test: None,
+            live: RefCell::new(Live {
+                animator: Animator::default(),
+                pose: Pose::default(),
+                now: 0.0,
+                test: None,
+                showing: None,
+                picker: Picker::default(),
+                speech: None,
+                sound: None,
+                last: None,
+            }),
+            control: Cell::new(Control::default()),
         }
     }
 
@@ -133,11 +166,19 @@ impl MotionPreview {
         self.labels = rig.motion_labels();
         self.kinds = rig.motion_parts().iter().map(|p| p.kind).collect();
         self.rig = rig;
-        self.animator = Animator::default();
+        self.live.get_mut().animator = Animator::default();
     }
 
-    pub fn pose(&self) -> &Pose {
-        &self.pose
+    pub fn pose(&self) -> Pose {
+        self.live.borrow().pose.clone()
+    }
+
+    pub fn set_control(&self, control: Control) {
+        self.control.set(control);
+    }
+
+    pub fn control(&self) -> Control {
+        self.control.get()
     }
 
     pub fn dirty(&self) -> bool {
@@ -330,20 +371,22 @@ impl MotionPreview {
     /// While a test drag carries a held pose: the picture, the grip and
     /// the swing to hang it from.
     pub fn hanging(&self) -> Option<(super::rig::Picture, iced::Point, f32)> {
-        let Some((Test::DragLeft | Test::DragRight, _)) = self.test else {
+        let live = self.live.borrow();
+        let Some((Test::DragLeft | Test::DragRight, _)) = live.test else {
             return None;
         };
-        let (grip, angle) = self.pose.carry?;
+        let (grip, angle) = live.pose.carry?;
         Some((self.picture_for(self.held())?, grip, angle))
     }
 
     /// The picture the preview draws instead of the character now.
     pub fn picture(&self) -> Option<super::rig::Picture> {
-        if let Some((Test::DragLeft | Test::DragRight, _)) = self.test {
+        let live = self.live.borrow();
+        if let Some((Test::DragLeft | Test::DragRight, _)) = live.test {
             return None;
         }
-        match self.showing {
-            Some((until, e)) if self.now < until => self.picture_for(self.art(e)),
+        match live.showing {
+            Some((until, e)) if live.now < until => self.picture_for(self.art(e)),
             _ => None,
         }
     }
@@ -412,7 +455,8 @@ impl MotionPreview {
                 Trigger::Idle | Trigger::AnnotationEnd => None,
             };
             if let Some(g) = gesture {
-                self.test = Some((g, self.now));
+                let live = self.live.get_mut();
+                live.test = Some((g, live.now));
             }
             return;
         }
@@ -425,24 +469,27 @@ impl MotionPreview {
             } else {
                 Trigger::Click
             };
-            if let Some(line) = self.picker.pick(&self.lines, t)
-                && let Some(speech) = Speech::new(&line.text, self.now)
+            let live = self.live.get_mut();
+            if let Some(line) = live.picker.pick(&self.lines, t)
+                && let Some(speech) = Speech::new(&line.text, live.now)
             {
-                self.speech = Some(speech);
-                self.sound = line.sound.clone();
+                live.speech = Some(speech);
+                live.sound = line.sound.clone();
             }
             return;
         }
-        self.test = Some((test, self.now));
+        let live = self.live.get_mut();
+        live.test = Some((test, live.now));
     }
 
     /// Says a line for `t` now, if it has one.
     fn say(&mut self, t: Trigger) {
-        if let Some(line) = self.picker.pick(&self.lines, t)
-            && let Some(speech) = Speech::new(&line.text, self.now)
+        let live = self.live.get_mut();
+        if let Some(line) = live.picker.pick(&self.lines, t)
+            && let Some(speech) = Speech::new(&line.text, live.now)
         {
-            self.speech = Some(speech);
-            self.sound = line.sound.clone();
+            live.speech = Some(speech);
+            live.sound = line.sound.clone();
         }
     }
 
@@ -459,31 +506,54 @@ impl MotionPreview {
     }
 
     /// The line being said in the preview.
-    pub fn speech(&self) -> Option<&str> {
-        self.speech.as_ref().map(Speech::text)
+    pub fn speech(&self) -> Option<String> {
+        self.live.borrow().speech.as_ref().map(|s| s.text().to_owned())
     }
 
     pub fn hold_speech(&mut self, seconds: f32) {
-        if let Some(s) = &mut self.speech {
-            s.hold(self.now, seconds);
+        let live = self.live.get_mut();
+        if let Some(s) = &mut live.speech {
+            s.hold(live.now, seconds);
         }
     }
 
     pub fn take_sound(&mut self) -> Option<SoundRef> {
-        self.sound.take()
+        self.live.get_mut().sound.take()
+    }
+
+    /// Advances to `at` using the last refreshed controls. Returns whether
+    /// something the page shows (the speech bubble) appeared or went away,
+    /// so the page needs rebuilding.
+    pub fn advance(&self, at: Instant) -> bool {
+        let dt = {
+            let mut live = self.live.borrow_mut();
+            let dt = live.last.map_or(0.0, |l| at.duration_since(l).as_secs_f32());
+            live.last = Some(at);
+            dt
+        };
+        let c = self.control.get();
+        let beat = c.beat.map(|phase| {
+            let ahead = c.sampled.map_or(0.0, |s| at.saturating_duration_since(s).as_secs_f32());
+            (phase + c.beat_rate * ahead).rem_euclid(1.0)
+        });
+        let before = self.live.borrow().speech.is_some();
+        self.tick(dt, c.idle, c.reduced, c.music, beat);
+        before != self.live.borrow().speech.is_some()
     }
 
     /// Advances the preview by `dt` seconds.
     /// `music` is live playback loudness (0 when off or silent).
-    pub fn tick(&mut self, dt: f32, idle: bool, reduced: bool, music: f32, beat: Option<f32>) {
-        self.now += dt.clamp(0.0, 0.1);
-        if let Some(s) = &mut self.speech
-            && !s.advance(self.now)
+    pub fn tick(&self, dt: f32, idle: bool, reduced: bool, music: f32, beat: Option<f32>) {
+        let mut live = self.live.borrow_mut();
+        let live = &mut *live;
+        live.now += dt.clamp(0.0, 0.1);
+        if let Some(s) = &mut live.speech
+            && !s.advance(live.now)
         {
-            self.speech = None;
+            live.speech = None;
         }
         let mut inputs = Inputs {
-            now: self.now,
+            now: live.now,
             dt,
             idle: idle && !reduced,
             reduced,
@@ -492,20 +562,20 @@ impl MotionPreview {
             bop: self.rig.bop(),
             ..Inputs::default()
         };
-        if let Some((test, started)) = self.test {
-            let t = self.now - started;
+        if let Some((test, started)) = live.test {
+            let t = live.now - started;
             match test {
                 Test::Click if t < PRESS => inputs.pressed = true,
                 Test::Click => {
-                    self.animator.clicked(self.now);
+                    live.animator.clicked(live.now);
                     match self.visual(Event::Click) {
-                        super::reactions::Visual::Compress => self.animator.compress(self.now),
+                        super::reactions::Visual::Compress => live.animator.compress(live.now),
                         super::reactions::Visual::Artwork => {
-                            self.showing = Some((self.now + 0.7, Event::Click))
+                            live.showing = Some((live.now + 0.7, Event::Click))
                         }
                         super::reactions::Visual::None => {}
                     }
-                    self.test = None;
+                    live.test = None;
                 }
                 Test::DragLeft | Test::DragRight if t < DRAG => {
                     let sign = if test == Test::DragLeft { -1.0 } else { 1.0 };
@@ -522,14 +592,14 @@ impl MotionPreview {
                 Test::DragLeft | Test::DragRight => {
                     // Dropped: the drop's artwork shows briefly.
                     if self.visual(Event::Drop) == super::reactions::Visual::Artwork {
-                        self.showing = Some((self.now + 0.7, Event::Drop));
+                        live.showing = Some((live.now + 0.7, Event::Drop));
                     }
-                    self.test = None;
+                    live.test = None;
                 }
-                Test::Speak | Test::Music | Test::Say(_) => self.test = None,
+                Test::Speak | Test::Music | Test::Say(_) => live.test = None,
             }
         }
-        self.pose = self.animator.step(&self.rig.motion_parts(), &inputs);
+        live.pose = live.animator.step(&self.rig.motion_parts(), &inputs);
         // A test drag carries like the desktop: held near the top of the
         // head, leaning around that point rather than around the feet.
         if inputs.dragging {
@@ -538,8 +608,8 @@ impl MotionPreview {
             // Held near the top, the feet trail the drag: the turn is the
             // opposite of a lean around the feet. A held pose swings more.
             let swing = if self.held().is_some() { 2.5 } else { 1.0 };
-            self.pose.carry = Some((grip, -self.pose.lean * swing));
-            self.pose.lean = 0.0;
+            live.pose.carry = Some((grip, -live.pose.lean * swing));
+            live.pose.lean = 0.0;
         }
     }
 }
@@ -696,7 +766,7 @@ mod tests {
         assert!(p.lines_dirty() && p.lines_customised());
         p.test(Test::Speak);
         assert_eq!(
-            p.speech(),
+            p.speech().as_deref(),
             Some("Hmm"),
             "falls back to other triggers' lines"
         );

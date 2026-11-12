@@ -1434,7 +1434,8 @@ impl App {
             });
         }
         if Some(window) == self.settings_window {
-            return view::settings::view(view::settings::SettingsView {
+            let built = std::time::Instant::now();
+            let element = view::settings::view(view::settings::SettingsView {
                 registry: &self.registry,
                 session: &self.session,
                 displays: &self.displays,
@@ -1471,6 +1472,10 @@ impl App {
                 music_inputs: self.music_inputs(),
                 beat: self.beat_status(),
             });
+            if std::env::var_os("TINYPAW_TRACE_DRAW").is_some() {
+                eprintln!("view settings {:.1} ms", built.elapsed().as_secs_f32() * 1000.0);
+            }
+            return element;
         }
         #[cfg(windows)]
         if let Some(m) = self.mascot.as_ref().filter(|m| m.id == window) {
@@ -1547,13 +1552,25 @@ impl App {
             subs.push(Subscription::run(platform::refresh_ticks).map(|_| Message::SpotTick));
         }
         #[cfg(windows)]
-        if let Some(every) = self
-            .mascot
-            .as_ref()
-            .and_then(|m| m.poll_interval(&self.mascot_options()))
+        if let Some(m) = &self.mascot
+            && let Some(every) = m.poll_interval(&self.mascot_options())
         {
-            // Moving: at the chosen frame rate. Still: a slow timer.
-            subs.push(if every < Duration::from_millis(100) {
+            // Every message rebuilds every open window, and idle polling
+            // runs at the chosen frame rate (60 per second by default). While
+            // Settings is open, idle motion polls at 15 per second instead so
+            // its pages stay responsive; carried, thrown and popping states
+            // keep full rate.
+            let idle = every == Duration::from_millis(33) && !m.moving();
+            // Carried or thrown: every display frame, whatever the chosen
+            // rate, since the window itself is moving. Otherwise moving: at
+            // the chosen frame rate. Still: a slow timer.
+            subs.push(if m.moving() {
+                Subscription::run(platform::refresh_ticks)
+                    .map(|_| Message::Mascot(crate::mascot::Msg::Poll))
+            } else if idle && self.settings_window.is_some() {
+                iced::time::every(Duration::from_millis(66))
+                    .map(|_| Message::Mascot(crate::mascot::Msg::Poll))
+            } else if every < Duration::from_millis(100) {
                 self.animation_ticks()
                     .map(|_| Message::Mascot(crate::mascot::Msg::Poll))
             } else {
@@ -1562,7 +1579,10 @@ impl App {
         }
         // The Motion tab's preview animates while it's open.
         if self.studio.motion_preview.is_some() {
-            subs.push(self.animation_ticks().map(|_| Message::MotionTick));
+            // Slowly, to refresh what the canvas can't see; faster while
+            // music plays, which it follows.
+            let every = if self.music_level() > 0.0 { 100 } else { 500 };
+            subs.push(iced::time::every(Duration::from_millis(every)).map(|_| Message::MotionTick));
         }
         // Frames only while something animates; otherwise the process sleeps.
         // Paced by the display refresh: `window::frames()` fires for every
