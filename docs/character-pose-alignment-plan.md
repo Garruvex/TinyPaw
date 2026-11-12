@@ -52,3 +52,10 @@ Each phase ends in a separate commit with its acceptance checks. Use disposable 
 ## Completion evidence
 
 Record the commit and checks for each phase here as implementation proceeds. Keep a before/after pickup sequence, pixel comparison results, an exported fixture that reopens with its authored grip, and the Windows display configurations actually tested. A single uniform resize can match head width but cannot repair inconsistent drawing proportions. The side-by-side preview should make it apparent when the remaining correction belongs in the artwork.
+
+### Implementation record
+
+- `264a004` fixes rotated raster and SVG culling and clipping during partial redraw. A new regression failed before the fix and passes at display scales 1, 1.25, 1.5 and 2. All four renderer tests pass. This establishes a renderer regression baseline. Native pickup sequences and pose-transition comparisons remain to be verified.
+- `fd6cb30` adds optional source-relative grip metadata, validates coordinates, and resolves it in desktop and preview rendering. Held-pose settings can select a grip by clicking the preview, show its marker, and restore automatic grip. Existing pose-preview work in the checkout was integrated where required by these controls. The application suite passed with 240 tests and eight ignored. Added checks cover metadata round trips, invalid grips, placement with source padding, and preview grip/reset behavior. Native usability and pack export with an authored grip still need explicit verification.
+- `c0293cf` preserves exact pixels and padding when a replacement reaction PNG matches the character canvas. A focused import regression passes. Differently sized imports still use the existing fitted output. Original-source retention, source replacement review and creator prompt updates remain pending.
+- The overlay editor, head-landmark matching and final native screen-boundary validation remain pending. The implementation is incomplete.
