@@ -141,6 +141,7 @@ pub enum UiMsg {
     /// Choose the PNG for an artwork reaction, or Pick up's held pose.
     ReactionPicture(crate::mascot::reactions::Event),
     ReactionHeldClear,
+    PlacementPreview(Option<crate::mascot::reactions::Event>),
     /// Create from reference.
     ReferenceStart,
     ReferenceStyle(String),
@@ -166,6 +167,8 @@ pub enum UiMsg {
     CompanionTest(crate::mascot::companionship::State),
     CompanionMouth,
     /// Align a picture: event, whether it's the held pose, x/y/scale, value.
+    GripEdit,
+    GripSet(Option<[f32; 2]>),
     ReactionPlace(crate::mascot::reactions::Event, bool, usize, f32),
     ArtEyeStyle(crate::mascot::editor::EyeStyle),
     ArtField(usize, String),

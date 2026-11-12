@@ -178,6 +178,8 @@ impl std::fmt::Display for Visual {
 pub struct Art {
     pub image: SoundRef,
     pub place: [f32; 3],
+    /// Grip in full source-image fractions. None selects automatic placement.
+    pub grip: Option<[f32; 2]>,
 }
 
 impl Art {
@@ -185,11 +187,12 @@ impl Art {
         Self {
             image,
             place: [0.0, 0.0, 1.0],
+            grip: None,
         }
     }
 
     fn to_json(&self) -> Json {
-        json!({ "image": file_json(&self.image), "place": self.place })
+        json!({ "image": file_json(&self.image), "place": self.place, "grip": self.grip })
     }
 }
 
@@ -245,7 +248,18 @@ fn parse_art(v: &Json, user: bool) -> Result<Art, String> {
         }
         _ => return Err("a reaction picture's place must be [x, y, scale]".into()),
     };
-    Ok(Art { image, place })
+    let grip = match &v["grip"] {
+        Json::Null => None,
+        Json::Array(points) if points.len() == 2 => {
+            let coordinate = |v: &Json| v.as_f64().filter(|n| n.is_finite() && (0.0..=1.0).contains(n)).map(|n| n as f32);
+            match (coordinate(&points[0]), coordinate(&points[1])) {
+                (Some(x), Some(y)) => Some([x, y]),
+                _ => return Err("grip coordinates must be between 0 and 1".into()),
+            }
+        }
+        _ => return Err("grip must be [x, y] or null for automatic".into()),
+    };
+    Ok(Art { image, place, grip })
 }
 
 /// One event's entry in a `reactions` object: its sound and visual, plus
@@ -1039,7 +1053,7 @@ mod tests {
     #[test]
     fn held_poses_and_artwork_round_trip() {
         let v = json!({
-            "pickup": { "visual": "none", "held_pose": { "image": "reactions/held.png", "place": [0.02, -0.04, 1.0] } },
+            "pickup": { "visual": "none", "held_pose": { "image": "reactions/held.png", "place": [0.02, -0.04, 1.0], "grip": [0.31, 0.17] } },
             "drop": { "visual": { "image": "user:art-1.png", "place": [0.0, 0.0, 1.0] }, "after_release": "stay" }
         });
         let c = Config::parse(&v, true).unwrap();
@@ -1049,12 +1063,15 @@ mod tests {
         );
         assert_eq!(visual(&Config::default(), &c, Event::Drop), Visual::Artwork);
         assert!(art(&Config::default(), &c, Event::Drop).is_some());
+        assert_eq!(held(&Config::default(), &c).unwrap().grip, Some([0.31, 0.17]));
         assert_eq!(c.images().len(), 2);
         assert_eq!(c.entry(Event::Drop).unwrap().fall, Some(false));
         assert!(!falls(&Config::default(), &c));
         assert!(Config::parse(&json!({ "drop": { "after_release": "bounce" } }), true).is_err());
         assert_eq!(Config::parse(&c.to_json(), true).unwrap(), c);
         for bad in [
+            json!({ "pickup": { "held_pose": { "image": "held.png", "grip": [1.1, 0.0] } } }),
+            json!({ "pickup": { "held_pose": { "image": "held.png", "grip": [0.5] } } }),
             json!({ "pickup": { "held_pose": { "image": "../x.png" } } }),
             json!({ "pickup": { "held_pose": { "image": "held.png", "place": [0, 0, 9] } } }),
             json!({ "drop": { "visual": { "image": "x.wav" } } }),

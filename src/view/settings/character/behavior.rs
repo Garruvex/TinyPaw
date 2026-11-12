@@ -300,6 +300,11 @@ pub(super) fn held_row<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Elem
             .spacing(8)
             .align_y(Alignment::Center),
             picture_controls(Event::Pickup, true, art.place),
+            row![
+                small(if m.placing_grip { "Cancel grip" } else { "Set grip on preview" }, Message::Ui(UiMsg::GripEdit)),
+                small("Automatic grip", Message::Ui(UiMsg::GripSet(None))),
+            ].spacing(6),
+            hint("Choose Set grip, then click the pickup point on the preview. The circle marks where the character hangs."),
             hint("Line the held pose up so the part people grab sits where it does in the normal pose; the preview shows it while carried."),
         ]
         .spacing(6)
@@ -330,9 +335,13 @@ pub(super) fn picture_controls<'a>(e: Event, held: bool, place: [f32; 3]) -> Ele
             .align_y(Alignment::Center)
         };
     column![
-        slider_row("Left/right", 0, -0.5..=0.5, 0.005),
-        slider_row("Up/down", 1, -0.5..=0.5, 0.005),
-        slider_row("Size", 2, 0.25..=2.0, 0.01),
+        row![
+            button("Preview pose").on_press(Message::Ui(UiMsg::PlacementPreview(Some(e)))),
+            button("Finish preview").on_press(Message::Ui(UiMsg::PlacementPreview(None))),
+        ].spacing(6),
+        slider_row("Left/right", 0, -1.0..=1.0, 0.005),
+        slider_row("Up/down", 1, -1.0..=1.0, 0.005),
+        slider_row("Size", 2, 0.1..=4.0, 0.01),
     ]
     .spacing(4)
     .into()
@@ -1086,6 +1095,19 @@ impl canvas::Program<Message> for MotionStage<'_> {
                 .unwrap_or(std::time::Duration::from_millis(7));
             return Some(canvas::Action::request_redraw_at(*now + wait));
         }
+        if self.preview.placing_grip {
+            if let canvas::Event::Mouse(Event::ButtonPressed(Button::Left)) = event {
+                if let (Some(point), Some(picture)) = (point, self.preview.placement_picture()) {
+                    let size = self.preview.rig().size();
+                    let [x, y, scale] = picture.place;
+                    let grip = [(point.x / size.width - x) / scale, (point.y / size.height - y) / scale];
+                    if grip.iter().all(|v| (0.0..=1.0).contains(v)) {
+                        return Some(canvas::Action::publish(Message::Ui(UiMsg::GripSet(Some(grip)))).and_capture());
+                    }
+                }
+            }
+            return None;
+        }
         if self.preview.placing_mouth {
             if let canvas::Event::Mouse(Event::ButtonPressed(Button::Left)) = event {
                 if let Some(p) = point {
@@ -1125,7 +1147,7 @@ impl canvas::Program<Message> for MotionStage<'_> {
         bounds: iced::Rectangle,
         cursor: iced::mouse::Cursor,
     ) -> iced::mouse::Interaction {
-        if (self.preview.placing_bubble || self.preview.placing_mouth) && cursor.is_over(bounds) {
+        if (self.preview.placing_bubble || self.preview.placing_mouth || self.preview.placing_grip) && cursor.is_over(bounds) {
             iced::mouse::Interaction::Crosshair
         } else {
             iced::mouse::Interaction::default()
@@ -1188,6 +1210,14 @@ impl canvas::Program<Message> for MotionStage<'_> {
         }
         frame.translate(origin);
         frame.scale(k);
+        if let Some(picture) = self.preview.placement_picture() {
+            rig.draw_picture(&mut frame, &picture);
+            if self.preview.placement_preview == Some(Event::Pickup) {
+                frame.stroke(&canvas::Path::circle(picture.hold_in(canvas_size), 6.0 / k),
+                    canvas::Stroke::default().with_color(iced::Color::from_rgb(1.0, 0.3, 0.4)).with_width(2.0 / k));
+            }
+            return vec![frame.into_geometry()];
+        }
         if let Some((held, grip, angle)) = self.preview.hanging() {
             rig.draw_hanging(&mut frame, &held, grip, angle);
             return vec![frame.into_geometry()];

@@ -9,6 +9,17 @@ impl App {
         out: &mut Outcomes,
     ) -> Task<Message> {
         match ui {
+            UiMsg::GripEdit => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.placing_grip = !p.placing_grip;
+                    p.placement_preview = Some(crate::mascot::reactions::Event::Pickup);
+                }
+            }
+            UiMsg::GripSet(grip) => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.set_grip(grip);
+                }
+            }
             UiMsg::CompanionMouth => {
                 if let Some(p) = &mut self.studio.motion_preview {
                     p.placing_mouth = !p.placing_mouth;
@@ -21,7 +32,8 @@ impl App {
                 }
             }
             UiMsg::CompanionTest(state) => {
-                if let Some(p) = &self.studio.motion_preview {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.placement_preview = None;
                     p.companion_test(state);
                 }
             }
@@ -93,12 +105,14 @@ impl App {
                     p.set_held(None);
                 }
             }
+            UiMsg::PlacementPreview(event) => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.placement_preview = event;
+                }
+            }
             UiMsg::ReactionPlace(e, held, which, value) => {
                 if let Some(p) = &mut self.studio.motion_preview {
                     p.set_place(e, held, which, value);
-                    if held {
-                        p.test(crate::mascot::preview::Test::DragRight);
-                    }
                 }
             }
             UiMsg::ReactionVisual(e, v) => {

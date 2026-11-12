@@ -70,6 +70,7 @@ pub struct Control {
 }
 
 pub struct MotionPreview {
+    pub placing_grip: bool,
     pub id: &'static str,
     rig: Rig,
     /// The motion being edited, per part.
@@ -102,6 +103,8 @@ pub struct MotionPreview {
     pictures: Vec<(super::lines::SoundRef, super::rig::Picture)>,
     /// A click on the preview sets where the bubble's tail aims.
     pub placing_bubble: bool,
+    /// A still pose pinned on the shared stage while positioning its artwork.
+    pub placement_preview: Option<Event>,
     pub placing_mouth: bool,
 }
 
@@ -125,6 +128,7 @@ impl MotionPreview {
             reactions,
             reactions_pack: pack_reactions,
             pictures: Vec::new(),
+            placement_preview: None,
             bop_saved: rig.bop(),
             bop_default: pack_bop,
             lines_saved: lines.clone(),
@@ -132,6 +136,7 @@ impl MotionPreview {
             lines_defaults: pack_lines,
             placing_bubble: false,
             placing_mouth: false,
+            placing_grip: false,
             id,
             labels: rig.motion_labels(),
             kinds: rig.motion_parts().iter().map(|p| p.kind).collect(),
@@ -370,7 +375,19 @@ impl MotionPreview {
             .1
             .clone();
         picture.place = art.place;
-        Some(picture)
+        Some(picture.with_grip(art.grip))
+    }
+
+    pub fn placement_picture(&self) -> Option<super::rig::Picture> {
+        let event = self.placement_preview?;
+        self.picture_for(if event == Event::Pickup { self.held() } else { self.art(event) })
+    }
+
+    pub fn set_grip(&mut self, grip: Option<[f32; 2]>) {
+        if let Some(art) = self.entry_mut(Event::Pickup).held.as_mut() {
+            art.grip = grip;
+        }
+        self.placing_grip = false;
     }
 
     pub fn held(&self) -> Option<super::reactions::Art> {
@@ -422,6 +439,7 @@ impl MotionPreview {
             } else {
                 value.clamp(-1.0, 1.0)
             };
+            self.placement_preview = Some(e);
         }
     }
 
@@ -459,6 +477,8 @@ impl MotionPreview {
 
     /// Back to the pack's reaction sounds (unsaved until Save).
     pub fn reset_reactions(&mut self) {
+        self.placing_grip = false;
+        self.placement_preview = None;
         self.reactions = Config::default();
     }
 
@@ -504,6 +524,8 @@ impl MotionPreview {
 
     /// Back to what's saved, dropping every unsaved change.
     pub fn discard(&mut self) {
+        self.placing_grip = false;
+        self.placement_preview = None;
         self.specs = self.saved.clone();
         self.rig.set_motion(&self.specs);
         self.lines = self.lines_saved.clone();
@@ -512,6 +534,8 @@ impl MotionPreview {
     }
 
     pub fn test(&mut self, test: Test) {
+        self.placing_grip = false;
+        self.placement_preview = None;
         if let Test::Say(t) = test {
             self.say(t);
             let gesture = match t {
@@ -894,10 +918,18 @@ mod tests {
         p.set_held(Some(Art::new(file.clone())));
         p.set_art(Event::Drop, Some(Art::new(file.clone())));
         p.set_place(Event::Pickup, true, 0, 0.05);
-        assert_eq!(p.held().unwrap().place[0], 0.05);
+        assert_eq!(p.placement_picture().unwrap().place[0], 0.05);
+        p.set_grip(Some([0.2, 0.3]));
+        assert_eq!(p.held().unwrap().grip, Some([0.2, 0.3]));
+        assert_eq!(p.placement_picture().unwrap().hold, iced::Point::new(0.2, 0.3));
+        p.set_grip(None);
+        assert_eq!(p.held().unwrap().grip, None);
+        p.set_place(Event::Drop, false, 2, 1.35);
+        assert_eq!(p.placement_picture().unwrap().place[2], 1.35);
         assert!(p.picture().is_none(), "at rest the normal art shows");
         p.test(Test::DragRight);
         p.tick(0.05, false, false, 0.0, None);
+        assert!(p.placement_picture().is_none());
         assert!(p.hanging().is_some(), "carried: the held pose hangs");
         for _ in 0..30 {
             p.tick(0.05, false, false, 0.0, None);

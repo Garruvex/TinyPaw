@@ -720,6 +720,16 @@ impl Picture {
         false
     }
 
+    /// Resolve an authored grip against the untrimmed source image.
+    pub fn with_grip(mut self, grip: Option<[f32; 2]>) -> Self {
+        if let Some([x, y]) = grip {
+            if let Some((width, height)) = image_size(&self.image) {
+                self.hold = Point::new(x * width, y * height);
+            }
+        }
+        self
+    }
+
     /// The hold point in the stage frame, with the picture placed.
     pub fn hold_in(&self, stage: Size) -> Point {
         self.in_stage(stage, self.hold)
@@ -955,6 +965,16 @@ mod tests {
         // The head counts for clicks, the empty corners don't.
         assert!(rig.opaque(Point::new(50.0, 20.0)));
         assert!(!rig.opaque(Point::new(3.0, 3.0)));
+    }
+
+    #[test]
+    fn authored_grip_uses_source_padding_and_placement() {
+        let pixels = RgbaImage::new(200, 100);
+        let picture = Picture::new(&pixels, [0.1, -0.2, 1.25])
+            .with_grip(Some([0.3, 0.4]));
+        let grip = picture.hold_in(Size::new(400.0, 200.0));
+        assert!((grip.x - 190.0).abs() < 0.001);
+        assert!((grip.y - 60.0).abs() < 0.001);
     }
 
     #[test]
