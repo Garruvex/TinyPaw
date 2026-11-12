@@ -77,6 +77,14 @@ impl App {
                     }
                 }
             }
+            UiMsg::ReferenceExtra(role, on) => {
+                if let Some(r) = &mut self.studio.reference {
+                    r.extras.retain(|existing| *existing != role);
+                    if on {
+                        r.extras.push(role);
+                    }
+                }
+            }
             UiMsg::ReferenceHeld(on) => {
                 if let Some(r) = &mut self.studio.reference {
                     r.held = on;
@@ -145,6 +153,15 @@ impl App {
                 let head = r.file_for(Role::Head).map(PathBuf::from);
                 let tail = r.file_for(Role::Tail).map(PathBuf::from);
                 let held = r.file_for(Role::Held).map(PathBuf::from);
+                let extra_art: Vec<_> = r
+                    .roles()
+                    .into_iter()
+                    .filter_map(|role| Some((role.reaction()?, r.file_for(role)?.to_owned())))
+                    .collect();
+                let petting = r
+                    .extras
+                    .iter()
+                    .any(|role| matches!(role, Role::Petted | Role::HeadPetted));
                 let head_faces: Vec<(usize, PathBuf)> = r
                     .roles()
                     .into_iter()
@@ -235,6 +252,14 @@ impl App {
                         && let Err(e) = editor.set_image(Target::Held, &held)
                     {
                         errors.push(format!("held pose: {e}"));
+                    }
+                    for (event, path) in extra_art {
+                        if let Err(e) = editor.set_reference_reaction(event, &path) {
+                            errors.push(e);
+                        }
+                    }
+                    if petting {
+                        editor.enable_reference_headpat();
                     }
                     Ok(CharacterWork::Editor(Box::new(editor), errors))
                 });

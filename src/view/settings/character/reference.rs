@@ -113,6 +113,12 @@ pub(super) fn reference_panel<'a>(
                 .into(),
             hint("Blinking and expressions include their required head automatically. Tracking eyes use separate closed-eye images. Complete eye pictures switch off blinking and expressions."),
             hint("The prompt includes shared-canvas x/y placement, neck and tail pivots, eye travel and held-pose alignment. The art tool must measure and save the coordinates in character.json."),
+            checkbox(r.extras.contains(&Role::HeadPetted)).label("Create a happy headpat head expression (includes a separate head)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceExtra(Role::HeadPetted,on))).into(),
+            checkbox(r.extras.contains(&Role::Petted)).label("Create a happy headpat pose").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceExtra(Role::Petted,on))).into(),
+            checkbox(r.extras.contains(&Role::Sleep)).label("Create a sleeping pose with a mouth position for Zzz").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceExtra(Role::Sleep,on))).into(),
+            checkbox(r.extras.contains(&Role::Wake)).label("Create a drowsy wake pose").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceExtra(Role::Wake,on))).into(),
+            checkbox(r.extras.contains(&Role::Click)).label("Create a whole-character click pose").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceExtra(Role::Click,on))).into(),
+            checkbox(r.extras.contains(&Role::Drop)).label("Create a whole-character drop pose").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceExtra(Role::Drop,on))).into(),
             checkbox(r.held).label("Create a held pose (complete hanging character and pickup mapping)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceHeld(on))).into(),
         ]),
         section(vec![

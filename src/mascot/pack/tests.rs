@@ -113,6 +113,13 @@ fn reference_prompt_folders_pass_import_with_every_requested_image_mapped() {
     fs::create_dir(&source).unwrap();
     let mut request = Request::new("My Cat.png".into());
     request.canvas = 512;
+    request.extras = vec![
+        crate::mascot::reference::Role::Petted,
+        crate::mascot::reference::Role::Sleep,
+        crate::mascot::reference::Role::Wake,
+        crate::mascot::reference::Role::Click,
+        crate::mascot::reference::Role::Drop,
+    ];
     for (layered, eyes, tracking) in [
         (false, false, false),
         (true, false, false),

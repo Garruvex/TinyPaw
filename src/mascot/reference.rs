@@ -37,11 +37,28 @@ pub enum Role {
     HeadBlink,
     HeadPressed,
     HeadCarried,
+    HeadPetted,
+    Petted,
+    Sleep,
+    Wake,
+    Click,
+    Drop,
     /// The whole character in a carried pose, for Pick up's held pose.
     Held,
 }
 
 impl Role {
+    pub fn reaction(self) -> Option<super::reactions::Event> {
+        use super::reactions::Event;
+        match self {
+            Role::Petted => Some(Event::Headpat),
+            Role::Sleep => Some(Event::Sleep),
+            Role::Wake => Some(Event::Wake),
+            Role::Click => Some(Event::Click),
+            Role::Drop => Some(Event::Drop),
+            _ => None,
+        }
+    }
     pub fn file(self) -> &'static str {
         match self {
             Role::Body => "body.png",
@@ -62,6 +79,12 @@ impl Role {
             Role::HeadBlink => "head_eyes_closed.png",
             Role::HeadPressed => "head_pressed.png",
             Role::HeadCarried => "head_carried.png",
+            Role::HeadPetted => "head_petted.png",
+            Role::Petted => "petted.png",
+            Role::Sleep => "sleep.png",
+            Role::Wake => "wake.png",
+            Role::Click => "click.png",
+            Role::Drop => "drop.png",
             Role::Held => "held.png",
         }
     }
@@ -72,6 +95,7 @@ impl Role {
             Role::HeadBlink => Some(0),
             Role::HeadPressed => Some(1),
             Role::HeadCarried => Some(2),
+            Role::HeadPetted => Some(3),
             _ => None,
         }
     }
@@ -96,6 +120,12 @@ impl Role {
             Role::HeadBlink => "Head, eyes closed",
             Role::HeadPressed => "Head, pressed",
             Role::HeadCarried => "Head, being carried",
+            Role::HeadPetted => "Head, happy from headpat",
+            Role::Petted => "Headpat pose",
+            Role::Sleep => "Sleeping pose",
+            Role::Wake => "Waking pose",
+            Role::Click => "Click pose",
+            Role::Drop => "Drop pose",
             Role::Held => "Held pose",
         }
     }
@@ -112,6 +142,18 @@ impl Role {
     /// before eyes, since "eyebrow" contains "eye".
     pub fn guess(path: &Path) -> Option<Role> {
         let name = path.file_stem()?.to_str()?.to_lowercase();
+        for role in [
+            Role::HeadPetted,
+            Role::Petted,
+            Role::Sleep,
+            Role::Wake,
+            Role::Click,
+            Role::Drop,
+        ] {
+            if name == role.file().trim_end_matches(".png") {
+                return Some(role);
+            }
+        }
         for right in [false, true] {
             for layer in [
                 EyeLayer::White,
@@ -195,6 +237,7 @@ pub struct Request {
     pub blink: bool,
     pub faces: bool,
     pub held: bool,
+    pub extras: Vec<Role>,
     /// Returned PNGs and the role each fills (`None`: not used).
     pub results: Vec<(PathBuf, Option<Role>)>,
 }
@@ -213,6 +256,7 @@ impl Request {
             blink: false,
             faces: false,
             held: false,
+            extras: Vec::new(),
             results: Vec::new(),
         }
     }
@@ -252,6 +296,7 @@ impl Request {
                 }
             }
         }
+        out.extend(self.extras.iter().copied());
         out
     }
 
@@ -262,7 +307,11 @@ impl Request {
     }
 
     fn needs_head(&self) -> bool {
-        self.head || self.tracking || self.blink || self.faces
+        self.head
+            || self.tracking
+            || self.blink
+            || self.faces
+            || self.extras.contains(&Role::HeadPetted)
     }
 
     fn style(&self) -> String {
@@ -336,9 +385,15 @@ impl Request {
                 };
                 format!("the {side} eye as the viewer sees it: {content}, at its exact location on the head")
             }
-            Role::HeadBlink => "only the head, identical to head.png in position, size and outline, with the eyes gently closed as in a blink".into(),
-            Role::HeadPressed => "only the head, identical to head.png in position, size and outline, with a surprised or delighted expression, as when poked".into(),
-            Role::HeadCarried => "only the head, identical to head.png in position, size and outline, with a startled or excited expression, as when being picked up".into(),
+            Role::HeadPetted => format!("only the head, identical to head.png in position, scale and outline, with a happy relaxed headpat expression and eyes painted in; {}", if self.brows { "leave eyebrows out because the separate eyebrow layers stay visible" } else { "keep eyebrows painted in" }),
+            Role::Petted => "the complete character enjoying a headpat, happy relaxed expression, all eyes and eyebrows painted in, matching the resting pose's scale and resting anchor".into(),
+            Role::Sleep => "the complete character sleeping comfortably, eyes closed, all face details painted in, matching the resting anchor and scale; leave Zzz letters out because TinyPaw draws them; measure the mouth position as canvas fractions for reactions.companionship.mouth".into(),
+            Role::Wake => "the complete character waking drowsily, all face details painted in, matching the resting anchor and scale".into(),
+            Role::Click => "the complete character reacting happily to a poke, all face details painted in, matching the resting anchor and scale".into(),
+            Role::Drop => "the complete character reacting to being put down, all face details painted in, matching the resting anchor and scale".into(),
+            Role::HeadBlink => "only the head, identical to head.png in position, size and outline, with the eyes gently closed as in a blink; leave eyebrows out if separate eyebrow files were requested".into(),
+            Role::HeadPressed => "only the head, identical to head.png in position, size and outline, with eyes painted in and a surprised or delighted expression, as when poked; leave eyebrows out if separate eyebrow files were requested".into(),
+            Role::HeadCarried => "only the head, identical to head.png in position, size and outline, with eyes painted in and a startled or excited expression, as when being picked up; leave eyebrows out if separate eyebrow files were requested".into(),
             Role::Held => "the whole character held up by the scruff of the neck, the way a cat is picked up: the scruff is the highest point, at the top centre of the character, with the head just below it and the body, legs and tail hanging straight down, relaxed and limp, so it can swing from that point like a pendulum. Same scale as the body file, eyes and eyebrows painted in, and plenty of transparent space on every side so swinging never crops it".into(),
         }
     }
@@ -426,6 +481,25 @@ impl Request {
             manifest["reactions"] =
                 json!({"pickup": {"held_pose": {"image": Role::Held.file(), "place": [0, 0, 1]}}});
         }
+        if !self.extras.is_empty() {
+            if manifest["reactions"].is_null() {
+                manifest["reactions"] = json!({});
+            }
+            let settings = super::companionship::Settings {
+                petting: self
+                    .extras
+                    .iter()
+                    .any(|r| matches!(r, Role::Petted | Role::HeadPetted)),
+                ..Default::default()
+            };
+            manifest["reactions"]["companionship"] = settings.to_json();
+            for role in &self.extras {
+                if let Some(event) = role.reaction() {
+                    manifest["reactions"][event.key()] =
+                        json!({"visual":{"image":role.file(),"place":[0,0,1]}});
+                }
+            }
+        }
         if self.head {
             manifest["music"] = json!({"bop": "nod"});
         }
@@ -474,6 +548,23 @@ impl Request {
         }
         if self.head && manifest.bop != Some(super::motion::Bop::Nod) {
             return Err("character.json must include the selected head bop in music.bop.".into());
+        }
+        for role in &self.extras {
+            if let Some(event) = role.reaction() {
+                if manifest
+                    .reactions
+                    .entry(event)
+                    .and_then(|e| e.art.as_ref())
+                    .map(|a| &a.image)
+                    != Some(&super::lines::SoundRef::Pack(role.file().into()))
+                {
+                    return Err(format!(
+                        "{} must map to the {} reaction",
+                        role.file(),
+                        event.key()
+                    ));
+                }
+            }
         }
         manifest.validate_files(folder)
     }
@@ -538,13 +629,23 @@ impl Request {
                 features.push(label);
             }
         }
+        for role in &self.extras {
+            features.push(match role {
+                Role::HeadPetted | Role::Petted => "headpat reaction",
+                Role::Sleep => "sleeping pose with mouth origin",
+                Role::Wake => "wake reaction",
+                Role::Click => "click artwork",
+                Role::Drop => "drop artwork",
+                _ => continue,
+            });
+        }
         features
     }
 
     /// A prompt for one file, for tools that return one image at a time.
     pub fn prompt(&self, role: Role) -> String {
         format!(
-            "Create one image for a desktop character, named {}.\n\n{}\n\nIt shows {}.",
+            "Create one image for a desktop character, named {}. Attach the approved body.png and head.png (when present) as alignment references alongside the character reference. Retain the full shared canvas. Never trim or centre individual layers.\n\n{}\n\nIt shows {}.",
             role.file(),
             self.rules(),
             self.describe(role)

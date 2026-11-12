@@ -261,6 +261,7 @@ pub struct Editor {
     gesture: Option<Gesture>,
     /// A held pose added here, written as the pack's `reactions/held.png`.
     pub held: Option<Layer>,
+    reference_art: Vec<(super::reactions::Event, Layer)>,
     pub fields: [String; 4],
     pub canvas_fields: [String; 2],
     pub new_install: bool,
@@ -349,6 +350,7 @@ impl Editor {
             eye_style: None,
             gesture: None,
             held: None,
+            reference_art: Vec::new(),
             fields: Default::default(),
             canvas_fields: [m.canvas.0.to_string(), m.canvas.1.to_string()],
             new_install: false,
@@ -681,6 +683,28 @@ impl Editor {
         }
     }
 
+    pub fn set_reference_reaction(
+        &mut self,
+        event: super::reactions::Event,
+        path: &Path,
+    ) -> Result<(), String> {
+        let held = self.held.take();
+        let result = self.set_image(Target::Held, path);
+        if result.is_ok() {
+            if let Some(layer) = self.held.take() {
+                self.reference_art.push((event, layer));
+            }
+        }
+        self.held = held;
+        result
+    }
+    pub fn enable_reference_headpat(&mut self) {
+        self.reactions
+            .companionship
+            .get_or_insert_with(Default::default)
+            .petting = true;
+    }
+
     /// The draft as a rig, so Test character shows unsaved artwork. Baking
     /// every layer is slow, so callers run it on a worker.
     pub fn draft_rig(&self) -> super::rig::Rig {
@@ -862,6 +886,7 @@ impl Editor {
             eye_style: None,
             gesture: None,
             held: None,
+            reference_art: Vec::new(),
             fields: Default::default(),
             canvas_fields: [canvas.0.to_string(), canvas.1.to_string()],
             new_install: true,

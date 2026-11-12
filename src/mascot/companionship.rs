@@ -335,6 +335,70 @@ mod tests {
         assert_eq!(c.step(&s, input(183.0)), None);
     }
     #[test]
+    fn rubbing_emits_once_and_buttons_cannot_pet() {
+        let s = Settings {
+            petting: true,
+            ..Default::default()
+        };
+        let mut c = Controller::new(9);
+        let mut events = Vec::new();
+        for (n, x) in [0.0, 20.0, 40.0, 20.0, 0.0, 20.0, 40.0]
+            .into_iter()
+            .enumerate()
+        {
+            let mut i = input(n as f32 * 0.1);
+            i.cursor = Some(Point::new(x, 20.0));
+            i.nearby = true;
+            i.touching = true;
+            i.pet_region = true;
+            if let Some(e) = c.step(&s, i) {
+                events.push(e);
+            }
+        }
+        assert_eq!(events, vec![Event::Headpat]);
+        let mut i = input(0.8);
+        i.button = true;
+        i.pet_region = true;
+        assert_eq!(c.step(&s, i), None);
+        assert_eq!(c.state, State::Awake);
+    }
+    #[test]
+    fn touch_stirs_then_wakes_and_audio_requires_sustained_playback() {
+        let s = Settings {
+            sleep: true,
+            ..Default::default()
+        };
+        let mut c = Controller::new(11);
+        c.sleep_now(0.0, &s);
+        let mut i = input(0.0);
+        i.cursor = Some(Point::new(0.0, 0.0));
+        c.step(&s, i);
+        let mut i = input(0.1);
+        i.cursor = Some(Point::new(5.0, 0.0));
+        i.touching = true;
+        assert_eq!(c.step(&s, i), None);
+        assert!(c.stirring);
+        let mut i = input(3.2);
+        i.cursor = Some(Point::new(5.0, 0.0));
+        i.touching = true;
+        assert_eq!(c.step(&s, i), Some(Event::Wake));
+        c.sleep_now(4.0, &s);
+        let mut i = input(4.1);
+        i.audio = Audio::Playing;
+        c.step(&s, i);
+        c.step(&s, input(4.4));
+        assert_eq!(c.state, State::Asleep);
+        let mut i = input(5.0);
+        i.audio = Audio::Playing;
+        c.step(&s, i);
+        let mut i = input(5.6);
+        i.audio = Audio::Playing;
+        c.step(&s, i);
+        assert_eq!(c.state, State::Waking);
+        assert_eq!(c.step(&s, input(7.2)), Some(Event::Wake));
+    }
+
+    #[test]
     fn settings_round_trip_and_reject_invalid_values() {
         let s = Settings {
             sleep: true,

@@ -36,6 +36,19 @@ impl Editor {
         let mut files: Vec<(String, Layer)> = vec![(format!("{dir}/body.png"), self.body.clone())];
         // A held pose made here is pack art: Pick up shows it while carried.
         let mut reactions = self.reactions.clone();
+        for (event, layer) in &self.reference_art {
+            let file = format!("reactions/{}.png", event.key());
+            files.push((file.clone(), layer.clone()));
+            let mut entry = reactions
+                .entry(*event)
+                .cloned()
+                .unwrap_or_else(super::super::reactions::Entry::none);
+            entry.visual = Some(super::super::reactions::Visual::Artwork);
+            entry.art = Some(super::super::reactions::Art::new(
+                super::super::lines::SoundRef::Pack(file),
+            ));
+            reactions.set_entry(*event, Some(entry));
+        }
         if self.held.is_some() {
             use super::super::reactions::{Art, Entry, Event};
             let file = HELD_FILE.to_owned();
