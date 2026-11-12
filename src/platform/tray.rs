@@ -76,7 +76,7 @@ mod native {
         }
 
         MenuEvent::set_event_handler(Some(|e: MenuEvent| {
-            super::send(External::Menu(e.id.0));
+            super::super::send(External::Menu(e.id.0));
         }));
         TrayIconEvent::set_event_handler(Some(|e: TrayIconEvent| {
             if let TrayIconEvent::Click {
@@ -85,7 +85,7 @@ mod native {
                 ..
             } = e
             {
-                super::send(External::TrayClick);
+                super::super::send(External::TrayClick);
             }
         }));
 

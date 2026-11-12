@@ -185,7 +185,7 @@ mod native {
             }
         }
         GlobalHotKeyEvent::set_event_handler(Some(|e: GlobalHotKeyEvent| {
-            super::send(External::Hotkey {
+            super::super::send(External::Hotkey {
                 id: e.id,
                 pressed: e.state == HotKeyState::Pressed,
             });
