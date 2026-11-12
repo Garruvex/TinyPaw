@@ -1,6 +1,6 @@
 # Headpat and sleeping implementation scope
 
-Scoped 12 November 2026. Planning only; not implemented by this document.
+Scoped and implemented in phases on 12 November 2026. Automated checks and a Windows Settings preview smoke check have passed. Mixed-DPI hardware, audio-device transitions and performance measurements remain release checks.
 
 This extends the [behavior plan](character-behaviors-plan.md) with petting and persistent sleep. It replaces the earlier deferral of petting for this implementation scope. Existing packs and their click, carry, drop, music and sound behavior must remain unchanged when these features are absent or disabled.
 
@@ -101,3 +101,21 @@ The creator may emit suggested delays and wake policies as author defaults, but 
 5. **Native acceptance:** tune gesture/movement thresholds with real mice and touchpads, mixed-DPI displays and light/dark desktops. Measure idle/asleep CPU, meter lifetime, wake latency and headpat responsiveness. Automated passing alone does not establish native usability.
 
 First-release exclusions: animated frame sequences, looping audio, persistent moods/needs, automatic schedules, system sleep/lock control, roaming, and window-top sleeping. Yawns/stretching can follow as bounded idle artwork after these state transitions are proven.
+
+## Implementation record, 12 November 2026
+
+| Phase | Delivered | Verification |
+| --- | --- | --- |
+| 1 | Shared deterministic controller, settings validation and quiet/proximity inputs | Fake-clock checks cover countdown, unavailable audio, deferred idle responses, rubbing, touch and audio wake. |
+| 2 | Reaction events, saved behavior controls, desktop integration and shared audio-meter lifetime | Full existing suite passes with the new event arrays and dialogue triggers. |
+| 3 | Headpat head-expression slot, held-contact preservation, sleep/wake artwork, Zzz, breathing and real preview cursor input | Alpha-aware replacement-art checks and native Sleep now / Try wake checks. |
+| 4 | Creator choices, per-image alignment instructions, reaction mappings, individual-PNG assembly and folder validation | Generated folder fixtures validate every new role. Individual-PNG results survive save/reopen with their reaction images. |
+| 5 | Timing controls, visual mouth placement, reduced-motion handling and regression fixes | Full suite passes. Native preview checks found and resolved Zzz layering and clicks outside the preview waking it. |
+
+The final storage block is `reactions.companionship`. It contains `petting`, `sleep`, `delay_seconds`, `touch_wake`, `audio_wake`, `random_wake`, `touch_seconds`, `random_seconds`, `breathing`, `zzz` and normalized `mouth`. Petting, sleep and wake artwork use their named reaction entries. Head-only happy art uses the appended `petted` head expression. Existing expression slot positions retain their meanings. Reaction WAV assignments are bounded at seven distinct files.
+
+Sleep monitoring uses the selected music source while music response is enabled. With music response off it monitors other apps on the default output. Native source availability is reported by the existing Music meter. Automatic sleep and random waking require local activation after pack import. Sleep/wake timing edits share the ordinary Save/Discard behavior draft.
+
+Headpat currently uses the head and its attachments when a head exists, or visible pixels for a flat character. A custom painted or rectangular petting region remains an advanced follow-up. Mouth positioning uses a point in the shared sleeping canvas, with direct preview placement and fine adjustment. The Zzz uses cached procedural image glyphs so it composites visibly above character artwork in the software renderer.
+
+Native evidence covers the Windows settings layout, sleep with closed eyes, animated Zzz, mouth placement and explicit wake restoring open eyes. Sustained real audio, mouse/touchpad threshold tuning, repeated desktop pickup from changed sleep artwork, mixed-DPI monitors, suspend/resume and idle CPU measurements still require the release playtest. The native checks used isolated temporary application data.

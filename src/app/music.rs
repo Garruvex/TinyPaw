@@ -232,7 +232,7 @@ impl App {
                 (None, Some(_)) => self.beat = None,
                 (None, None) => {}
             }
-            if self.music.as_ref().is_some_and(|m| m.take_started()) {
+            if on && self.music.as_ref().is_some_and(|m| m.take_started()) {
                 let options = self.mascot_options();
                 if let Some(m) = &mut self.mascot {
                     m.say(crate::mascot::lines::Trigger::MusicStart, &options);

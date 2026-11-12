@@ -624,6 +624,32 @@ impl App {
             // the music playing. It also lands when the speech bubble
             // appears or goes away, which the page does show.
             Message::MotionTick => {
+                let reaction = self
+                    .studio
+                    .motion_preview
+                    .as_mut()
+                    .map(|p| (p.take_companion_events(), p.sounds(), p.take_sound()));
+                if let Some((events, sounds, line_sound)) = reaction {
+                    let mut reacted = false;
+                    let now = self.voice_clock.elapsed().as_secs_f64();
+                    let quiet = crate::mascot::reactions::Quiet {
+                        mute_all: self.session.settings().bool(sound::MUTE_ALL),
+                        ..Default::default()
+                    };
+                    for e in events {
+                        if let Ok(play) = self.voice.accept(e, &sounds, quiet, now) {
+                            if let Some(seconds) = self.play_reaction(&play) {
+                                self.voice.started(now, seconds);
+                                reacted = true;
+                            }
+                        }
+                    }
+                    if !reacted {
+                        if let Some(sound) = line_sound {
+                            self.play_line_sound(&sound);
+                        }
+                    }
+                }
                 let o = self.motion_options();
                 let beat = self.beat_phase();
                 let sampled = Instant::now();

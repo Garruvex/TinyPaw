@@ -1106,7 +1106,33 @@ impl Desktop {
             self.gaze + (self.target - self.gaze) * (1.0 - 0.7f32.powf(dt / 0.033))
         };
         let margin = (self.size * 0.25).max(24.0) + if self.nearby { 8.0 } else { 0.0 };
-        self.nearby = self.layout.character.expand(margin).contains(local);
+        let bounds = if matches!(self.companion.state, State::Asleep | State::Waking) {
+            self.pictures
+                .sleep
+                .as_ref()
+                .map(|p| {
+                    let a = p.in_stage(self.rig.size(), p.art.position());
+                    let b = p.in_stage(
+                        self.rig.size(),
+                        Point::new(p.art.x + p.art.width, p.art.y + p.art.height),
+                    );
+                    Rectangle::new(a, Size::new(b.x - a.x, b.y - a.y))
+                })
+                .unwrap_or_else(|| self.rig.visible_bounds())
+        } else {
+            self.rig.visible_bounds()
+        };
+        let bounds = Rectangle::new(
+            Point::new(
+                self.layout.character.x + bounds.x * self.layout.scale,
+                self.layout.character.y + bounds.y * self.layout.scale,
+            ),
+            Size::new(
+                bounds.width * self.layout.scale,
+                bounds.height * self.layout.scale,
+            ),
+        );
+        self.nearby = bounds.expand(margin).contains(local);
         let touching = self.over_character(local);
         let stage_cursor = Point::new(
             (local.x - self.layout.character.x) / self.layout.scale,
@@ -1119,8 +1145,8 @@ impl Desktop {
                 cursor: Some(stage_cursor),
                 nearby: self.nearby,
                 touching,
-                pet_region: touching,
-                button: left || right,
+                pet_region: touching && self.rig.pet_region(stage_cursor, &self.pose),
+                button: (left || right) && touching,
                 busy: self.menu.is_some() || self.press.is_some() || self.flight.is_some(),
                 response_busy: self.voice_busy
                     || self.speech.is_some()
@@ -1308,6 +1334,9 @@ impl Desktop {
         if sleeping {
             pose.expression = Expression::Blink;
             pose.gaze = Vector::ZERO;
+            if self.pictures.settings.breathing && !o.reduced {
+                pose.squash = (self.now * 1.6).sin() * 0.05;
+            }
         }
         if self.companion.state == State::Petting {
             pose.expression = Expression::Petted;
@@ -2160,8 +2189,17 @@ impl canvas::Program<Message> for Stage<'_> {
                 None => d.rig.draw_pose(&mut frame, pose),
             }
         }
+        let mut sleep_overlay = Frame::new(renderer, bounds.size());
+        sleep_overlay.translate(Vector::new(l.character.x, l.character.y));
+        sleep_overlay.scale(l.scale);
+        super::motion::place(
+            &mut sleep_overlay,
+            pose,
+            d.rig.anchor(),
+            d.rig.size().height,
+        );
         companionship::draw_zzz(
-            &mut frame,
+            &mut sleep_overlay,
             d.rig.size(),
             &d.pictures.settings,
             d.companion.state,
@@ -2169,7 +2207,7 @@ impl canvas::Program<Message> for Stage<'_> {
             d.now,
             d.reduced,
         );
-        let mut geometry = vec![frame.into_geometry()];
+        let mut geometry = vec![frame.into_geometry(), sleep_overlay.into_geometry()];
         if let Some((side, scale, alpha)) = d.menu_look() {
             let mut ui = Frame::new(renderer, bounds.size());
             draw_menu(&mut ui, l.menu(side), side, scale, alpha);

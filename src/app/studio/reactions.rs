@@ -9,9 +9,15 @@ impl App {
         out: &mut Outcomes,
     ) -> Task<Message> {
         match ui {
+            UiMsg::CompanionMouth => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.placing_mouth = !p.placing_mouth;
+                }
+            }
             UiMsg::Companionship(settings) => {
                 if let Some(p) = &mut self.studio.motion_preview {
                     p.reactions.companionship = Some(settings);
+                    p.placing_mouth = false;
                 }
             }
             UiMsg::CompanionTest(state) => {

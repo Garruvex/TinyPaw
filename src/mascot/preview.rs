@@ -102,6 +102,7 @@ pub struct MotionPreview {
     pictures: Vec<(super::lines::SoundRef, super::rig::Picture)>,
     /// A click on the preview sets where the bubble's tail aims.
     pub placing_bubble: bool,
+    pub placing_mouth: bool,
 }
 
 impl MotionPreview {
@@ -130,6 +131,7 @@ impl MotionPreview {
             lines,
             lines_defaults: pack_lines,
             placing_bubble: false,
+            placing_mouth: false,
             id,
             labels: rig.motion_labels(),
             kinds: rig.motion_parts().iter().map(|p| p.kind).collect(),
@@ -180,6 +182,9 @@ impl MotionPreview {
     }
     pub fn stirring(&self) -> bool {
         self.live.borrow().companion.stirring
+    }
+    pub fn take_companion_events(&mut self) -> Vec<Event> {
+        std::mem::take(&mut self.live.get_mut().companion_events)
     }
     pub fn time(&self) -> f32 {
         self.live.borrow().now
@@ -608,6 +613,7 @@ impl MotionPreview {
         let before = self.live.borrow().speech.is_some();
         self.tick(dt, c.idle, c.reduced, c.music, beat);
         before != self.live.borrow().speech.is_some()
+            || !self.live.borrow().companion_events.is_empty()
     }
 
     /// Advances the preview by `dt` seconds.
@@ -637,8 +643,11 @@ impl MotionPreview {
                 cursor: live.pointer,
                 nearby: true,
                 touching,
-                pet_region: touching,
-                button: live.pointer_button,
+                pet_region: touching
+                    && live
+                        .pointer
+                        .is_some_and(|p| self.rig.pet_region(p, &live.pose)),
+                button: live.pointer_button && touching,
                 busy: live.test.is_some(),
                 response_busy: live.speech.is_some(),
                 audio: super::companionship::Audio::Quiet,
@@ -737,6 +746,9 @@ impl MotionPreview {
             }
         }
         if sleeping {
+            if settings.breathing && !reduced {
+                live.pose.squash = (live.now * 1.6).sin() * 0.05;
+            }
             live.pose.expression = super::motion::Expression::Blink;
             live.pose.gaze = Vector::ZERO;
         }

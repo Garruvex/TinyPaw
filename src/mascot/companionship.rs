@@ -12,6 +12,9 @@ pub struct Settings {
     pub audio_wake: bool,
     pub random_wake: bool,
     pub zzz: bool,
+    pub breathing: bool,
+    pub touch_seconds: [f32; 2],
+    pub random_seconds: [f32; 2],
     pub mouth: [f32; 2],
 }
 impl Default for Settings {
@@ -24,6 +27,9 @@ impl Default for Settings {
             audio_wake: true,
             random_wake: false,
             zzz: true,
+            breathing: true,
+            touch_seconds: [1.0, 3.0],
+            random_seconds: [300.0, 900.0],
             mouth: [0.5, 0.35],
         }
     }
@@ -44,6 +50,7 @@ impl Settings {
             ("audio_wake", &mut s.audio_wake),
             ("random_wake", &mut s.random_wake),
             ("zzz", &mut s.zzz),
+            ("breathing", &mut s.breathing),
         ] {
             if let Some(v) = v.get(key) {
                 *target = v.as_bool().ok_or(format!("{key} must be true or false"))?;
@@ -67,12 +74,33 @@ impl Settings {
                     .ok_or("mouth needs two fractions")? as f32;
             }
         }
+        for (key, target, min, max) in [
+            ("touch_seconds", &mut s.touch_seconds, 0.2, 10.0),
+            ("random_seconds", &mut s.random_seconds, 60.0, 7200.0),
+        ] {
+            if let Some(value) = v.get(key) {
+                let a = value
+                    .as_array()
+                    .filter(|a| a.len() == 2)
+                    .ok_or(format!("{key} needs a minimum and maximum"))?;
+                for (index, value) in a.iter().enumerate() {
+                    target[index] = value
+                        .as_f64()
+                        .filter(|n| n.is_finite() && *n >= min && *n <= max)
+                        .ok_or(format!("invalid {key} range"))?
+                        as f32;
+                }
+                if target[0] > target[1] {
+                    return Err(format!("{key} minimum exceeds maximum"));
+                }
+            }
+        }
         Ok(s)
     }
     pub fn to_json(&self) -> Value {
         json!({"petting":self.petting,"sleep":self.sleep,"delay_seconds":self.delay,
             "touch_wake":self.touch_wake,"audio_wake":self.audio_wake,
-            "random_wake":self.random_wake,"zzz":self.zzz,"mouth":self.mouth})
+            "random_wake":self.random_wake,"zzz":self.zzz,"mouth":self.mouth,"breathing":self.breathing,"touch_seconds":self.touch_seconds,"random_seconds":self.random_seconds})
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,8 +191,11 @@ impl Controller {
     }
     pub fn sleep_now(&mut self, now: f32, s: &Settings) {
         self.state = State::Asleep;
-        self.touch_delay = 1.0 + 2.0 * self.random();
-        self.random_at = s.random_wake.then(|| now + 300.0 + 600.0 * self.random());
+        self.touch_delay =
+            s.touch_seconds[0] + (s.touch_seconds[1] - s.touch_seconds[0]) * self.random();
+        self.random_at = s.random_wake.then(|| {
+            now + s.random_seconds[0] + (s.random_seconds[1] - s.random_seconds[0]) * self.random()
+        });
         self.touch_since = None;
         self.audio_since = None;
         self.wake_at = None;
@@ -452,12 +483,43 @@ pub fn draw_zzz(
         let x =
             (origin.x + direction * t * size * 2.0).clamp(0.0, (stage.width - size * 3.0).max(0.0));
         let y = (origin.y - t * size * 2.5).clamp(size, stage.height);
-        frame.fill_text(iced::widget::canvas::Text {
-            content: if reduced { "Zzz" } else { "z" }.into(),
-            position: Point::new(x, y),
-            color: iced::Color::from_rgba(0.65, 0.70, 0.82, alpha * (1.0 - t)),
-            size: size.into(),
-            ..Default::default()
-        });
+        let glyphs = if reduced { 3 } else { 1 };
+        for glyph in 0..glyphs {
+            let left = x + glyph as f32 * size * 0.8;
+            let opacity = (alpha * (1.0 - t) * 15.0).round().clamp(0.0, 15.0) as usize;
+            frame.draw_image(
+                iced::Rectangle::new(Point::new(left, y), iced::Size::new(size * 0.6, size * 0.7)),
+                iced::widget::canvas::Image::new(zzz_images()[opacity].clone()),
+            );
+        }
     }
+}
+
+fn zzz_images() -> &'static Vec<iced::advanced::image::Handle> {
+    static IMAGES: std::sync::OnceLock<Vec<iced::advanced::image::Handle>> =
+        std::sync::OnceLock::new();
+    IMAGES.get_or_init(|| {
+        (0..16)
+            .map(|opacity| {
+                let mut pixels = vec![0u8; 32 * 32 * 4];
+                for y in 0..32usize {
+                    for x in 0..32usize {
+                        let ink = (y >= 2 && y <= 5 && x >= 2 && x <= 29)
+                            || (y >= 26 && y <= 29 && x >= 2 && x <= 29)
+                            || (y >= 4 && y <= 27 && (x as i32 + y as i32 - 31).abs() <= 2);
+                        if ink {
+                            let i = (y * 32 + x) * 4;
+                            pixels[i..i + 4].copy_from_slice(&[
+                                204,
+                                217,
+                                242,
+                                (opacity * 17) as u8,
+                            ]);
+                        }
+                    }
+                }
+                iced::advanced::image::Handle::from_rgba(32, 32, pixels)
+            })
+            .collect()
+    })
 }

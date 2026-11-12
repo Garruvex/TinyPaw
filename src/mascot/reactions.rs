@@ -991,7 +991,7 @@ mod tests {
         });
         assert!(
             Config::parse(&four, false).is_ok(),
-            "four files is the limit"
+            "legacy four-file sound assignments still load"
         );
     }
 

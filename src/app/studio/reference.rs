@@ -1,4 +1,5 @@
 use super::*;
+use crate::mascot::reference::Role;
 
 impl App {
     /// Create from reference.
@@ -42,6 +43,7 @@ impl App {
                 if let Some(r) = &mut self.studio.reference {
                     r.eyes = on;
                     if on {
+                        r.extras.retain(|r| *r != Role::HeadPetted);
                         r.tracking = false;
                         r.blink = false;
                         r.faces = false;
@@ -81,6 +83,13 @@ impl App {
                 if let Some(r) = &mut self.studio.reference {
                     r.extras.retain(|existing| *existing != role);
                     if on {
+                        if role == Role::HeadPetted {
+                            r.eyes = false;
+                            r.extras.retain(|r| *r != Role::Petted);
+                        }
+                        if role == Role::Petted {
+                            r.extras.retain(|r| *r != Role::HeadPetted);
+                        }
                         r.extras.push(role);
                     }
                 }

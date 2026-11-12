@@ -243,6 +243,7 @@ struct Silhouette {
     cells: Vec<bool>,
     /// Lowest visible rig row: where the feet meet the ground.
     ground: f32,
+    bounds: Option<Rectangle>,
 }
 
 impl Silhouette {
@@ -254,6 +255,7 @@ impl Silhouette {
             rows,
             cells: vec![false; columns * rows],
             ground: 0.0,
+            bounds: None,
         }
     }
 
@@ -262,6 +264,13 @@ impl Silhouette {
             size.width / pixels.width() as f32,
             size.height / pixels.height() as f32,
         );
+        if let Some((x, y, w, h)) = visible(pixels) {
+            let rect = Rectangle::new(
+                Point::new(at.x + x as f32 * sx, at.y + y as f32 * sy),
+                Size::new(w as f32 * sx, h as f32 * sy),
+            );
+            self.bounds = Some(self.bounds.map_or(rect, |old| old.union(&rect)));
+        }
         for (x, y, p) in pixels.enumerate_pixels() {
             if p[3] < 32 {
                 continue;
@@ -452,6 +461,23 @@ impl Rig {
             }
             Kind::Layered { .. } => None,
         }
+    }
+
+    pub fn visible_bounds(&self) -> Rectangle {
+        self.silhouettes
+            .iter()
+            .filter_map(|s| s.bounds)
+            .reduce(|a, b| a.union(&b))
+            .unwrap_or(Rectangle::new(Point::ORIGIN, self.size))
+    }
+    pub fn pet_region(&self, p: Point, pose: &Pose) -> bool {
+        let hit = self.hit(p, pose);
+        if let Kind::Layered { parts, .. } = &self.kind {
+            if let Some(head) = parts.iter().position(|p| p.kind == PartType::Head) {
+                return matches!(hit,Some(Layer::Part(i)) if i==head || parts[i].parent==Some(head));
+            }
+        }
+        hit.is_some()
     }
 
     /// The head's rotation in `pose`, which the gaze is counter-rotated by.
@@ -1054,5 +1080,21 @@ mod tests {
         assert!(!rig.opaque(Point::new(WIDTH - 2.0, 2.0)));
         assert!(!rig.opaque(Point::new(-5.0, 300.0)));
         assert!(rig.anchor().y > 700.0 && rig.anchor().y <= HEIGHT);
+    }
+}
+
+#[cfg(test)]
+mod reaction_hit_tests {
+    use super::*;
+    #[test]
+    fn replacement_art_hits_its_placed_alpha() {
+        let mut pixels = RgbaImage::new(100, 100);
+        pixels.put_pixel(30, 40, Rgba([255, 255, 255, 255]));
+        let picture = Picture::new(&pixels, [0.1, 0.2, 0.5]);
+        let stage = Size::new(200.0, 300.0);
+        let at = picture.in_stage(stage, Point::new(30.5, 40.5));
+        assert!(picture.hit(stage, at));
+        assert!(!picture.hit(stage, Point::ORIGIN));
+        assert!(!picture.hit(stage, picture.in_stage(stage, Point::new(31.5, 40.5))));
     }
 }

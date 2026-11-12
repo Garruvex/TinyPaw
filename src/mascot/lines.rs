@@ -68,7 +68,10 @@ impl Trigger {
 
     /// Lines nobody asked for, which Quiet lines turns off.
     pub fn unprompted(self) -> bool {
-        matches!(self, Trigger::Idle | Trigger::MusicStart)
+        matches!(
+            self,
+            Trigger::Idle | Trigger::MusicStart | Trigger::Sleep | Trigger::Wake
+        )
     }
 }
 

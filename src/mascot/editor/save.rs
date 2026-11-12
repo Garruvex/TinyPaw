@@ -154,6 +154,7 @@ impl Editor {
                 }
             })
             .collect();
+        let mut source_index = 0;
         let manifest = Manifest {
             id: self.id.to_owned(),
             name: name.chars().take(60).collect(),
@@ -169,14 +170,19 @@ impl Editor {
             editor: files
                 .iter()
                 .zip(&sources)
-                .enumerate()
-                .map(|(i, ((file, _), layer))| SourceRecord {
+                .map(|((file, _), layer)| SourceRecord {
                     name: names
                         .iter()
                         .find(|(f, _)| f == file)
                         .map(|(_, n)| n.clone()),
                     target: file.clone(),
-                    source: format!("editor/sources/{dir}/layer-{i}.png"),
+                    source: loop {
+                        let candidate = format!("editor/sources/{dir}/layer-{source_index}.png");
+                        source_index += 1;
+                        if !self.other_sources.iter().any(|r| r.source == candidate) {
+                            break candidate;
+                        }
+                    },
                     size: layer.image.dimensions(),
                     placement: layer.placement,
                 })

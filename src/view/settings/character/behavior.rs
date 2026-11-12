@@ -1086,6 +1086,21 @@ impl canvas::Program<Message> for MotionStage<'_> {
                 .unwrap_or(std::time::Duration::from_millis(7));
             return Some(canvas::Action::request_redraw_at(*now + wait));
         }
+        if self.preview.placing_mouth {
+            if let canvas::Event::Mouse(Event::ButtonPressed(Button::Left)) = event {
+                if let Some(p) = point {
+                    let size = self.preview.rig().size();
+                    let mut s = self.preview.companionship();
+                    s.mouth = [
+                        (p.x / size.width).clamp(0.0, 1.0),
+                        (p.y / size.height).clamp(0.0, 1.0),
+                    ];
+                    return Some(
+                        canvas::Action::publish(Message::Ui(UiMsg::Companionship(s))).and_capture(),
+                    );
+                }
+            }
+        }
         if !self.preview.placing_bubble {
             return None;
         }
@@ -1110,7 +1125,7 @@ impl canvas::Program<Message> for MotionStage<'_> {
         bounds: iced::Rectangle,
         cursor: iced::mouse::Cursor,
     ) -> iced::mouse::Interaction {
-        if self.preview.placing_bubble && cursor.is_over(bounds) {
+        if (self.preview.placing_bubble || self.preview.placing_mouth) && cursor.is_over(bounds) {
             iced::mouse::Interaction::Crosshair
         } else {
             iced::mouse::Interaction::default()
@@ -1149,6 +1164,15 @@ impl canvas::Program<Message> for MotionStage<'_> {
                 origin.y + y * canvas_size.height * k,
             )
         });
+        let marker = if self.preview.placing_mouth {
+            let m = self.preview.companionship().mouth;
+            Some(iced::Point::new(
+                origin.x + m[0] * canvas_size.width * k,
+                origin.y + m[1] * canvas_size.height * k,
+            ))
+        } else {
+            marker
+        };
         // A live cursor test: tracking eyes follow the pointer over the
         // preview, counter-rotated into the head like on the desktop.
         if !matches!(
@@ -1173,8 +1197,11 @@ impl canvas::Program<Message> for MotionStage<'_> {
             Some(picture) => rig.draw_picture(&mut frame, &picture),
             None => rig.draw_pose(&mut frame, &pose),
         }
+        let mut sleep_overlay = Frame::new(renderer, size);
+        sleep_overlay.translate(origin);
+        sleep_overlay.scale(k);
         crate::mascot::companionship::draw_zzz(
-            &mut frame,
+            &mut sleep_overlay,
             canvas_size,
             &self.preview.companionship(),
             self.preview.companion_state(),
@@ -1182,7 +1209,7 @@ impl canvas::Program<Message> for MotionStage<'_> {
             self.preview.time(),
             self.preview.control().reduced,
         );
-        let mut out = vec![frame.into_geometry()];
+        let mut out = vec![frame.into_geometry(), sleep_overlay.into_geometry()];
         if let Some(at) = marker {
             let mut ui = Frame::new(renderer, size);
             let ring = Path::circle(at, 7.0);
@@ -1218,11 +1245,50 @@ fn companionship_section<'a>(
                     2 => settings.touch_wake = on,
                     3 => settings.audio_wake = on,
                     4 => settings.random_wake = on,
-                    _ => settings.zzz = on,
+                    5 => settings.zzz = on,
+                    _ => settings.breathing = on,
                 }
                 Message::Ui(UiMsg::Companionship(settings))
             })
     };
+    let mut timing = column![].spacing(6);
+    for (key, values, label) in [
+        (0, s.touch_seconds, "Gentle wake, seconds"),
+        (1, s.random_seconds, "Random wake, minutes"),
+    ] {
+        let factor = if key == 0 { 1.0 } else { 60.0 };
+        timing = timing.push(
+            text(format!(
+                "{label}: {:.1}–{:.1}",
+                values[0] / factor,
+                values[1] / factor
+            ))
+            .size(12),
+        );
+        for index in 0..2 {
+            let current = s.clone();
+            let range = if key == 0 { 0.2..=10.0 } else { 1.0..=120.0 };
+            timing = timing.push(
+                slider(range, values[index] / factor, move |value| {
+                    let mut s = current.clone();
+                    let range = if key == 0 {
+                        &mut s.touch_seconds
+                    } else {
+                        &mut s.random_seconds
+                    };
+                    range[index] = value * factor;
+                    if index == 0 {
+                        range[1] = range[1].max(range[0]);
+                    } else {
+                        range[0] = range[0].min(range[1]);
+                    }
+                    Message::Ui(UiMsg::Companionship(s))
+                })
+                .step(if key == 0 { 0.1_f32 } else { 1.0_f32 })
+                .style(theme::range),
+            );
+        }
+    }
     let delay = s.clone();
     let mouth_x = s.clone();
     let mouth_y = s.clone();
@@ -1253,12 +1319,18 @@ fn companionship_section<'a>(
         .style(theme::range)
         .into(),
         hint(
-            "Typing and mouse movement elsewhere let it sleep. Audio monitoring runs while sleep is enabled. Gentle touch takes 1–3 seconds to wake it; clicks and pickup wake immediately.",
+            "Typing and mouse movement elsewhere let it sleep. Audio monitoring runs while sleep is enabled. Gentle touch wakes it gradually; clicks and pickup wake immediately.",
         ),
         toggle("Wake from gentle touch", s.touch_wake, 2).into(),
         toggle("Wake when audio starts", s.audio_wake, 3).into(),
-        toggle("Wake randomly after 5–15 minutes", s.random_wake, 4).into(),
+        toggle("Wake randomly after sleeping", s.random_wake, 4).into(),
         toggle("Show Zzz from the mouth", s.zzz, 5).into(),
+        toggle("Gentle breathing while asleep", s.breathing, 6).into(),
+        timing.into(),
+        button("Place mouth in preview…")
+            .style(theme::secondary)
+            .on_press(Message::Ui(UiMsg::CompanionMouth))
+            .into(),
         hint("Mouth position on the shared canvas (left/right, then up/down)."),
         slider(0.0..=1.0, s.mouth[0], move |v| {
             let mut s = mouth_x.clone();

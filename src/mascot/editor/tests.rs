@@ -302,6 +302,15 @@ fn reference_results_assemble_save_and_reimport_with_their_roles() {
             .is_empty()
     );
     e.set_image(Target::Held, &dir.join("held.png")).unwrap();
+    for event in [
+        super::super::reactions::Event::Headpat,
+        super::super::reactions::Event::Sleep,
+        super::super::reactions::Event::Wake,
+    ] {
+        e.set_reference_reaction(event, &dir.join("held.png"))
+            .unwrap();
+    }
+    e.enable_reference_headpat();
     let saved = e.save_into(&root).unwrap();
     let folder = saved.folder.clone().unwrap();
     assert!(folder.join(HELD_FILE).exists());
@@ -322,6 +331,16 @@ fn reference_results_assemble_save_and_reimport_with_their_roles() {
         .save_into(&root)
         .unwrap();
     assert!(held(&again.pack_reactions(), &Config::default()).is_some());
+    let reactions = again.pack_reactions();
+    assert!(reactions.companionship.as_ref().unwrap().petting);
+    for event in [
+        super::super::reactions::Event::Headpat,
+        super::super::reactions::Event::Sleep,
+        super::super::reactions::Event::Wake,
+    ] {
+        let art = super::super::reactions::art(&reactions, &Config::default(), event).unwrap();
+        assert!(again.reaction_image(&art).is_some());
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 

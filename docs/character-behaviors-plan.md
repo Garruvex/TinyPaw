@@ -143,4 +143,4 @@ B4, B7 and B8 have no delivery slot until their decisions change.
 
 ## Headpat and sleep extension
 
-The [headpat and sleeping implementation scope](character-headpat-sleep-plan.md), scoped 12 November 2026, adds button-free petting and opt-in sleep with touch, click/pickup, audio and optional random waking. It defines input filtering, state priority, creator assets, storage, delivery order and acceptance. This is planned work, not a claim of current support.
+The [headpat and sleeping implementation scope](character-headpat-sleep-plan.md), scoped 12 November 2026, adds button-free petting and opt-in sleep with touch, click/pickup, audio and optional random waking. It defines input filtering, state priority, creator assets, storage, delivery order and acceptance. The implementation is committed in phases, with automated checks and a Windows preview smoke check. The linked implementation record lists the remaining hardware release checks.
