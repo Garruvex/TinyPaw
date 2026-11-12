@@ -156,6 +156,7 @@ pub struct Controller {
     last_stroke: f32,
     pet_cooldown: f32,
     seed: u64,
+    affection: Affection,
 }
 impl Controller {
     pub fn new(seed: u64) -> Self {
@@ -169,8 +170,89 @@ impl Controller {
         (self.seed >> 40) as f32 / (1u32 << 24) as f32
     }
     pub fn pet_now(&mut self, now: f32) {
+        self.affection.preview_until = now + 2.5;
         self.state = State::Petting;
-        self.last_stroke = now;
+        self.last_stroke = now + 2.5;
+    }
+    /// Shared desktop/preview movement, including a fallback for complete poses.
+    pub fn apply_affection(
+        &self,
+        rig: &super::rig::Rig,
+        pose: &mut super::motion::Pose,
+        now: f32,
+        reduced: bool,
+        whole_picture: bool,
+    ) {
+        if !matches!(self.state, State::Awake | State::Petting) || reduced {
+            return;
+        }
+        let amount = self.affection.amount;
+        if amount < 0.001 {
+            return;
+        }
+        let sway = (now * 5.0 + self.affection.phase).sin();
+        let tilt = amount * (0.08 * sway + 0.09 * self.affection.direction);
+        if !whole_picture {
+            if let Some(index) = rig
+                .motion_parts()
+                .iter()
+                .position(|p| p.kind == super::motion::PartType::Head)
+            {
+                if let Some(angle) = pose.angles.get_mut(index) {
+                    *angle += tilt;
+                }
+                pose.head_drop += amount * (0.008 + 0.006 * (now * 7.0).sin());
+                return;
+            }
+        }
+        pose.lean += tilt * 0.35;
+        pose.squash += amount * (0.08 + 0.06 * (now * 6.0).sin());
+    }
+    pub fn draw_affection(
+        &self,
+        frame: &mut iced::widget::canvas::Frame,
+        stage: iced::Size,
+        bounds: iced::Rectangle,
+        now: f32,
+        reduced: bool,
+    ) {
+        if !matches!(self.state, State::Awake | State::Petting) {
+            return;
+        }
+        let size = (bounds.height * 0.085).max(12.0).min(stage.width * 0.2);
+        if reduced {
+            if self.state == State::Petting {
+                draw_heart(
+                    frame,
+                    Point::new(
+                        (bounds.x + bounds.width - size).clamp(0.0, stage.width - size),
+                        (bounds.y - size).max(0.0),
+                    ),
+                    size,
+                    0.8,
+                );
+            }
+            return;
+        }
+        for heart in &self.affection.hearts {
+            let t = (now - heart.born) / 1.5;
+            if !(0.0..1.0).contains(&t) {
+                continue;
+            }
+            let x = (heart.origin.x
+                + heart.side * size * (0.4 + 1.2 * t)
+                + (t * 5.0).sin() * size * 0.15)
+                .clamp(0.0, (stage.width - size).max(0.0));
+            let y = (heart.origin.y - size * (0.5 + 2.8 * t))
+                .clamp(0.0, (stage.height - size).max(0.0));
+            let pop = (t / 0.12).min(1.0);
+            draw_heart(
+                frame,
+                Point::new(x, y),
+                size * (0.6 + 0.4 * pop),
+                (1.0 - t) * pop * 0.9,
+            );
+        }
     }
     pub fn reset(&mut self) {
         *self = Self::new(self.seed);
@@ -233,18 +315,29 @@ impl Controller {
             self.direction = delta.signum();
             self.reversal_x = p.x;
         }
-        let valid = self.travel >= 40.0 * scale && self.reversals >= 2;
+        let valid = self.travel >= 40.0 * scale && self.reversals >= 2 && p.distance(last) > 0.5;
         if valid {
             self.last_stroke = i.now;
         }
         valid
     }
     pub fn step(&mut self, s: &Settings, i: Input) -> Option<Event> {
+        let previous = self.last;
+        let event = self.step_state(s, &i);
+        let active = s.petting
+            && !i.button
+            && !i.busy
+            && matches!(self.state, State::Awake | State::Petting);
+        self.affection
+            .update(&i, previous, active, self.state == State::Petting);
+        event
+    }
+    fn step_state(&mut self, s: &Settings, i: &Input) -> Option<Event> {
         let moved = i
             .cursor
             .zip(self.last)
             .is_some_and(|(a, b)| a.distance(b) > 0.5);
-        let stroke = self.stroke(&i);
+        let stroke = self.stroke(i);
         if i.button || i.busy {
             let event = self.wake(i.now);
             self.quiet_since = None;
@@ -430,6 +523,72 @@ mod tests {
     }
 
     #[test]
+    fn affection_animates_with_bounded_hearts_and_cancels_on_pickup() {
+        let settings = Settings {
+            petting: true,
+            ..Default::default()
+        };
+        let mut c = Controller::new(9);
+        let rig = super::super::rig::Rig::load();
+        c.pet_now(0.0);
+        for n in 0..30 {
+            let mut i = input(n as f32 * 0.05);
+            i.cursor = Some(Point::new(200.0, 200.0));
+            i.touching = true;
+            i.pet_region = true;
+            c.step(&settings, i);
+        }
+        assert!(c.affection.amount > 0.9);
+        assert!(!c.affection.hearts.is_empty() && c.affection.hearts.len() <= 4);
+        let base = super::super::motion::Pose {
+            angles: vec![0.0; rig.motion_parts().len()],
+            ..Default::default()
+        };
+        let mut a = base.clone();
+        let mut b = base.clone();
+        c.apply_affection(&rig, &mut a, 1.0, false, false);
+        c.apply_affection(&rig, &mut b, 1.2, false, false);
+        assert_ne!(a.angles, b.angles);
+        assert!(a.angles.iter().all(|a| a.abs() < 0.2));
+        let mut reduced = base.clone();
+        c.apply_affection(&rig, &mut reduced, 1.2, true, false);
+        assert_eq!(reduced.angles, base.angles);
+        assert_eq!(reduced.head_drop, 0.0);
+        let mut flat = base.clone();
+        c.apply_affection(&rig, &mut flat, 1.2, false, true);
+        assert!(flat.lean.abs() > 0.0 || flat.squash.abs() > 0.0);
+        let mut pickup = input(1.6);
+        pickup.busy = true;
+        c.step(&settings, pickup);
+        assert!(c.affection.hearts.is_empty());
+        assert_eq!(c.affection.amount, 0.0);
+    }
+    #[test]
+    fn gentle_touch_eases_in_and_out_without_emitting_headpat_or_hearts() {
+        let settings = Settings {
+            petting: true,
+            ..Default::default()
+        };
+        let mut c = Controller::new(12);
+        for n in 0..20 {
+            let mut i = input(n as f32 * 0.05);
+            i.touching = true;
+            i.pet_region = true;
+            i.cursor = Some(Point::new(200.0, 200.0));
+            assert_eq!(c.step(&settings, i), None);
+        }
+        assert!(c.affection.amount > 0.2 && c.affection.amount <= 0.3);
+        assert!(c.affection.hearts.is_empty());
+        let amount = c.affection.amount;
+        c.step(&settings, input(1.0));
+        assert!(c.affection.amount < amount && c.affection.amount > 0.0);
+        for n in 1..20 {
+            c.step(&settings, input(1.0 + n as f32 * 0.05));
+        }
+        assert!(c.affection.amount < 0.001);
+    }
+
+    #[test]
     fn settings_round_trip_and_reject_invalid_values() {
         let s = Settings {
             sleep: true,
@@ -519,6 +678,115 @@ fn zzz_images() -> &'static Vec<iced::advanced::image::Handle> {
                     }
                 }
                 iced::advanced::image::Handle::from_rgba(32, 32, pixels)
+            })
+            .collect()
+    })
+}
+
+#[derive(Debug, Default)]
+struct Affection {
+    amount: f32,
+    direction: f32,
+    phase: f32,
+    last_time: Option<f32>,
+    touch_since: Option<f32>,
+    next_heart: f32,
+    preview_until: f32,
+    serial: u32,
+    hearts: Vec<Heart>,
+}
+#[derive(Debug)]
+struct Heart {
+    born: f32,
+    origin: Point,
+    side: f32,
+}
+impl Affection {
+    fn update(&mut self, i: &Input, previous: Option<Point>, active: bool, petting: bool) {
+        let dt = self
+            .last_time
+            .map_or(0.0, |at| (i.now - at).clamp(0.0, 0.1));
+        self.last_time = Some(i.now);
+        if !active {
+            self.amount = 0.0;
+            self.touch_since = None;
+            self.hearts.clear();
+            return;
+        }
+        let touching = i.touching && i.pet_region;
+        let contact = if touching {
+            i.now - *self.touch_since.get_or_insert(i.now) > 0.15
+        } else {
+            self.touch_since = None;
+            false
+        };
+        let target = if petting {
+            1.0
+        } else if contact {
+            0.3
+        } else {
+            0.0
+        };
+        self.amount += (target - self.amount) * (1.0 - (-dt * 10.0).exp());
+        if touching {
+            if let Some((point, last)) = i.cursor.zip(previous) {
+                let delta = ((point.x - last.x) / (i.height * 0.035).max(1.0)).clamp(-1.0, 1.0);
+                self.direction += (delta - self.direction) * (1.0 - (-dt * 12.0).exp());
+                self.phase += (point.distance(last) / (i.height * 0.08).max(1.0)).min(0.4);
+            }
+        } else {
+            self.direction *= (-dt * 8.0).exp();
+        }
+        self.hearts.retain(|h| i.now - h.born < 1.5);
+        if petting && (touching || i.now < self.preview_until) && i.now >= self.next_heart {
+            self.serial = self.serial.wrapping_add(1);
+            if self.hearts.len() < 4 {
+                self.hearts.push(Heart {
+                    born: i.now,
+                    origin: i
+                        .cursor
+                        .unwrap_or(Point::new(i.height * 0.5, i.height * 0.25)),
+                    side: if self.serial % 2 == 0 { -1.0 } else { 1.0 },
+                });
+            }
+            self.next_heart = i.now + 0.45;
+        }
+    }
+}
+fn draw_heart(frame: &mut iced::widget::canvas::Frame, origin: Point, size: f32, alpha: f32) {
+    let opacity = (alpha * 15.0).round().clamp(0.0, 15.0) as usize;
+    frame.draw_image(
+        iced::Rectangle::new(origin, iced::Size::new(size, size)),
+        iced::widget::canvas::Image::new(heart_images()[opacity].clone()),
+    );
+}
+fn heart_images() -> &'static Vec<iced::advanced::image::Handle> {
+    static IMAGES: std::sync::OnceLock<Vec<iced::advanced::image::Handle>> =
+        std::sync::OnceLock::new();
+    IMAGES.get_or_init(|| {
+        let mask: Vec<u8> = (0..48 * 48)
+            .map(|pixel| {
+                let mut coverage = 0;
+                for sy in 0..4 {
+                    for sx in 0..4 {
+                        let x = ((pixel % 48) as f32 + (sx as f32 + 0.5) / 4.0) / 48.0 * 2.8 - 1.4;
+                        let y = 1.3 - ((pixel / 48) as f32 + (sy as f32 + 0.5) / 4.0) / 48.0 * 2.8;
+                        let a = x * x + y * y - 1.0;
+                        if a * a * a - x * x * y * y * y <= 0.0 {
+                            coverage += 1;
+                        }
+                    }
+                }
+                (coverage * 255 / 16) as u8
+            })
+            .collect();
+        (0..16)
+            .map(|opacity| {
+                let pixels: Vec<u8> = mask
+                    .iter()
+                    .flat_map(|a| [255, 116, 159, (*a as u32 * opacity / 15) as u8])
+                    .collect();
+                iced::advanced::image::Handle::from_rgba(48, 48, pixels)
             })
             .collect()
     })

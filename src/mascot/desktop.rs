@@ -1341,17 +1341,13 @@ impl Desktop {
         if self.companion.state == State::Petting {
             pose.expression = Expression::Petted;
         }
-        if self.companion.state == State::Petting && !o.reduced {
-            if let Some(index) = self
-                .parts
-                .iter()
-                .position(|p| p.kind == super::motion::PartType::Head)
-            {
-                if let Some(angle) = pose.angles.get_mut(index) {
-                    *angle += 0.06;
-                }
-            }
-        }
+        self.companion.apply_affection(
+            &self.rig,
+            &mut pose,
+            self.now,
+            o.reduced,
+            self.picture().is_some(),
+        );
         self.pose = pose;
     }
 
@@ -2207,6 +2203,15 @@ impl canvas::Program<Message> for Stage<'_> {
             d.now,
             d.reduced,
         );
+        if d.press.is_none() && d.flight.is_none() && d.menu.is_none() {
+            d.companion.draw_affection(
+                &mut sleep_overlay,
+                d.rig.size(),
+                d.rig.visible_bounds(),
+                d.now,
+                d.reduced,
+            );
+        }
         let mut geometry = vec![frame.into_geometry(), sleep_overlay.into_geometry()];
         if let Some((side, scale, alpha)) = d.menu_look() {
             let mut ui = Frame::new(renderer, bounds.size());

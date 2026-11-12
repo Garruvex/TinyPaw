@@ -180,6 +180,18 @@ impl MotionPreview {
             live.pointer_button = button;
         }
     }
+    pub fn draw_affection(&self, frame: &mut iced::widget::canvas::Frame) {
+        let live = self.live.borrow();
+        if live.test.is_none() {
+            live.companion.draw_affection(
+                frame,
+                self.rig.size(),
+                self.rig.visible_bounds(),
+                live.now,
+                self.control.get().reduced,
+            );
+        }
+    }
     pub fn stirring(&self) -> bool {
         self.live.borrow().companion.stirring
     }
@@ -738,13 +750,10 @@ impl MotionPreview {
         if live.companion.state == super::companionship::State::Petting {
             live.pose.expression = super::motion::Expression::Petted;
         }
-        if live.companion.state == super::companionship::State::Petting && !reduced {
-            if let Some(i) = self.kinds.iter().position(|k| *k == PartType::Head) {
-                if let Some(a) = live.pose.angles.get_mut(i) {
-                    *a += 0.06;
-                }
-            }
-        }
+        let whole_picture = self.art(Event::Headpat).is_some()
+            && live.companion.state == super::companionship::State::Petting;
+        live.companion
+            .apply_affection(&self.rig, &mut live.pose, live.now, reduced, whole_picture);
         if sleeping {
             if settings.breathing && !reduced {
                 live.pose.squash = (live.now * 1.6).sin() * 0.05;

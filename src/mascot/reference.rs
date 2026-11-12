@@ -385,8 +385,8 @@ impl Request {
                 };
                 format!("the {side} eye as the viewer sees it: {content}, at its exact location on the head")
             }
-            Role::HeadPetted => format!("only the head, identical to head.png in position, scale and outline, with a happy relaxed headpat expression and eyes painted in; {}", if self.brows { "leave eyebrows out because the separate eyebrow layers stay visible" } else { "keep eyebrows painted in" }),
-            Role::Petted => "the complete character enjoying a headpat, happy relaxed expression, all eyes and eyebrows painted in, matching the resting pose's scale and resting anchor".into(),
+            Role::HeadPetted => format!("only the head, identical to head.png in position, scale and outline, with a happy relaxed headpat expression and eyes painted in; leave hearts and motion trails out because TinyPaw animates those; {}", if self.brows { "leave eyebrows out because the separate eyebrow layers stay visible" } else { "keep eyebrows painted in" }),
+            Role::Petted => "the complete character enjoying a headpat, happy relaxed expression, all eyes and eyebrows painted in, matching the resting pose's scale and resting anchor; leave hearts and motion trails out because TinyPaw animates those".into(),
             Role::Sleep => "the complete character sleeping comfortably, eyes closed, all face details painted in, matching the resting anchor and scale; leave Zzz letters out because TinyPaw draws them; measure the mouth position as canvas fractions for reactions.companionship.mouth".into(),
             Role::Wake => "the complete character waking drowsily, all face details painted in, matching the resting anchor and scale".into(),
             Role::Click => "the complete character reacting happily to a poke, all face details painted in, matching the resting anchor and scale".into(),

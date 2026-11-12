@@ -1200,6 +1200,7 @@ impl canvas::Program<Message> for MotionStage<'_> {
         let mut sleep_overlay = Frame::new(renderer, size);
         sleep_overlay.translate(origin);
         sleep_overlay.scale(k);
+        crate::mascot::motion::place(&mut sleep_overlay, &pose, feet, canvas_size.height);
         crate::mascot::companionship::draw_zzz(
             &mut sleep_overlay,
             canvas_size,
@@ -1209,6 +1210,7 @@ impl canvas::Program<Message> for MotionStage<'_> {
             self.preview.time(),
             self.preview.control().reduced,
         );
+        self.preview.draw_affection(&mut sleep_overlay);
         let mut out = vec![frame.into_geometry(), sleep_overlay.into_geometry()];
         if let Some(at) = marker {
             let mut ui = Frame::new(renderer, size);
@@ -1296,7 +1298,7 @@ fn companionship_section<'a>(
         h2("Headpat"),
         toggle("Enable headpat", s.petting, 0).into(),
         hint(
-            "Rub back and forth over the character without holding a button. Continued strokes keep it happy.",
+            "Rub back and forth without holding a button. The head sways with your strokes and hearts float up. Gentle touch gives a smaller lean.",
         ),
         button("Try headpat")
             .style(theme::secondary)
