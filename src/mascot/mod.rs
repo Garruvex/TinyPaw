@@ -2,6 +2,7 @@
 //! character window; `run` is the standalone `--mascot-preview` window, which
 //! starts no hooks, capture, tray or audio device. Both share the rig.
 pub mod beat;
+pub mod companionship;
 #[cfg(windows)]
 pub mod desktop;
 pub mod editor;
@@ -434,3 +435,4 @@ mod tests {
         assert!(origin.y + rig::HEIGHT * scale <= bounds.height);
     }
 }
+
