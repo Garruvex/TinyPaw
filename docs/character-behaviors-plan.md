@@ -140,3 +140,7 @@ Only accepted rows are built, in this order:
 | 4 | B6: Fall to the screen edge | Release over empty space, pickup mid-fall, mixed-DPI monitors and reopening a resting character. Reduced motion skips the fall. |
 
 B4, B7 and B8 have no delivery slot until their decisions change.
+
+## Headpat and sleep extension
+
+The [headpat and sleeping implementation scope](character-headpat-sleep-plan.md), scoped 12 November 2026, adds button-free petting and opt-in sleep with touch, click/pickup, audio and optional random waking. It defines input filtering, state priority, creator assets, storage, delivery order and acceptance. This is planned work, not a claim of current support.
