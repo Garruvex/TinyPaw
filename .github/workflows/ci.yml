@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main, alpha]
+  pull_request:
+    branches: [main, alpha]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows (build, test, clippy)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build (release)
+        run: cargo build --release --locked
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Upload tinypaw.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: tinypaw-windows-x64
+          path: target/release/tinypaw.exe
+          if-no-files-found: error
+
+  linux:
+    # Linux is not shipped yet. This job builds the Niri/Wayland port
+    # (src/platform/wayland.rs, see docs/niri.md) and runs every test on
+    # Linux. Warnings are not denied here yet.
+    name: Linux (check, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # iced_exwlshell links libwayland-client and libxkbcommon; rodio/cpal
+      # link ALSA. The tray and global-hotkey are not built on Linux.
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libwayland-dev libxkbcommon-dev libasound2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check
+        run: cargo check --all-targets --locked
+
+      - name: Test
+        run: cargo test --locked

@@ -19,6 +19,8 @@ pub const QUIT: &str = "system.quit";
 pub const SETTINGS: &str = "system.settings";
 
 pub const ACTIVATION_STYLE: &str = "system.activation_style";
+/// Mirrors the per-user Run key; the key is the source of truth.
+pub const START_AT_SIGN_IN: &str = "system.start_at_sign_in";
 pub const MOTION: &str = "system.motion";
 pub const SYSTEM_REDUCED: &str = "system.reduced_motion";
 pub const INK_COLOR: &str = "ink.color";
@@ -188,6 +190,14 @@ pub fn register(r: &mut Registrar) {
         order: 0,
         default: Value::Choice("toggle"),
         constraint: Constraint::Choices(&["toggle", "hold"]),
+    });
+    r.setting(SettingDef {
+        id: START_AT_SIGN_IN,
+        label: "Start TinyPaw when I sign in",
+        group: "Controls",
+        order: 1,
+        default: Value::Bool(false),
+        constraint: Constraint::None,
     });
     r.setting(SettingDef {
         id: INK_COLOR,

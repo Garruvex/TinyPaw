@@ -4,6 +4,8 @@
 //! thread stays the only writer of session state and idles without polling.
 
 #[cfg(windows)]
+pub mod autostart;
+#[cfg(windows)]
 pub mod beat;
 pub mod capture;
 pub mod displays;
@@ -14,7 +16,13 @@ pub mod lens;
 #[cfg(windows)]
 pub mod music;
 pub mod tray;
+#[cfg(target_os = "linux")]
+pub mod wayland;
 #[cfg(windows)]
+pub mod windows;
+// Linux has its own adapter in `wayland`; macOS still uses the no-op stand-in.
+#[cfg(not(any(windows, target_os = "linux")))]
+#[path = "fallback.rs"]
 pub mod windows;
 
 use std::collections::HashSet;

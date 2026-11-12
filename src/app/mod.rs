@@ -18,7 +18,9 @@ use std::time::{Duration, Instant};
 
 use iced::advanced::image;
 use iced::keyboard::{self, key::Named};
-use iced::window::{self, settings::PlatformSpecific};
+use iced::window;
+#[cfg(not(target_os = "linux"))]
+use iced::window::settings::PlatformSpecific;
 use iced::{Element, Point, Size, Subscription, Task, Theme, event, theme};
 
 use crate::audio::{self, Audio};
@@ -40,6 +42,7 @@ use crate::session::{
 };
 use crate::view::{self, InkCache, OverlayUi, UiMsg, settings::Page, wheel};
 
+#[cfg_attr(target_os = "linux", iced_exwlshell::to_exwlshell_message)]
 #[derive(Debug, Clone)]
 pub enum Message {
     External(External),
@@ -177,9 +180,15 @@ pub struct App {
     mascot: Option<crate::mascot::desktop::Desktop>,
     #[cfg(windows)]
     sources: Vec<platform::windows::WindowSource>,
+    /// Why overlays cannot open on this desktop; settings stay usable.
+    overlay_support: Result<(), &'static str>,
+    /// Surfaces and outputs the Wayland runtime reports.
+    #[cfg(target_os = "linux")]
+    shell_events: iced_exwlshell::shell::ShellReceiver,
 }
 
-pub fn run(registry: &'static Registry) -> iced::Result {
+#[cfg(not(target_os = "linux"))]
+pub fn run(registry: &'static Registry) -> Result<(), String> {
     iced::daemon(move || App::boot(registry), App::update, App::view)
         .title(App::title)
         .subscription(App::subscription)
@@ -191,8 +200,127 @@ pub fn run(registry: &'static Registry) -> iced::Result {
         .default_font(view::theme::BODY)
         .antialiasing(true)
         .run()
+        .map_err(|e| e.to_string())
 }
 
+/// Wayland: the iced_exwlshell runtime opens layer-shell overlays and xdg
+/// panels. It starts with no surface, like the Windows daemon.
+#[cfg(target_os = "linux")]
+pub fn run(registry: &'static Registry) -> Result<(), String> {
+    use iced_exwlshell::settings::{ExWlSettings, LayerShellSettings, StartMode};
+    let probe = platform::wayland::probe();
+    if !probe.wayland {
+        return Err(platform::wayland::support(&probe)
+            .err()
+            .unwrap_or("no Wayland session")
+            .into());
+    }
+    let (shell_broadcast, shell_events) = iced_exwlshell::shell::channel();
+    iced_exwlshell::daemon(
+        move || App::boot(registry, shell_events.clone()),
+        platform::wayland::NAMESPACE,
+        App::update,
+        App::view,
+    )
+    .title(|app: &App, id| Some(app.title(id)))
+    .subscription(App::subscription)
+    .style(|_: &App, _: &Theme| theme::Style {
+        background_color: iced::Color::TRANSPARENT,
+        text_color: view::theme::TEXT,
+    })
+    .theme(|_: &App, _| Theme::Dark)
+    .default_font(view::theme::BODY)
+    .antialiasing(true)
+    .wl_settings(ExWlSettings {
+        layer_settings: LayerShellSettings {
+            start_mode: StartMode::Background,
+            ..LayerShellSettings::default()
+        },
+        shell_broadcast,
+        ..ExWlSettings::default()
+    })
+    .run()
+    .map_err(|e| e.to_string())
+}
+
+/// Opens one overlay for `display`; `Message::WindowOpened` follows.
+fn open_overlay(display: &Display) -> (window::Id, Task<Message>) {
+    #[cfg(target_os = "linux")]
+    {
+        let id = window::Id::unique();
+        let settings = platform::wayland::overlay(display);
+        (id, Task::done(Message::NewLayerShell { settings, id }))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = display; // placed once the native handle is known
+        let (id, open) = window::open(overlay_settings());
+        (id, open.map(Message::WindowOpened))
+    }
+}
+
+/// Opens a settings or first-run panel; `Message::WindowOpened` follows.
+fn open_panel(size: Size, min: Option<Size>, resizable: bool) -> (window::Id, Task<Message>) {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = (min, resizable); // xdg toplevels are sized by the compositor
+        let id = window::Id::unique();
+        let settings = platform::wayland::panel(size.width, size.height);
+        (id, Task::done(Message::NewBaseWindow { settings, id }))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let (id, open) = window::open(panel_settings(size, min, resizable));
+        (id, open.map(Message::WindowOpened))
+    }
+}
+
+/// Switches an overlay between taking pointer input and click-through.
+fn set_interactive(id: window::Id, interactive: bool) -> Task<Message> {
+    #[cfg(target_os = "linux")]
+    {
+        let region = Task::done(Message::SetInputRegion {
+            id,
+            callback: platform::wayland::input_region(interactive),
+        });
+        if interactive {
+            region
+        } else {
+            // Passthrough also hands the keyboard back.
+            region.chain(Task::done(Message::KeyboardInteractivityChange {
+                id,
+                keyboard_interactivity: platform::wayland::keyboard(false),
+            }))
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        if interactive {
+            // winit drops the layered style with passthrough; put it back so
+            // apps underneath keep rendering.
+            window::disable_mouse_passthrough(id).chain(Task::done(Message::Unoccluding(id)))
+        } else {
+            window::enable_mouse_passthrough(id)
+        }
+    }
+}
+
+/// Gives the keyboard to one overlay so Escape and overlay keys arrive.
+fn focus_overlay(id: window::Id) -> Task<Message> {
+    #[cfg(target_os = "linux")]
+    {
+        Task::done(Message::KeyboardInteractivityChange {
+            id,
+            keyboard_interactivity: platform::wayland::keyboard(true),
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        window::gain_focus(id)
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
 fn overlay_settings() -> window::Settings {
     window::Settings {
         size: Size::new(800.0, 600.0),
@@ -206,7 +334,9 @@ fn overlay_settings() -> window::Settings {
         level: window::Level::AlwaysOnTop,
         exit_on_close_request: false,
         platform_specific: PlatformSpecific {
+            #[cfg(windows)]
             skip_taskbar: true,
+            #[cfg(windows)]
             drag_and_drop: false,
             ..PlatformSpecific::default()
         },
@@ -214,6 +344,7 @@ fn overlay_settings() -> window::Settings {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 fn panel_settings(size: Size, min: Option<Size>, resizable: bool) -> window::Settings {
     window::Settings {
         icon: Some(crate::branding::window_icon()),
@@ -223,6 +354,7 @@ fn panel_settings(size: Size, min: Option<Size>, resizable: bool) -> window::Set
         resizable,
         exit_on_close_request: false,
         platform_specific: PlatformSpecific {
+            #[cfg(windows)]
             drag_and_drop: false,
             ..PlatformSpecific::default()
         },
@@ -231,15 +363,27 @@ fn panel_settings(size: Size, min: Option<Size>, resizable: bool) -> window::Set
 }
 
 impl App {
-    fn boot(registry: &'static Registry) -> (Self, Task<Message>) {
+    fn boot(
+        registry: &'static Registry,
+        #[cfg(target_os = "linux")] shell_events: iced_exwlshell::shell::ShellReceiver,
+    ) -> (Self, Task<Message>) {
         let mut registry = registry.clone();
         preferences::load_shortcuts(&mut registry);
+        // Only Windows seeds a value from the desktop (reduced motion).
+        #[cfg_attr(not(windows), allow(unused_mut))]
         let mut loaded = preferences::load(&registry);
         #[cfg(windows)]
         let _ = registry.set(
             &mut loaded.values,
             system::SYSTEM_REDUCED,
             Value::Bool(platform::windows::reduced_motion()),
+        );
+        // The Run key may have been changed outside TinyPaw; show what it says.
+        #[cfg(windows)]
+        let _ = registry.set(
+            &mut loaded.values,
+            system::START_AT_SIGN_IN,
+            Value::Bool(platform::autostart::enabled()),
         );
         let tool = registry.default_tool();
         let session = Session::new(tool.id, tool.factory, loaded.values);
@@ -306,7 +450,18 @@ impl App {
             mascot: None,
             #[cfg(windows)]
             sources: platform::windows::window_sources(),
+            #[cfg(target_os = "linux")]
+            overlay_support: platform::wayland::overlay_support(),
+            #[cfg(not(target_os = "linux"))]
+            overlay_support: Ok(()),
+            #[cfg(target_os = "linux")]
+            shell_events,
         };
+        if let Err(why) = app.overlay_support {
+            // Explain before the first activation, not after it fails.
+            eprintln!("tinypaw: {why}");
+            app.notice = Some(why.into());
+        }
         let (loaded_packs, problems) = packs::load_all();
         for problem in &problems {
             eprintln!("tinypaw: pointer pack skipped: {problem}");
@@ -334,9 +489,9 @@ impl App {
         let task = if loaded.first_run {
             // Saving now means the card shows once.
             app.preference_writer.schedule(app.session.settings());
-            let (id, open) = window::open(panel_settings(Size::new(420.0, 330.0), None, false));
+            let (id, open) = open_panel(Size::new(420.0, 330.0), None, false);
             app.first_run_window = Some(id);
-            open.map(Message::WindowOpened)
+            open
         } else {
             Task::none()
         };
@@ -1155,6 +1310,14 @@ impl App {
             self.notice = Some(format!("{id}: no installed pointer pack `{pack}`"));
             return;
         }
+        #[cfg(windows)]
+        if id == system::START_AT_SIGN_IN
+            && let Value::Bool(on) = &value
+            && let Err(e) = platform::autostart::set(*on)
+        {
+            self.notice = Some(format!("Could not change start at sign-in: {e}"));
+            return;
+        }
         let mut values = self.session.settings().clone();
         match self.registry.set(&mut values, id, value) {
             Ok(()) => {
@@ -1194,14 +1357,13 @@ impl App {
         if let Some(id) = self.settings_window {
             return window::gain_focus(id);
         }
-        let (id, open) = window::open(panel_settings(
+        let (id, open) = open_panel(
             Size::new(1040.0, 680.0),
             Some(Size::new(860.0, 560.0)),
             true,
-        ));
+        );
         self.settings_window = Some(id);
-        open.map(Message::WindowOpened)
-            .chain(window::gain_focus(id))
+        open.chain(window::gain_focus(id))
     }
 
     fn quit(&mut self, now: Millis) {
@@ -1270,6 +1432,12 @@ impl App {
             return (format!("error: unknown command `{name}`"), None);
         };
         match self.registry.dispatch(def.id, &mut self.session, now) {
+            Ok(_) if self.session.is_enabled() && self.overlay_support.is_err() => {
+                // Nothing could be shown, so a scripted `toggle` must not report On.
+                self.session.handle(Event::Interrupted, now);
+                let why = self.overlay_support.err().unwrap_or_default();
+                (format!("error: {why}"), None)
+            }
             Ok(d) => (format!("ok: {}", self.status()), Some(d)),
             Err(why) => (format!("error: {}: {why}", def.label), None),
         }
@@ -1326,6 +1494,11 @@ impl App {
             return Task::batch(self.overlays.drain(..).map(|o| window::close(o.id)));
         }
         if self.overlays.is_empty() {
+            if let Err(why) = self.overlay_support {
+                self.session.handle(Event::Interrupted, self.now());
+                self.notice = Some(why.into());
+                return self.open_settings();
+            }
             let selected = displays::selected(
                 &self.displays,
                 self.session
@@ -1348,7 +1521,7 @@ impl App {
             }
             let mut tasks = Vec::new();
             for display in selected {
-                let (id, open) = window::open(overlay_settings());
+                let (id, open) = open_overlay(&display);
                 self.overlays.push(Overlay {
                     id,
                     ready: false,
@@ -1357,7 +1530,7 @@ impl App {
                     ink: InkCache::default(),
                     hwnd: 0,
                 });
-                tasks.push(open.map(Message::WindowOpened));
+                tasks.push(open);
             }
             return Task::batch(tasks);
         }
@@ -1373,14 +1546,7 @@ impl App {
             let interactive = want == OverlayState::Interactive;
             if o.applied != Some(interactive) {
                 o.applied = Some(interactive);
-                tasks.push(if interactive {
-                    // winit drops the layered style with passthrough; put
-                    // it back so apps underneath keep rendering.
-                    window::disable_mouse_passthrough(o.id)
-                        .chain(Task::done(Message::Unoccluding(o.id)))
-                } else {
-                    window::enable_mouse_passthrough(o.id)
-                });
+                tasks.push(set_interactive(o.id, interactive));
             }
         }
         let buttons_up = {
@@ -1404,7 +1570,7 @@ impl App {
                 .pointer()
                 .and_then(|(id, _)| self.overlays.iter().find(|o| o.display.id == id))
                 .unwrap_or(&self.overlays[0]);
-            tasks.push(window::gain_focus(target.id).chain(Task::done(Message::Acquired(ticket))));
+            tasks.push(focus_overlay(target.id).chain(Task::done(Message::Acquired(ticket))));
         }
         Task::batch(tasks)
     }
@@ -1536,6 +1702,21 @@ impl App {
             }),
             window::close_requests().map(Message::CloseRequested),
         ];
+        #[cfg(target_os = "linux")]
+        {
+            // Surfaces opened through shell actions report here, not via a task.
+            subs.push(window::open_events().map(Message::WindowOpened));
+            subs.push(self.shell_events.listen().filter_map(|e| {
+                use iced_exwlshell::shell::ShellEvent;
+                matches!(
+                    e,
+                    ShellEvent::OutputAdded(_)
+                        | ShellEvent::OutputUpdated(_)
+                        | ShellEvent::OutputRemoved(_)
+                )
+                .then_some(Message::External(External::DisplaysChanged))
+            }));
+        }
         #[cfg(windows)]
         if self.session.is_enabled()
             && (!platform::windows::has_keyboard_hook()
