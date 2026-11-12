@@ -912,6 +912,34 @@ pub(super) fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
             .spacing(10)
             .align_y(Alignment::Center)
             .into(),
+            row![
+                text("Engine").size(12).color(theme::MUTED).width(110),
+                pick_list(
+                    [
+                        Choice("classic", "Classic"),
+                        Choice("bass", "Bass-weighted"),
+                        Choice("sticky", "Sticky tempo"),
+                        Choice("cumulative", "Cumulative")
+                    ],
+                    Some(Choice::of(
+                        s.choice(mascot::BEAT_ENGINE),
+                        &[
+                            ("classic", "Classic"),
+                            ("bass", "Bass-weighted"),
+                            ("sticky", "Sticky tempo"),
+                            ("cumulative", "Cumulative")
+                        ]
+                    )),
+                    |c| Message::Set(mascot::BEAT_ENGINE, Value::Choice(c.0)),
+                )
+                .text_size(13)
+                .padding([6, 10])
+                .style(theme::select),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center)
+            .into(),
+            hint("Ways to follow the beat, each adding to the one before. Classic: the original. Bass-weighted: kicks count more than hats. Sticky tempo: resists jumping to half or double time. Cumulative: carries the beat's phase forward between hits. Changing it restarts the search."),
         ]);
     }
     items.push(hint("Try it without music using Music in the preview."));

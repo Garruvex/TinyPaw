@@ -21,6 +21,10 @@ impl App {
         }
     }
 
+    pub(super) fn beat_engine(&self) -> crate::mascot::beat::Engine {
+        crate::mascot::beat::Engine::parse(self.session.settings().choice(character::BEAT_ENGINE))
+    }
+
     /// The followed beat's phase, shifted by Beat timing, while music plays.
     pub(super) fn beat_phase(&self) -> Option<f32> {
         #[cfg(windows)]
@@ -199,9 +203,15 @@ impl App {
             };
             let follow = wanted && self.session.settings().bool(character::BEAT);
             let sensitivity = self.beat_sensitivity();
+            let engine = self.beat_engine();
             match (follow.then_some(target).flatten(), &self.beat) {
-                (Some(t), Some(b)) if *b.target() == t => b.set_sensitivity(sensitivity),
-                (Some(t), _) => self.beat = Some(platform::beat::Follower::start(sensitivity, t)),
+                // A new engine starts a fresh tracker.
+                (Some(t), Some(b)) if *b.target() == t && b.engine() == engine => {
+                    b.set_sensitivity(sensitivity)
+                }
+                (Some(t), _) => {
+                    self.beat = Some(platform::beat::Follower::start(sensitivity, engine, t))
+                }
                 (None, Some(_)) => self.beat = None,
                 (None, None) => {}
             }

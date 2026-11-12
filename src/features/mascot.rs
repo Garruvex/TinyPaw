@@ -29,6 +29,7 @@ pub const BEAT: &str = "mascot.follow_beat";
 pub const MUSIC_SOURCE: &str = "mascot.music_source";
 pub const BEAT_SENSITIVITY: &str = "mascot.beat_sensitivity";
 pub const BEAT_TIMING: &str = "mascot.beat_timing";
+pub const BEAT_ENGINE: &str = "mascot.beat_engine";
 /// Idle lines come at a random time within this many minutes.
 pub const IDLE_MIN: &str = "mascot.idle_lines_min";
 pub const IDLE_MAX: &str = "mascot.idle_lines_max";
@@ -205,6 +206,14 @@ pub fn register(r: &mut Registrar) {
         order: 13,
         default: Value::Choice("default"),
         constraint: Constraint::Choices(&["earlier", "default", "later"]),
+    });
+    r.setting(SettingDef {
+        id: BEAT_ENGINE,
+        label: "Beat engine",
+        group: "Character",
+        order: 14,
+        default: Value::Choice("bass"),
+        constraint: Constraint::Choices(&["classic", "bass", "sticky", "cumulative"]),
     });
     r.setting(SettingDef {
         id: MUSIC_SOURCE,

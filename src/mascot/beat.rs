@@ -22,6 +22,75 @@ const PREFERRED_LAG: f32 = 50.0;
 /// predicted this much earlier to land on the attack itself.
 const DETECTION_LAG: f64 = 0.015;
 
+/// Band edges for the bass-weighted onsets: a low band (kicks, bass), a mid
+/// band, and a high band (hats, snares, sibilance).
+const LOW_HZ: f32 = 150.0;
+const MID_HZ: f32 = 2000.0;
+/// How much each band's onsets count: kicks mark the beat, hats subdivide it.
+const BAND_WEIGHTS: [f32; 3] = [2.0, 1.0, 0.6];
+/// Band energy is compressed as `ln(1 + COMPRESS * e)`, so quiet bands add
+/// nothing and a loud hit counts for more than a faint tick.
+const COMPRESS: f32 = 1000.0;
+/// Extra weight for a candidate tempo near the current one (sticky tempo).
+const STICKY_BONUS: f32 = 0.3;
+/// Cumulative score: how much of the score comes from the past, and how
+/// tightly the previous beat is expected one period back (Stark's BTrack).
+const CUM_ALPHA: f32 = 0.9;
+const CUM_TIGHTNESS: f32 = 5.0;
+const CUM_LEN: usize = 400;
+
+/// Which beat-tracking recipe to try. Each one adds a single mechanism to the
+/// one before, so they can be compared by ear on the same music.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Engine {
+    /// High-passed loudness onsets, autocorrelation tempo, comb phase.
+    Classic,
+    /// Onsets from three bands with the low band weighted up.
+    Bass,
+    /// Bass, plus tempo that counts harmonics and resists octave flips.
+    Sticky,
+    /// Sticky, plus a cumulative score that carries the phase from beat to
+    /// beat (BTrack-style).
+    Cumulative,
+}
+
+impl Engine {
+    pub const ALL: [Engine; 4] = [
+        Engine::Classic,
+        Engine::Bass,
+        Engine::Sticky,
+        Engine::Cumulative,
+    ];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Engine::Classic => "classic",
+            Engine::Bass => "bass",
+            Engine::Sticky => "sticky",
+            Engine::Cumulative => "cumulative",
+        }
+    }
+
+    pub fn parse(id: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|e| e.id() == id)
+            .unwrap_or(Engine::Bass)
+    }
+
+    fn bands(self) -> bool {
+        self != Engine::Classic
+    }
+
+    fn sticky(self) -> bool {
+        matches!(self, Engine::Sticky | Engine::Cumulative)
+    }
+
+    fn cumulative(self) -> bool {
+        self == Engine::Cumulative
+    }
+}
+
 /// How readily the tracker commits to a beat.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sensitivity {
@@ -44,10 +113,19 @@ impl Sensitivity {
 }
 
 pub struct Tracker {
+    engine: Engine,
     hop: usize,
     filled: usize,
     energy: f32,
     previous: f32,
+    /// Band filter states and the band energies of the current frame.
+    low_a: f32,
+    mid_a: f32,
+    pole: [f32; 3],
+    band_energy: [f32; 3],
+    recent_bands: VecDeque<[f32; 3]>,
+    /// Cumulative score history (Cumulative engine only).
+    cum: VecDeque<f32>,
     /// Seconds of audio analysed.
     time: f64,
     recent: VecDeque<f32>,
@@ -66,12 +144,20 @@ pub struct Tracker {
 }
 
 impl Tracker {
-    pub fn new(rate: u32, sensitivity: Sensitivity) -> Self {
+    pub fn new(rate: u32, sensitivity: Sensitivity, engine: Engine) -> Self {
+        let alpha = |hz: f32| 1.0 - (-std::f32::consts::TAU * hz / rate as f32).exp();
         Self {
+            engine,
             hop: ((rate as f64 * FRAME).round() as usize).max(1),
             filled: 0,
             energy: 0.0,
             previous: 0.0,
+            low_a: alpha(LOW_HZ),
+            mid_a: alpha(MID_HZ),
+            pole: [0.0; 3],
+            band_energy: [0.0; 3],
+            recent_bands: VecDeque::with_capacity(4),
+            cum: VecDeque::with_capacity(CUM_LEN + 1),
             time: 0.0,
             recent: VecDeque::with_capacity(4),
             onsets: VecDeque::with_capacity(HISTORY + 1),
@@ -113,14 +199,49 @@ impl Tracker {
             let hp = s - self.previous;
             self.previous = s;
             self.energy += hp * hp;
+            if self.engine.bands() {
+                // Two poles for the low band, one for the mid/high split.
+                self.pole[0] += self.low_a * (s - self.pole[0]);
+                self.pole[1] += self.low_a * (self.pole[0] - self.pole[1]);
+                self.pole[2] += self.mid_a * (s - self.pole[2]);
+                let low = self.pole[1];
+                let mid = self.pole[2] - low;
+                let high = s - self.pole[2];
+                self.band_energy[0] += low * low;
+                self.band_energy[1] += mid * mid;
+                self.band_energy[2] += high * high;
+            }
             self.filled += 1;
             if self.filled == self.hop {
-                let e = self.energy / self.hop as f32;
+                let n = self.hop as f32;
+                let e = self.energy / n;
+                let bands = self.band_energy.map(|b| b / n);
                 self.filled = 0;
                 self.energy = 0.0;
-                self.frame(e);
+                self.band_energy = [0.0; 3];
+                self.frame(e, bands);
             }
         }
+    }
+
+    /// Weighted rises in compressed band loudness.
+    fn band_onset(&mut self, bands: [f32; 3]) -> f32 {
+        let level = bands.map(|e| (1.0 + COMPRESS * e).ln());
+        let count = self.recent_bands.len().max(1) as f32;
+        let mut onset = 0.0;
+        for b in 0..3 {
+            let base = if self.recent_bands.is_empty() {
+                level[b]
+            } else {
+                self.recent_bands.iter().map(|r| r[b]).sum::<f32>() / count
+            };
+            onset += BAND_WEIGHTS[b] * (level[b] - base).max(0.0);
+        }
+        if self.recent_bands.len() == 3 {
+            self.recent_bands.pop_front();
+        }
+        self.recent_bands.push_back(level);
+        onset
     }
 
     /// Beats emitted since the last call, as analysis times in seconds.
@@ -128,30 +249,38 @@ impl Tracker {
         std::mem::take(&mut self.beats)
     }
 
-    fn frame(&mut self, energy: f32) {
+    fn frame(&mut self, energy: f32, bands: [f32; 3]) {
         self.time += FRAME;
-        let level = (energy + 1e-10).ln();
-        let base = if self.recent.is_empty() {
-            level
+        let mut onset = if self.engine.bands() {
+            self.band_onset(bands)
         } else {
-            self.recent.iter().sum::<f32>() / self.recent.len() as f32
-        };
-        let mut onset = if energy > 1e-7 {
-            (level - base).max(0.0)
-        } else {
-            0.0
+            let level = (energy + 1e-10).ln();
+            let base = if self.recent.is_empty() {
+                level
+            } else {
+                self.recent.iter().sum::<f32>() / self.recent.len() as f32
+            };
+            let onset = if energy > 1e-7 {
+                (level - base).max(0.0)
+            } else {
+                0.0
+            };
+            if self.recent.len() == 3 {
+                self.recent.pop_front();
+            }
+            self.recent.push_back(level);
+            onset
         };
         if self.time < self.quiet_until {
             onset = 0.0;
         }
-        if self.recent.len() == 3 {
-            self.recent.pop_front();
-        }
-        self.recent.push_back(level);
         if self.onsets.len() == HISTORY {
             self.onsets.pop_front();
         }
         self.onsets.push_back(onset);
+        if self.engine.cumulative() {
+            self.update_cumulative(onset);
+        }
 
         // A beat due now is emitted before any re-estimate can move the
         // prediction past it.
@@ -163,7 +292,12 @@ impl Tracker {
                     self.beats.push(self.time);
                     self.last_beat = self.time;
                 }
-                self.next_beat = Some(next + step);
+                self.next_beat = Some(match self.project(period) {
+                    Some(k) if self.engine.cumulative() => {
+                        self.time + k as f64 * FRAME - DETECTION_LAG
+                    }
+                    _ => next + step,
+                });
             }
         }
 
@@ -172,6 +306,64 @@ impl Tracker {
             self.since_estimate = 0;
             self.estimate();
         }
+    }
+
+    /// How strongly a beat `v` frames before a score is expected, for beat
+    /// period `t`: a log-Gaussian around one period back.
+    fn expected(v: usize, t: f32) -> f32 {
+        (-0.5 * (CUM_TIGHTNESS * (v as f32 / t).ln()).powi(2)).exp()
+    }
+
+    /// The best earlier score reachable from `scores[at - v]`, over every
+    /// `v` from half to twice the period, weighted by how expected it is.
+    fn best_before(scores: &[f32], t: f32) -> f32 {
+        let lo = ((t * 0.5).round() as usize).max(1);
+        let hi = (t * 2.0).round() as usize;
+        (lo..=hi)
+            .filter_map(|v| {
+                let i = scores.len().checked_sub(v)?;
+                Some(scores[i] * Self::expected(v, t))
+            })
+            .fold(0.0, f32::max)
+    }
+
+    /// Adds this frame to the cumulative score: its onset, plus the best
+    /// score about one beat period before it.
+    fn update_cumulative(&mut self, onset: f32) {
+        let value = match self.period {
+            Some(t) => {
+                let history: Vec<f32> = self.cum.iter().copied().collect();
+                (1.0 - CUM_ALPHA) * onset + CUM_ALPHA * Self::best_before(&history, t)
+            }
+            None => onset,
+        };
+        if self.cum.len() == CUM_LEN {
+            self.cum.pop_front();
+        }
+        self.cum.push_back(value);
+    }
+
+    /// Frames from now to the next beat: the cumulative score is run forward
+    /// with no further onsets, and the strongest point near one period ahead
+    /// wins.
+    fn project(&self, t: f32) -> Option<usize> {
+        if !self.engine.cumulative() || self.cum.len() < (t * 2.0) as usize {
+            return None;
+        }
+        let mut scores: Vec<f32> = self.cum.iter().copied().collect();
+        let reach = (t * 1.5).ceil() as usize;
+        let mut best = (0, f32::MIN);
+        for k in 1..=reach {
+            let value = CUM_ALPHA * Self::best_before(&scores, t);
+            scores.push(value);
+            if k as f32 >= t * 0.5 {
+                let centre = (-0.5 * ((k as f32 - t) / (t * 0.25)).powi(2)).exp();
+                if value * centre > best.1 {
+                    best = (k, value * centre);
+                }
+            }
+        }
+        (best.0 > 0).then_some(best.0)
     }
 
     fn estimate(&mut self) {
@@ -206,12 +398,28 @@ impl Tracker {
                 .map(|(a, b)| a * b)
                 .sum()
         };
+        let sticky = self.engine.sticky();
+        let current = self.period;
         let scores: Vec<(usize, f32, f32)> = (min_lag..=max_lag)
             .map(|lag| {
                 let r = corr(lag);
                 let octave = (lag as f32 / PREFERRED_LAG).log2();
-                let weight = (-0.5 * (octave / 0.9).powi(2)).exp();
-                (lag, r, r * weight)
+                let mut weight = (-0.5 * (octave / 0.9).powi(2)).exp();
+                let mut evidence = r;
+                if sticky {
+                    // A real pulse also correlates at two and four periods.
+                    for (k, share) in [(2, 0.5), (4, 0.25)] {
+                        if lag * k < n {
+                            evidence += share * corr(lag * k);
+                        }
+                    }
+                    // Changing tempo needs clearly more evidence than staying.
+                    if let Some(p) = current {
+                        let off = (lag as f32 / p).ln();
+                        weight *= 1.0 + STICKY_BONUS * (-0.5 * (off / 0.06).powi(2)).exp();
+                    }
+                }
+                (lag, r, evidence * weight)
             })
             .collect();
         let Some(&(lag, r, _)) = scores.iter().max_by(|a, b| a.2.total_cmp(&b.2)) else {
@@ -250,6 +458,14 @@ impl Tracker {
             .max_by(|a, b| a.1.total_cmp(&b.1))
             .map_or(0, |(phase, _)| phase);
         let step = p as f64 * FRAME;
+        // The cumulative score keeps its own phase while the tempo holds.
+        if self.engine.cumulative()
+            && self.next_beat.is_some()
+            && self.period.is_some_and(|old| (old - p).abs() < old * 0.05)
+        {
+            self.period = Some(p);
+            return;
+        }
         let last = self.time - best as f64 * FRAME - DETECTION_LAG;
         let mut next = last + step;
         while next < self.time {
@@ -343,13 +559,126 @@ pub(crate) mod trial {
 
     /// Feeds `samples` in 10 ms chunks and returns the emitted beat times.
     pub fn run(samples: &[f32], s: Sensitivity) -> Vec<f64> {
-        let mut t = Tracker::new(RATE, s);
+        run_with(samples, s, Engine::Classic)
+    }
+
+    pub fn run_with(samples: &[f32], s: Sensitivity, engine: Engine) -> Vec<f64> {
+        let mut t = Tracker::new(RATE, s, engine);
         let mut beats = Vec::new();
         for chunk in samples.chunks(441) {
             t.push(chunk);
             beats.extend(t.take_beats());
         }
         beats
+    }
+
+    /// A low, soft kick: a decaying sine sweeping down from 90 to 50 Hz.
+    fn kick(out: &mut [f32], at: f64, amplitude: f32) {
+        let start = (at * RATE as f64) as usize;
+        let len = (0.18 * RATE as f32) as usize;
+        let mut phase = 0.0f32;
+        for i in 0..len {
+            let t = i as f32 / RATE as f32;
+            let freq = 50.0 + 40.0 * (-t / 0.03).exp();
+            phase += std::f32::consts::TAU * freq / RATE as f32;
+            if let Some(s) = out.get_mut(start + i) {
+                *s += amplitude * phase.sin() * (-t / 0.06).exp();
+            }
+        }
+    }
+
+    /// Harder music-like patterns; the true beats are the kicks.
+    pub fn pattern(name: &str, bpm: f64, secs: f64) -> (Vec<f32>, Vec<f64>) {
+        let mut out = vec![0.0; (secs * RATE as f64) as usize];
+        let mut noise = Noise(31);
+        let step = 60.0 / bpm;
+        let mut truth = Vec::new();
+        if name == "sustained bass" {
+            for (i, s) in out.iter_mut().enumerate() {
+                *s += 0.25 * (std::f32::consts::TAU * 55.0 * i as f32 / RATE as f32).sin();
+            }
+        }
+        let mut t = 0.0;
+        while t < secs {
+            match name {
+                // A quiet kick under louder hats on every off-beat and 16th.
+                "quiet kick, loud hats" => {
+                    kick(&mut out, t, 0.3);
+                    for k in 1..4 {
+                        hit(&mut out, t + step * k as f64 / 4.0, 0.6, 6.0, &mut noise);
+                    }
+                }
+                // Swing: a softer hit two thirds of the way to the next beat.
+                "swing" => {
+                    hit(&mut out, t, 0.8, 15.0, &mut noise);
+                    hit(&mut out, t + step * 2.0 / 3.0, 0.4, 10.0, &mut noise);
+                }
+                _ => {
+                    kick(&mut out, t, 0.5);
+                    hit(&mut out, t + step / 2.0, 0.4, 8.0, &mut noise);
+                }
+            }
+            truth.push(t);
+            t += step;
+        }
+        (out, truth)
+    }
+
+    /// Every engine on the same patterns: `cargo test engine_trial --
+    /// --nocapture`. Informational, apart from silence and speech.
+    #[test]
+    fn engine_trial() {
+        let n = Sensitivity::Normal;
+        let cases = [
+            pattern("kick and hats", 120.0, 24.0),
+            pattern("quiet kick, loud hats", 120.0, 24.0),
+            pattern("sustained bass", 100.0, 24.0),
+            pattern("swing", 110.0, 24.0),
+            pattern("kick and hats", 170.0, 24.0),
+            pattern("kick and hats", 75.0, 24.0),
+        ];
+        let names = [
+            "kick+hats 120",
+            "quiet kick, loud hats 120",
+            "sustained bass 100",
+            "swing 110",
+            "kick+hats 170",
+            "kick+hats 75",
+        ];
+        print!("| Pattern |");
+        for e in Engine::ALL {
+            print!(" {} |", e.id());
+        }
+        println!("\n| --- | --- | --- | --- | --- |");
+        for (name, (audio, truth)) in names.iter().zip(&cases) {
+            print!("| {name} |");
+            let total = truth.iter().filter(|t| **t >= 6.0).count();
+            for e in Engine::ALL {
+                let s = score(&run_with(audio, n, e), truth, 6.0);
+                print!(
+                    " {}/{total}, +{} extra, {:+.0} ms |",
+                    s.hits, s.extra, s.late_ms
+                );
+            }
+            println!();
+        }
+        for e in Engine::ALL {
+            let speech = run_with(&speech(20.0), n, e);
+            let silence = run_with(&vec![0.0; 20 * RATE as usize], n, e);
+            println!(
+                "{}: speech {} beats, silence {} beats",
+                e.id(),
+                speech.len(),
+                silence.len()
+            );
+            assert!(silence.is_empty(), "{}: silence makes no beats", e.id());
+            assert!(
+                speech.len() <= 4,
+                "{}: speech makes {}",
+                e.id(),
+                speech.len()
+            );
+        }
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -457,7 +786,7 @@ pub(crate) mod trial {
 
     #[test]
     fn own_sounds_can_be_held_off() {
-        let mut t = Tracker::new(RATE, Sensitivity::Normal);
+        let mut t = Tracker::new(RATE, Sensitivity::Normal, Engine::Classic);
         let (audio, _) = clicks(&[(120.0, 1.0)], false);
         t.hold_off(2.0);
         t.push(&audio);

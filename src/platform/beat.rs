@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::mascot::beat::{Sensitivity, Tracker};
+use crate::mascot::beat::{Engine, Sensitivity, Tracker};
 
 /// With no audio for this long the stream is rebuilt, which follows a change
 /// of default output.
@@ -42,6 +42,7 @@ struct Shared {
 
 pub struct Follower {
     target: Target,
+    engine: Engine,
     shared: Arc<Shared>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
@@ -64,7 +65,7 @@ fn decode(v: u8) -> Sensitivity {
 }
 
 impl Follower {
-    pub fn start(sensitivity: Sensitivity, target: Target) -> Self {
+    pub fn start(sensitivity: Sensitivity, engine: Engine, target: Target) -> Self {
         let shared = Arc::new(Shared::default());
         shared
             .sensitivity
@@ -74,11 +75,12 @@ impl Follower {
             let (shared, stop, target) = (shared.clone(), stop.clone(), target.clone());
             std::thread::Builder::new()
                 .name("tinypaw-beat".into())
-                .spawn(move || run(&shared, &stop, &target))
+                .spawn(move || run(&shared, &stop, &target, engine))
                 .ok()
         };
         Self {
             target,
+            engine,
             shared,
             stop,
             thread,
@@ -87,6 +89,10 @@ impl Follower {
 
     pub fn target(&self) -> &Target {
         &self.target
+    }
+
+    pub fn engine(&self) -> Engine {
+        self.engine
     }
 
     pub fn set_sensitivity(&self, s: Sensitivity) {
@@ -150,7 +156,7 @@ enum Capture {
     Process(ProcessLoopback),
 }
 
-fn run(shared: &Shared, stop: &AtomicBool, target: &Target) {
+fn run(shared: &Shared, stop: &AtomicBool, target: &Target, engine: Engine) {
     while !stop.load(Ordering::Relaxed) {
         let (tx, rx) = sync_channel(64);
         let opened = match target {
@@ -165,7 +171,7 @@ fn run(shared: &Shared, stop: &AtomicBool, target: &Target) {
         match opened {
             Some((capture, rate)) => {
                 shared.available.store(true, Ordering::Relaxed);
-                follow(shared, stop, &rx, rate);
+                follow(shared, stop, &rx, rate, engine);
                 drop(capture);
             }
             None => {
@@ -178,8 +184,12 @@ fn run(shared: &Shared, stop: &AtomicBool, target: &Target) {
 }
 
 /// Analyses chunks until stopped or the audio stalls.
-fn follow(shared: &Shared, stop: &AtomicBool, rx: &Receiver<Vec<f32>>, rate: u32) {
-    let mut tracker = Tracker::new(rate, decode(shared.sensitivity.load(Ordering::Relaxed)));
+fn follow(shared: &Shared, stop: &AtomicBool, rx: &Receiver<Vec<f32>>, rate: u32, engine: Engine) {
+    let mut tracker = Tracker::new(
+        rate,
+        decode(shared.sensitivity.load(Ordering::Relaxed)),
+        engine,
+    );
     let mut heard = Instant::now();
     while !stop.load(Ordering::Relaxed) {
         let chunk = match rx.recv_timeout(Duration::from_millis(100)) {
@@ -564,7 +574,7 @@ mod tests {
     #[test]
     #[ignore = "opens the real default audio output"]
     fn loopback_opens_on_the_default_output() {
-        let f = Follower::start(Sensitivity::Normal, Target::Output);
+        let f = Follower::start(Sensitivity::Normal, Engine::Classic, Target::Output);
         std::thread::sleep(Duration::from_millis(1500));
         println!("loopback available {}, bpm {:?}", f.available(), f.bpm());
         assert!(f.available());
