@@ -140,6 +140,10 @@ impl Controller {
         self.seed = self.seed.wrapping_mul(6364136223846793005).wrapping_add(1);
         (self.seed >> 40) as f32 / (1u32 << 24) as f32
     }
+    pub fn pet_now(&mut self, now: f32) {
+        self.state = State::Petting;
+        self.last_stroke = now;
+    }
     pub fn reset(&mut self) {
         *self = Self::new(self.seed);
     }

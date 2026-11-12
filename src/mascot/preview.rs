@@ -38,6 +38,9 @@ const MUSIC: f32 = 4.0;
 /// What changes every frame while the preview animates.
 struct Live {
     companion: super::companionship::Controller,
+    pointer: Option<iced::Point>,
+    pointer_button: bool,
+    companion_events: Vec<Event>,
     animator: Animator,
     pose: Pose,
     now: f32,
@@ -136,6 +139,9 @@ impl MotionPreview {
             rig,
             live: RefCell::new(Live {
                 companion: super::companionship::Controller::new(17),
+                pointer: None,
+                pointer_button: false,
+                companion_events: Vec::new(),
                 animator: Animator::default(),
                 pose: Pose::default(),
                 now: 0.0,
@@ -159,11 +165,21 @@ impl MotionPreview {
         let now = live.now;
         match state {
             super::companionship::State::Asleep => live.companion.sleep_now(now, &settings),
-            super::companionship::State::Petting => live.companion.state = state,
+            super::companionship::State::Petting => live.companion.pet_now(now),
             _ => {
                 live.companion.wake(now);
             }
         }
+    }
+    pub fn companion_pointer(&self, cursor: Option<iced::Point>, button: Option<bool>) {
+        let mut live = self.live.borrow_mut();
+        live.pointer = cursor;
+        if let Some(button) = button {
+            live.pointer_button = button;
+        }
+    }
+    pub fn stirring(&self) -> bool {
+        self.live.borrow().companion.stirring
     }
     pub fn time(&self) -> f32 {
         self.live.borrow().now
@@ -600,6 +616,54 @@ impl MotionPreview {
         let mut live = self.live.borrow_mut();
         let live = &mut *live;
         live.now += dt.clamp(0.0, 0.1);
+        let mut settings = self.companionship();
+        settings.sleep = true;
+        settings.petting = true;
+        let touching = live.pointer.is_some_and(|p| {
+            if matches!(
+                live.companion.state,
+                super::companionship::State::Asleep | super::companionship::State::Waking
+            ) {
+                if let Some(picture) = self.picture_for(self.art(Event::Sleep)) {
+                    return picture.hit(self.rig.size(), p);
+                }
+            }
+            self.rig.hit(p, &live.pose).is_some()
+        });
+        if let Some(event) = live.companion.step(
+            &settings,
+            super::companionship::Input {
+                now: live.now,
+                cursor: live.pointer,
+                nearby: true,
+                touching,
+                pet_region: touching,
+                button: live.pointer_button,
+                busy: live.test.is_some(),
+                response_busy: live.speech.is_some(),
+                audio: super::companionship::Audio::Quiet,
+                height: self.rig.visible_height(),
+            },
+        ) {
+            let e = match event {
+                super::companionship::Event::Headpat => Event::Headpat,
+                super::companionship::Event::Sleep => Event::Sleep,
+                super::companionship::Event::Wake => Event::Wake,
+            };
+            live.companion_events.push(e);
+            let trigger = match e {
+                Event::Headpat => Trigger::Headpat,
+                Event::Sleep => Trigger::Sleep,
+                _ => Trigger::Wake,
+            };
+            if let Some(line) = live.picker.pick(&self.lines, trigger) {
+                live.speech = Speech::new(&line.text, live.now);
+                live.sound = line.sound.clone();
+            }
+            if e == Event::Wake {
+                live.showing = Some((live.now + 0.7, e));
+            }
+        }
         if let Some(s) = &mut live.speech
             && !s.advance(live.now)
         {
@@ -662,6 +726,16 @@ impl MotionPreview {
             inputs.beat = None;
         }
         live.pose = live.animator.step(&self.rig.motion_parts(), &inputs);
+        if live.companion.state == super::companionship::State::Petting {
+            live.pose.expression = super::motion::Expression::Petted;
+        }
+        if live.companion.state == super::companionship::State::Petting && !reduced {
+            if let Some(i) = self.kinds.iter().position(|k| *k == PartType::Head) {
+                if let Some(a) = live.pose.angles.get_mut(i) {
+                    *a += 0.06;
+                }
+            }
+        }
         if sleeping {
             live.pose.expression = super::motion::Expression::Blink;
             live.pose.gaze = Vector::ZERO;

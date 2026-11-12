@@ -28,9 +28,9 @@ fn saving_many_padded_layers_compacts_sources_and_preserves_placement() {
             behind: kind.behind_by_default(),
             motion: MotionSpec::default_for(kind),
             faces: if kind == PartType::Head {
-                [None, Some(layer.clone()), Some(layer.clone())]
+                [None, Some(layer.clone()), Some(layer.clone()), None]
             } else {
-                [None, None, None]
+                [None, None, None, None]
             },
         })
         .collect();

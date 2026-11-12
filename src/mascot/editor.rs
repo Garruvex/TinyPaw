@@ -112,7 +112,7 @@ pub struct EditPart {
     pub behind: bool,
     pub motion: MotionSpec,
     /// Head faces: blink, pressed, dragging.
-    pub faces: [Option<Layer>; 3],
+    pub faces: [Option<Layer>; 4],
 }
 
 #[derive(Debug, Clone, Default)]
@@ -147,7 +147,7 @@ pub enum EyeStyle {
 }
 
 /// Display names for head faces, by slot. File names keep `FACE_NAMES`.
-pub const FACE_LABELS: [&str; 3] = ["Eyes closed", "Pressed", "Being carried"];
+pub const FACE_LABELS: [&str; 4] = ["Eyes closed", "Pressed", "Being carried", "Headpat"];
 
 /// A readable layer name from a file name: `eye_screen_left.png` becomes
 /// "Eye screen left".
@@ -234,7 +234,7 @@ struct Snapshot {
 /// Where a held pose made in the editor is written in the pack.
 const HELD_FILE: &str = "reactions/held.png";
 
-pub const FACE_NAMES: [&str; 3] = ["Blink", "Pressed", "Dragging"];
+pub const FACE_NAMES: [&str; 4] = ["Blink", "Pressed", "Dragging", "Petted"];
 const DEFAULT_TRAVEL: f32 = 0.012;
 
 #[derive(Debug, Clone)]
@@ -299,7 +299,7 @@ impl Editor {
         };
         let mut parts = Vec::new();
         for p in &pose.parts {
-            let mut faces = [None, None, None];
+            let mut faces = [None, None, None, None];
             for (slot, face) in faces.iter_mut().zip(&p.faces) {
                 if let Some(asset) = face {
                     *slot = Some(png(asset)?);
@@ -526,7 +526,7 @@ impl Editor {
                     motion: MotionSpec::default_for(kind),
                     layer,
                     pivot,
-                    faces: [None, None, None],
+                    faces: [None, None, None, None],
                 });
                 self.select(Selected::Part(self.parts.len() - 1));
             }
@@ -543,7 +543,7 @@ impl Editor {
                     motion: MotionSpec::of(super::motion::Preset::Still),
                     layer,
                     pivot: (cx, cy),
-                    faces: [None, None, None],
+                    faces: [None, None, None, None],
                 });
                 self.select(Selected::Part(self.parts.len() - 1));
             }
@@ -638,7 +638,7 @@ impl Editor {
             p.motion = MotionSpec::default_for(kind);
             p.behind = kind.behind_by_default();
             if kind != PartType::Head {
-                p.faces = [None, None, None];
+                p.faces = [None, None, None, None];
             } else {
                 p.on_head = false;
             }
@@ -722,7 +722,7 @@ impl Editor {
                 },
                 behind: p.behind,
                 motion: p.motion,
-                faces: [0, 1, 2].map(|i| p.faces[i].as_ref().map(bake)),
+                faces: [0, 1, 2, 3].map(|i| p.faces[i].as_ref().map(bake)),
             })
             .collect();
         Rig::layered(LayeredArt {
@@ -1066,7 +1066,7 @@ impl Editor {
                 on_head: self.head().is_some(),
                 behind: false,
                 motion: MotionSpec::default_for(PartType::Other),
-                faces: [None, None, None],
+                faces: [None, None, None, None],
             });
         }
         self.select(Selected::Part(self.parts.len() - 1));

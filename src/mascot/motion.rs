@@ -243,6 +243,7 @@ pub enum Expression {
     Blink,
     Pressed,
     Dragging,
+    Petted,
 }
 
 /// What happened this frame.

@@ -53,7 +53,7 @@ impl Editor {
             let base = format!("{dir}/part-{}-{}", n + 1, p.kind.name());
             names.push((format!("{base}.png"), p.name.clone()));
             files.push((format!("{base}.png"), p.layer.clone()));
-            let mut faces = [None, None, None];
+            let mut faces = [None, None, None, None];
             for (slot, face) in p.faces.iter().enumerate() {
                 if let Some(face) = face {
                     let file = format!("{base}-{}.png", FACE_NAMES[slot].to_lowercase());

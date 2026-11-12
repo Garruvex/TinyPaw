@@ -59,8 +59,10 @@ impl App {
             msg => {
                 let options = self.mascot_options();
                 let audio = self.companion_audio();
+                let voice_busy = self.voice.busy(self.voice_clock.elapsed().as_secs_f64());
                 if let Some(m) = &mut self.mascot {
                     m.set_audio(audio);
+                    m.set_voice_busy(voice_busy);
                     let (task, save) = m.update(msg, &options);
                     tasks.push(task);
                     if let Some((x, y)) = save {

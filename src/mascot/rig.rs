@@ -81,7 +81,7 @@ struct Part {
     kind: PartType,
     piece: Piece,
     /// Head faces: blink, pressed, dragging.
-    faces: [Option<Piece>; 3],
+    faces: [Option<Piece>; 4],
     pivot: Point,
     parent: Option<usize>,
     behind: bool,
@@ -116,7 +116,7 @@ pub struct PartArt {
     pub behind: bool,
     pub motion: MotionSpec,
     /// Head faces: blink, pressed, dragging.
-    pub faces: [Option<RgbaImage>; 3],
+    pub faces: [Option<RgbaImage>; 4],
 }
 
 pub struct EyeArt {
@@ -343,7 +343,8 @@ impl Rig {
             parts.push(Part {
                 kind: p.kind,
                 piece: main,
-                faces: [0, 1, 2].map(|i| p.faces[i].as_ref().and_then(piece).map(|(face, _)| face)),
+                faces: [0, 1, 2, 3]
+                    .map(|i| p.faces[i].as_ref().and_then(piece).map(|(face, _)| face)),
                 pivot: Point::new(p.pivot.0 * size.width, p.pivot.1 * size.height),
                 parent: p.parent,
                 behind: p.behind,
@@ -804,6 +805,7 @@ impl Layered<'_> {
                 Expression::Blink => p.faces[0].as_ref(),
                 Expression::Pressed => p.faces[1].as_ref(),
                 Expression::Dragging => p.faces[2].as_ref(),
+                Expression::Petted => p.faces[3].as_ref(),
                 Expression::Idle => None,
             };
             place(f, face.unwrap_or(&p.piece));
@@ -888,7 +890,12 @@ mod tests {
                 parent: None,
                 behind: false,
                 motion: MotionSpec::default_for(PartType::Head),
-                faces: [None, Some(block(20, 10, 80, 55, [250, 0, 0, 255])), None],
+                faces: [
+                    None,
+                    Some(block(20, 10, 80, 55, [250, 0, 0, 255])),
+                    None,
+                    None,
+                ],
             }],
             eyes: vec![EyeArt {
                 white: block(40, 25, 50, 35, [255, 255, 255, 255]),

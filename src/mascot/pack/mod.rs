@@ -111,7 +111,7 @@ const MAX_EYES: usize = 4;
 /// Image files per pack, across every pose.
 const MAX_IMAGES: usize = 32;
 /// Head faces, in the order the rig takes them.
-const FACES: [&str; 3] = ["blink", "pressed", "dragging"];
+const FACES: [&str; 4] = ["blink", "pressed", "dragging", "petted"];
 /// Furthest a pupil may travel, as a fraction of the canvas.
 pub(super) const MAX_GAZE: f32 = 0.1;
 
@@ -281,7 +281,7 @@ fn build_rig(m: &Manifest, png: impl Fn(&str) -> Result<RgbaImage, String>) -> R
     }
     let mut parts = Vec::new();
     for part in &pose.parts {
-        let mut faces = [None, None, None];
+        let mut faces = [None, None, None, None];
         for (slot, face) in faces.iter_mut().zip(&part.faces) {
             if let Some(asset) = face {
                 *slot = Some(png(asset)?);

@@ -366,7 +366,7 @@ impl Request {
                 role if role.is_face() => PartType::Other,
                 _ => continue,
             };
-            let mut faces = [None, None, None];
+            let mut faces = [None, None, None, None];
             if kind == PartType::Head {
                 for face in &roles {
                     if let Some(slot) = face.face_slot() {

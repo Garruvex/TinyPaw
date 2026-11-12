@@ -568,6 +568,7 @@ pub struct Desktop {
     pictures: Pictures,
     companion: Controller,
     audio: companionship::Audio,
+    voice_busy: bool,
     nearby: bool,
     /// A Click or Drop picture showing until this time.
     showing: Option<(f32, Event)>,
@@ -669,6 +670,7 @@ impl Desktop {
             pictures: Pictures::default(),
             companion: Controller::new(Instant::now().elapsed().as_nanos() as u64 + 1),
             audio: companionship::Audio::Unknown,
+            voice_busy: false,
             nearby: false,
             showing: None,
             fall_on_release: false,
@@ -817,6 +819,9 @@ impl Desktop {
 
     pub fn sleep_enabled(&self) -> bool {
         self.pictures.settings.sleep
+    }
+    pub fn set_voice_busy(&mut self, busy: bool) {
+        self.voice_busy = busy;
     }
     pub fn set_audio(&mut self, audio: companionship::Audio) {
         self.audio = audio;
@@ -1117,7 +1122,8 @@ impl Desktop {
                 pet_region: touching,
                 button: left || right,
                 busy: self.menu.is_some() || self.press.is_some() || self.flight.is_some(),
-                response_busy: self.speech.is_some()
+                response_busy: self.voice_busy
+                    || self.speech.is_some()
                     || self.showing.is_some_and(|(until, _)| self.now < until),
                 audio: self.audio,
                 height: self.rig.visible_height(),
@@ -1302,6 +1308,9 @@ impl Desktop {
         if sleeping {
             pose.expression = Expression::Blink;
             pose.gaze = Vector::ZERO;
+        }
+        if self.companion.state == State::Petting {
+            pose.expression = Expression::Petted;
         }
         if self.companion.state == State::Petting && !o.reduced {
             if let Some(index) = self
@@ -1575,6 +1584,7 @@ impl Desktop {
             return Task::none();
         }
         self.hidden = hidden;
+        self.companion.reset();
         if hidden {
             self.flight = None;
             // A cancelled gesture: no Drop is invented.

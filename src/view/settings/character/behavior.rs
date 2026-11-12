@@ -1061,6 +1061,16 @@ impl canvas::Program<Message> for MotionStage<'_> {
         cursor: iced::mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
         use iced::mouse::{Button, Event};
+        let (k, origin) = self.fit(bounds.size());
+        let point = cursor
+            .position_in(bounds)
+            .map(|p| iced::Point::new((p.x - origin.x) / k, (p.y - origin.y) / k));
+        let button = match event {
+            canvas::Event::Mouse(Event::ButtonPressed(_)) => Some(true),
+            canvas::Event::Mouse(Event::ButtonReleased(_)) => Some(false),
+            _ => None,
+        };
+        self.preview.companion_pointer(point, button);
         if let canvas::Event::Window(iced::window::Event::RedrawRequested(now)) = event {
             // The page shows the speech bubble, so it needs rebuilding when
             // the bubble appears or goes.
@@ -1141,7 +1151,12 @@ impl canvas::Program<Message> for MotionStage<'_> {
         });
         // A live cursor test: tracking eyes follow the pointer over the
         // preview, counter-rotated into the head like on the desktop.
-        if let (Some(eye), Some(at)) = (rig.eye_point(), cursor.position_in(bounds)) {
+        if !matches!(
+            self.preview.companion_state(),
+            crate::mascot::companionship::State::Asleep
+                | crate::mascot::companionship::State::Waking
+        ) && let (Some(eye), Some(at)) = (rig.eye_point(), cursor.position_in(bounds))
+        {
             let eyes = iced::Point::new(origin.x + eye.x * k, origin.y + eye.y * k);
             let g = crate::mascot::desktop::gaze_toward(at, eyes, 0.49 * canvas_size.height * k);
             let (sn, cs) = (-rig.head_angle(&pose)).sin_cos();
@@ -1163,7 +1178,7 @@ impl canvas::Program<Message> for MotionStage<'_> {
             canvas_size,
             &self.preview.companionship(),
             self.preview.companion_state(),
-            false,
+            self.preview.stirring(),
             self.preview.time(),
             self.preview.control().reduced,
         );

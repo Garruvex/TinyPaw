@@ -58,7 +58,7 @@ pub(in crate::mascot) struct PartDef {
     pub(in crate::mascot) behind: bool,
     pub(in crate::mascot) motion: MotionSpec,
     /// Head faces: blink, pressed, dragging.
-    pub(in crate::mascot) faces: [Option<String>; 3],
+    pub(in crate::mascot) faces: [Option<String>; 4],
 }
 
 #[derive(Debug, Clone)]
@@ -208,7 +208,7 @@ pub(in crate::mascot) fn parse_part(
             *value = x as f32;
         }
     }
-    let mut faces = [None, None, None];
+    let mut faces = [None, None, None, None];
     if let Some(map) = v["expressions"].as_object() {
         if kind != PartType::Head {
             return Err(format!("only the head can have expressions, not {what}"));

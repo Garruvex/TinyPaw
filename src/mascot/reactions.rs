@@ -665,6 +665,9 @@ pub fn effective(pack: &Config, user: &Config) -> Sounds {
     for e in Event::ALL {
         if let Some(entry) = user.entry(e).or(pack.entry(e)) {
             *out.get_mut(e) = entry.sound.clone();
+            if matches!(e, Event::Sleep | Event::Wake) && user.entry(e).is_none() {
+                out.get_mut(e).enabled = false;
+            }
         }
     }
     out
@@ -756,6 +759,9 @@ impl Voice {
     }
 
     /// The accepted sound runs `seconds`; idle waits for it.
+    pub fn busy(&self, now: f64) -> bool {
+        now < self.busy_until
+    }
     pub fn started(&mut self, now: f64, seconds: f32) {
         self.busy_until = now + f64::from(seconds.max(0.0));
     }
