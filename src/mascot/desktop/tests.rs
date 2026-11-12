@@ -793,3 +793,35 @@ fn a_held_press_keeps_its_pose_and_eases_out_on_release() {
     }
     assert!(d.released.is_none(), "back on live motion");
 }
+
+#[test]
+fn enlarged_held_art_keeps_room_to_swing() {
+    let (mut d, _) = Desktop::open("yohta", Rig::load(), 292.0, (500.0, 500.0), 5, false);
+    let size = d.rig.size();
+    let mut art = image::RgbaImage::new(size.width as u32, size.height as u32);
+    for y in 20..size.height as u32 - 1 {
+        for x in 80..size.width as u32 - 80 {
+            art.put_pixel(x, y, image::Rgba([100, 120, 200, 255]));
+        }
+    }
+    d.set_pictures(Pictures {
+        held: Some(super::super::rig::Picture::new(
+            &art,
+            [-0.125, -0.125, 1.25],
+        )),
+        ..Default::default()
+    });
+    let l = d.layout;
+    let pivot = Point::new(size.width * 0.5, d.rig.visible_rows().0);
+    let grab = Point::new(
+        l.character.x + pivot.x * l.scale,
+        l.character.y + pivot.y * l.scale,
+    );
+    for angle in [-HANG_SWING, -0.4, 0.0, 0.4, HANG_SWING] {
+        assert!(
+            (d.fit_carry(grab, pivot, angle) - angle).abs() < 0.001,
+            "requested {angle}, allowed {}",
+            d.fit_carry(grab, pivot, angle)
+        );
+    }
+}

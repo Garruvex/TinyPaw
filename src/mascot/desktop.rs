@@ -275,6 +275,79 @@ pub fn layout(
 }
 
 impl Layout {
+    /// Reserve the exact rotation envelope of a held picture around its scruff.
+    /// Placement offsets cancel when the scruff is pinned to the carry pivot.
+    fn with_held_room(mut self, held: &super::rig::Picture, stage: Size, top: f32) -> Self {
+        let pivot = Point::new(stage.width * 0.5, top);
+        let grab = Point::new(
+            self.character.x + pivot.x * self.scale,
+            self.character.y + pivot.y * self.scale,
+        );
+        let hold = held.hold_in(stage);
+        let art = held.art;
+        let mut min = Point::ORIGIN;
+        let mut max = Point::new(self.window.width, self.window.height);
+        for corner in [
+            art.position(),
+            Point::new(art.x + art.width, art.y),
+            Point::new(art.x, art.y + art.height),
+            Point::new(art.x + art.width, art.y + art.height),
+        ] {
+            let v = (held.in_stage(stage, corner) - hold) * self.scale;
+            let x_extreme = (-v.y).atan2(v.x);
+            let y_extreme = v.x.atan2(v.y);
+            for angle in [
+                -HANG_SWING,
+                0.0,
+                HANG_SWING,
+                x_extreme,
+                x_extreme + std::f32::consts::PI,
+                y_extreme,
+                y_extreme + std::f32::consts::PI,
+            ] {
+                let angle = (angle + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+                    - std::f32::consts::PI;
+                if angle.abs() > HANG_SWING + 0.0001 {
+                    continue;
+                }
+                let (s, c) = angle.sin_cos();
+                let q = Point::new(grab.x + v.x * c - v.y * s, grab.y + v.x * s + v.y * c);
+                min.x = min.x.min(q.x);
+                min.y = min.y.min(q.y);
+                max.x = max.x.max(q.x);
+                max.y = max.y.max(q.y);
+            }
+        }
+        let left = if min.x < 0.0 {
+            (-min.x + 1.0).ceil()
+        } else {
+            0.0
+        };
+        let top = if min.y < 0.0 {
+            (-min.y + 1.0).ceil()
+        } else {
+            0.0
+        };
+        let right = if max.x > self.window.width {
+            (max.x - self.window.width + 1.0).ceil()
+        } else {
+            0.0
+        };
+        let bottom = if max.y > self.window.height {
+            (max.y - self.window.height + 1.0).ceil()
+        } else {
+            0.0
+        };
+        self.character.x += left;
+        self.character.y += top;
+        self.anchor.x += left;
+        self.anchor.y += top;
+        self.menu_y += top;
+        self.window.width += left + right;
+        self.window.height += top + bottom;
+        self
+    }
+
     /// Lines the menu up with the feet, the middle or the top of the
     /// visible art (`visible`: its top and bottom rows, in rig pixels),
     /// kept inside the window.
@@ -781,6 +854,8 @@ impl Desktop {
         self.pictures = pictures;
         self.companion.reset();
         self.showing = None;
+        self.relayout();
+        self.place();
     }
 
     /// The picture drawn instead of the character now, if any. Carrying
@@ -860,6 +935,11 @@ impl Desktop {
             self.band(),
         )
         .align_menu(self.lines.menu.align, self.rig.visible_rows());
+        if let Some(held) = &self.pictures.held {
+            self.layout =
+                self.layout
+                    .with_held_room(held, self.rig.size(), self.rig.visible_rows().0);
+        }
     }
 
     /// The native window, once known; 0 before then.
@@ -967,7 +1047,11 @@ impl Desktop {
                         (cursor.1 - rect.1) as f32 / k,
                     );
                     let (pivot, protected) = self.grab_chain(grab);
-                    self.companion.wake(self.now);
+                    if self.companion.wake(self.now).is_some() {
+                        self.events.push(Event::Wake);
+                        self.say(Trigger::Wake, o);
+                        self.showing = Some((self.now + 0.7, Event::Wake));
+                    }
                     self.press = Some(Press {
                         cursor,
                         grab,
@@ -1687,7 +1771,10 @@ impl Desktop {
     pub fn view<'a>(&'a self, items: Vec<Item>, o: &Options) -> Element<'a, Message> {
         let l = &self.layout;
         let slot = |side: Side, items: &mut Option<Vec<Item>>| -> Element<'a, Message> {
-            let width = MENU_W + GAP;
+            let width = match side {
+                Side::Left => l.character.x,
+                Side::Right => l.window.width - l.character.x - l.character.width,
+            };
             match (self.menu == Some(side), items.take()) {
                 (true, Some(items)) => {
                     let r = l.menu(side);
