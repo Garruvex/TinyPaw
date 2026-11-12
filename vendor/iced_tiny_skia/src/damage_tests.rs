@@ -1,6 +1,34 @@
 use crate::core::{Color, Font, Pixels, Point, Rectangle, Renderer as _, Shadow, Size, Vector, renderer};
 use crate::{Renderer, graphics::Viewport};
 
+#[cfg(feature = "image")]
+#[test]
+fn rotated_pose_tips_survive_partial_redraw() {
+    use crate::core::{image, Radians};
+    for scale in [1.0, 1.25, 1.5, 2.0] {
+        let size = Size::new(240, 240);
+        let viewport = Viewport::with_physical_size(size, scale);
+        let screen = Rectangle::with_size(viewport.logical_size());
+        let mut renderer = Renderer::new(Font::DEFAULT, Pixels(16.0));
+        renderer.reset(screen);
+        image::Renderer::draw_image(
+            &mut renderer,
+            crate::core::Image::new(image::Handle::from_rgba(8, 8, vec![255; 8 * 8 * 4]))
+                .rotation(Radians(0.7)),
+            Rectangle::new(Point::new(45.0, 20.0), Size::new(25.0, 70.0)),
+            screen,
+        );
+        let mut pixels = tiny_skia::Pixmap::new(size.width, size.height).unwrap();
+        let mut mask = tiny_skia::Mask::new(size.width, size.height).unwrap();
+        renderer.draw(&mut pixels.as_mut(), &mut mask, &viewport, &[screen], Color::TRANSPARENT);
+        let expected = pixels.clone();
+        // Rotated art extends left of x=45, outside its upright rectangle.
+        let tip = Rectangle::new(Point::new(28.0, 65.0), Size::new(12.0, 10.0));
+        renderer.draw(&mut pixels.as_mut(), &mut mask, &viewport, &[tip], Color::TRANSPARENT);
+        assert!(pixels.data() == expected.data(), "rotated tip at display scale {scale}");
+    }
+}
+
 #[test]
 fn partial_redraw_matches_a_fresh_transparent_frame() {
     let size = Size::new(180, 135);
