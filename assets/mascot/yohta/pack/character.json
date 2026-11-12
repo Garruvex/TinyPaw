@@ -1,0 +1,120 @@
+{
+  "author": "TinyPaw",
+  "canvas": [
+    620,
+    860
+  ],
+  "default_pose": "sit",
+  "id": "yohta",
+  "lines": {
+    "annotation_end": [
+      {
+        "text": "Nice drawing!"
+      },
+      {
+        "text": "All done?"
+      }
+    ],
+    "click": [
+      {
+        "text": "Hey!"
+      },
+      {
+        "text": "That tickles!"
+      },
+      {
+        "text": "Mrrp?"
+      }
+    ],
+    "drag": [
+      {
+        "text": "Whoa, where are we going?"
+      },
+      {
+        "text": "Wheee!"
+      }
+    ],
+    "drop": [
+      {
+        "text": "Nice spot."
+      },
+      {
+        "text": "Here? Okay."
+      }
+    ],
+    "idle": [
+      {
+        "text": "*yawns*"
+      },
+      {
+        "text": "Need a paw pointing at something?"
+      },
+      {
+        "text": "Still here! // Just resting my eyes."
+      }
+    ]
+  },
+  "name": "Yohta",
+  "poses": {
+    "sit": {
+      "body": "sit/body.png",
+      "eyes": [
+        {
+          "blink": "sit/eye-1-blink.png",
+          "mask": "sit/eye-1-mask.png",
+          "max_offset": [
+            0.011951612308621407,
+            0.008488371968269348
+          ],
+          "pupil": "sit/eye-1-pupil.png",
+          "white": "sit/eye-1-white.png"
+        },
+        {
+          "blink": "sit/eye-2-blink.png",
+          "mask": "sit/eye-2-mask.png",
+          "max_offset": [
+            0.034387096762657166,
+            0.010465116240084171
+          ],
+          "pupil": "sit/eye-2-pupil.png",
+          "white": "sit/eye-2-white.png"
+        }
+      ],
+      "ground_anchor": [
+        0.5,
+        0.9267441630363464
+      ],
+      "parts": [
+        {
+          "image": "sit/head.png",
+          "layer": "front",
+          "motion": {
+            "preset": "tilt",
+            "speed": 1.0,
+            "strength": 1.0
+          },
+          "pivot": [
+            0.43387097120285034,
+            0.6186046600341797
+          ],
+          "type": "head"
+        },
+        {
+          "image": "sit/tail.png",
+          "layer": "back",
+          "motion": {
+            "preset": "sway",
+            "speed": 1.0,
+            "strength": 1.0
+          },
+          "pivot": [
+            0.5564516186714172,
+            0.5930232405662537
+          ],
+          "type": "tail"
+        }
+      ]
+    }
+  },
+  "schema_version": 1
+}

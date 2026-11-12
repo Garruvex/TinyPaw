@@ -1,0 +1,69 @@
+[package]
+name = "tinypaw"
+version = "0.1.0"
+edition = "2024"
+default-run = "tinypaw"
+
+[build-dependencies]
+winresource = "0.1"
+
+[dependencies]
+iced = { version = "0.14.0", default-features = false, features = ["tiny-skia", "canvas", "svg", "crisp", "smol", "advanced", "image-without-codecs"] }
+interprocess = "2.4.8"
+rodio = { version = "0.23", default-features = false, features = ["playback", "wav"] }
+serde_json = "1.0"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[features]
+# Opt-in GPU renderer for comparisons. tiny-skia measured faster to activate
+# and far smaller in memory for the overlay (see docs/measurements.md).
+gpu = ["iced/wgpu"]
+
+[dev-dependencies]
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
+iced_tiny_skia = { version = "0.14.1", default-features = false }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# Keep the UI responsive in development too. Unoptimized path drawing made
+# the long stick/forearm take 38-53 ms per frame at 1440p, and unoptimized
+# iced layout, text shaping and glyph rasterization made the Character page
+# lag. Optimize every dependency; the app's own code stays debuggable.
+[profile.dev.package."*"]
+opt-level = 3
+
+[target.'cfg(windows)'.dependencies]
+# Loopback capture for the Follow beat trial (src/platform/beat.rs); the
+# same version rodio already uses.
+cpal = "0.18"
+# Per-app playback meters for music response (see src/platform/music.rs).
+# Needed by `windows::core::implement` for the process-loopback completion
+# handler; the version `windows` itself uses.
+windows-core = "0.62"
+windows = { version = "0.62", features = ["Win32_Media_Audio", "Win32_Media_Audio_Endpoints", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Console", "Win32_System_Threading", "Win32_Graphics_Gdi", "Win32_UI_Shell", "Win32_System_RemoteDesktop", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Dwm", "Win32_UI_HiDpi", "Win32_UI_Magnification", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_Media"] }
+
+# Global shortcuts and the tray are native on Windows and macOS. On Wayland a
+# compositor binding drives `tinypaw toggle`, and tray-icon would pull in GTK.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+global-hotkey = "0.10.0"
+tray-icon = "0.26.1"
+rfd = { version = "0.18", default-features = false }
+
+# Niri/Wayland: layer-shell overlays through iced_exwlshell. Pin it exactly; each
+# release tracks one Iced minor (0.21.x is Iced 0.14). See docs/architecture.md.
+[target.'cfg(target_os = "linux")'.dependencies]
+iced = { version = "0.14.0", default-features = false, features = ["wayland"] }
+iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
+wayland-client = "0.31"
+rfd = { version = "0.18", default-features = false, features = ["xdg-portal"] }
+
+# Local copy of iced_tiny_skia 0.14.1 with damage-tracking fixes: drop
+# shadows and stroke widths were left out of repaint bounds, leaving ghosts
+# of the quick bar's shadow and of ink and laser edges on transparent
+# windows. See vendor/iced_tiny_skia/TINYPAW.md.
+[patch.crates-io]
+iced_tiny_skia = { path = "vendor/iced_tiny_skia" }

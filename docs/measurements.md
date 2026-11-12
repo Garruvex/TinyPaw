@@ -1,0 +1,101 @@
+# TinyPaw measurements
+
+Release-build results recorded against the targets in [scope](scope.md#footprint-animation-and-ease-of-use). Add a row each time a tool lands, and keep the earlier rows for comparison.
+
+## Phase 1 vertical slice, 10 November 2026
+
+Machine: Windows 11 Home 10.0.26200, 1920×1080 primary display at 100% scaling. Build: `cargo build --release` (thin LTO, stripped). Memory is the process working set and private bytes as reported by PowerShell `Get-Process`. Activation time is measured from sending `tinypaw toggle` until `tinypaw status` reports annotating. It includes two CLI process launches, about 70–80 ms of the total.
+
+| Scenario | wgpu renderer | tiny-skia renderer (chosen) | Target |
+| --- | --- | --- | --- |
+| Idle in tray, Off, cold start | 13 MiB WS / 4 MiB private, 0.000% CPU over 10 s | 13 MiB WS / 4 MiB private, 0.000% CPU over 10 s | < 50 MiB, < 0.1% CPU |
+| Annotating, overlay open | 169 MiB WS / 228 MiB private | 28 MiB WS / 15 MiB private | — |
+| Idle after Off (overlay used once) | 127 MiB WS / 183 MiB private, 0.000% CPU | 18 MiB WS / 5 MiB private, 0.000% CPU | < 50 MiB, < 0.1% CPU |
+| First activation | 818 ms | 143 ms | Visible paw < 100 ms p95 |
+| Later activations | 639 ms, 684 ms | 142 ms, 151 ms | Visible paw < 100 ms p95 |
+| Overlay focused after `toggle` (one CLI launch) | — | 78–91 ms | — |
+| CPU while drawing a ~1.2 s stroke and tap | — | 31 ms total | p95 update within 3.1 ms at 160 Hz |
+| Release executable | 10.8 MiB | 4.4 MiB | < 25 MiB compressed download |
+
+**Decision.** Use tiny-skia for the overlay. wgpu creates a GPU surface each time the overlay opens, which cost 640–820 ms per activation. It also kept about 180 MiB private memory after Off. tiny-skia meets the idle footprint target, and its transparency and zero-alpha rendering work on Windows 11. The `gpu` Cargo feature keeps wgpu available for later comparisons.
+
+**Not yet measured.** Per-frame update and submission times, presented frame intervals and missed refreshes at 160 Hz and 60 Hz, game p95 frame time with TinyPaw Off, drawing, and Lens. Mixed-refresh and mixed-DPI displays. Activation time excluding CLI launch overhead; measure it from the hotkey with a frame timestamp.
+
+## Interface build (Graphite quick bar, wheel, settings), 10 November 2026
+
+Same machine and method as above, tiny-skia renderer. The build adds SVG icons, rodio tap playback and native file dialogs.
+
+| Scenario | Result | Target |
+| --- | --- | --- |
+| Idle in tray, Off, cold start | 12 MiB WS / 2 MiB private, 0.000% CPU over 10 s | < 50 MiB, < 0.1% CPU |
+| Annotating, quick bar shown | 28 MiB WS / 14 MiB private | — |
+| Idle after Off | 19 MiB WS / 4 MiB private, 0.000% CPU over 10 s | < 50 MiB, < 0.1% CPU |
+| Activation (incl. CLI polling) | 106 ms, 69 ms, 104 ms | Visible paw < 100 ms p95 |
+| Release executable | 7.5 MiB | < 25 MiB compressed download |
+
+The audio device opens on the first tap after switching On and closes on Off, so the idle process holds no audio stream. Ctrl+Alt+Space was already registered by another app on the test machine, so the wheel defaults to Ctrl+Alt+W. Settings > Controls now marks any shortcut another app holds.
+
+## Phase 3 tools (Text, Pin, Spotlight, Freeze), 10 November 2026
+
+| Scenario | Result | Target |
+| --- | --- | --- |
+| Freeze: `tinypaw freeze` until the frozen scene reports ready | 104–108 ms (incl. one CLI launch and status polling) | Still on screen ~150 ms |
+
+**Freeze capture.** A one-shot GDI copy of the composed primary display, taken 50 ms after the overlay stops drawing, so no live marks or paw are baked in (checked on screen). GDI shows no capture border. Desktop Duplication, HDR colour checks and the Discord-viewer border check are still open, as are Niri and macOS.
+
+**Rendering note.** Inside one Iced canvas layer, images paint above shapes. The frozen still is therefore a separate image layer beneath the canvas, which keeps marks and the paw visible on top of it.
+
+**Behaviour checked on screen (Windows 11, Zhuyin IME active):**
+
+- Text: the first Enter commits the IME candidate (你), the second places the label and returns to Point. Shift-letters place on the first Enter. Typing X while editing does not clear.
+- Pins number 1, 2, 3. Undo frees the last number, and Clear resets numbering (unit-tested).
+- Spotlight dims everything except a 160 px circle around the paw. The mask disappears in passthrough (unit-tested).
+- Freeze from Toggle mode, drawing on the still, then Return Live: the earlier live marks come back.
+
+Lens stays disabled. It needs a live source that leaves the overlay out of the frame, such as Windows Graphics Capture of the game window.
+
+## Pointer packs, 10 November 2026
+
+The Yohta, Moro, Moro Crayon and Zaeri packs come from the selected source art. `tools/prepare_pack.py` cropped each to its visible pixels and scaled it to 256 px tall. The hotspot is the topmost opaque pixel, the claw tip, and the wrist is the bottom centre. The four sprites total about 150 KB, embedded in the executable (8.7 MiB release build).
+
+Checked on screen: every pack draws with the claw exactly at the pointer, and Classic Stick rotates the sprite along the rod to the eased grip. Settings shows real thumbnails, and an unknown pack ID is refused. The Add-your-pointer file dialog flow was **not** completed on screen because the machine was in use; import, hotspot, install and reload-after-the-source-moves are covered by a unit test instead.
+
+## Phase 1 behavior checks (scripted on Windows 11)
+
+Passed with synthetic input on the primary display:
+
+- Toggle mode: Ctrl+Alt+P and `tinypaw toggle` open Point on a transparent topmost overlay. Drag draws from the original press, a click taps without drawing, Ctrl+Z undoes, X clears, and Escape ends the session. Focus returns to the previously active app.
+- Hold-to-draw mode: Ctrl+Alt+D held acquires input. Releasing it commits the stroke, hides the paw and toolbar, and leaves the mark click-through, with focus back on the previous app. Releasing the key before the mouse button keeps input until the button-up, which is swallowed, and only then returns focus.
+- CLI: `status`, refusal of unavailable commands (`undo` while Off exits 1 with a reason), single-instance detection and `quit`.
+
+Still required before advertising the Discord workflow, per the build order:
+
+- Remote-viewer test in a Discord monitor share using a second account or device, with a borderless game.
+- Game focus behavior: record whether each test game pauses, mutes, opens a menu or keeps mouse input while TinyPaw has focus. A pointer-lock game exits mid-drag, and the next gameplay click and camera movement must behave normally.
+- Clicking a slide hyperlink while active, then opening it normally after exit.
+- Mixed-DPI and negative monitor origins. Phase 1 covers the primary display only.
+- Repeating the slice on Niri.
+
+## Annotation smoothness pass, 12 November 2026
+
+CPU draw time per frame with the production renderer and damage tracking, release build, same machine. `cargo test --release render_cost -- --ignored --nocapture`. The "before" column is the 11 November commit (`a07aa7f`) running the same benchmark. Times are medians; the machine was in use, so expect ±30% noise.
+
+| Scenario | Before | After |
+| --- | --- | --- |
+| Spotlight following the pointer over 24 long strokes, 1920×1080 | 18.4 ms, 100% repainted | 3.6 ms, 10% repainted |
+| Same, 2560×1440 | 21.1 ms, 100% repainted | 3.0 ms, 5% repainted |
+| Spotlight alone, 2560×1440 | 10.0 ms | 2.3 ms |
+| Drawing a 600-point stroke over that ink, 2560×1440 | 8.2 ms, 25% repainted | 0.28 ms, 1% repainted |
+| Stretch Paw moving, 2560×1440 | 2.3 ms | 1.4 ms |
+| Furry Paw moving, 2560×1440 | 0.13 ms | 0.04 ms |
+
+What changed:
+
+- **Renderer** (vendored `iced_tiny_skia`, see `vendor/iced_tiny_skia/TINYPAW.md`): damaged regions render into their own small pixmap, live shapes are diffed one by one, strokes are outlined once, and only damaged rectangles are presented. Before, the full window (about 15 MB at 1440p) was copied to the screen every frame.
+- **Spotlight** dims the screen with fixed 128 px tiles, so moving it repaints only around the old and new hole. The soft edge is a cached radial image, which also replaces eight visible opacity bands with a smooth ramp. The mask is its own layer below the ink.
+- **Strokes** are smoothed (pointer positions arrive in whole pixels, so slow strokes followed a pixel staircase) and drawn as a centripetal Catmull-Rom curve through every sample, instead of straight segments between samples. Opaque strokes are drawn in short runs so a repaint touches only nearby runs, and only the growing end of a stroke being drawn repaints.
+- **Timing.** Windows rounds timed waits up to its 15.6 ms tick: a 16 ms wait measured 31 ms and a 33 ms wait 47 ms on this machine. The desktop lens moved on a 16 ms `WM_TIMER` (about 32 fps, lowest message priority), Spotlight anywhere tracked the cursor on a 16 ms timer, and the character polled at 16/33 ms. The lens and Spotlight anywhere now follow the compositor's refresh (`DwmFlush`), overlay animation uses the same refresh ticks instead of `window::frames()` (which fired once per open window and ran uncapped), and TinyPaw asks for 1 ms timer resolution only while something is live on screen.
+
+`cargo test stroke_quality_snapshot -- --ignored` with `TINYPAW_STROKE_PNG` set writes the old and new rendering of the same pointer-like stroke for comparison.
+
+**Not yet measured on screen:** presented frame rate, input-to-photon latency, and the desktop lens at 144/160 Hz. These are CPU draw times only.

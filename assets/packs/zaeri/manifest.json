@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "zaeri",
+  "name": "Zaeri",
+  "accent": "#8E55BD",
+  "pointer": {
+    "idle": "paw.png",
+    "hotspot": [
+      0.4528,
+      0.0215
+    ],
+    "wrist": [
+      0.5157,
+      0.9785
+    ]
+  }
+}

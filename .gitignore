@@ -1,0 +1,13 @@
+/target
+
+# Local agent tooling and test runtime data
+/.codex/
+/.tmp-runtime/
+/.tmp-transfer/
+/.work/
+
+# Local build and review output
+/output/
+
+# Source archives duplicating the extracted yohta folders
+/assets/mascot/yohta/*.zip

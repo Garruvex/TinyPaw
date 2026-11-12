@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "id": "yohta-chibi-mohawk",
+  "name": "Yohta Chibi Mohawk",
+  "canvas": [
+    1290,
+    1219
+  ],
+  "default_pose": "sit",
+  "poses": {
+    "sit": {
+      "ground_anchor": [
+        0.4186046511627907,
+        0.9614438063986874
+      ],
+      "body": "sit/body.png",
+      "parts": [
+        {
+          "type": "head",
+          "image": "sit/head.png",
+          "pivot": [
+            0.4186046511627907,
+            0.5906480721903199
+          ],
+          "layer": "front",
+          "motion": {
+            "preset": "tilt",
+            "strength": 0.45,
+            "speed": 0.8
+          }
+        },
+        {
+          "type": "tail",
+          "image": "sit/tail.png",
+          "pivot": [
+            0.5775193798449613,
+            0.8941755537325676
+          ],
+          "layer": "back",
+          "motion": {
+            "preset": "sway",
+            "strength": 0.45,
+            "speed": 0.8
+          }
+        }
+      ]
+    }
+  }
+}
