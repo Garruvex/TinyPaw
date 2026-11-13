@@ -335,10 +335,14 @@ pub(super) fn picture_controls<'a>(e: Event, held: bool, place: [f32; 3]) -> Ele
             .align_y(Alignment::Center)
         };
     column![
+        button("Align poses…").on_press(Message::Ui(UiMsg::Align(
+            crate::mascot::alignment::Action::Open(e)
+        ))),
         row![
             button("Preview pose").on_press(Message::Ui(UiMsg::PlacementPreview(Some(e)))),
             button("Finish preview").on_press(Message::Ui(UiMsg::PlacementPreview(None))),
-        ].spacing(6),
+        ]
+        .spacing(6),
         slider_row("Left/right", 0, -1.0..=1.0, 0.005),
         slider_row("Up/down", 1, -1.0..=1.0, 0.005),
         slider_row("Size", 2, 0.1..=4.0, 0.01),
@@ -1015,9 +1019,8 @@ pub(super) fn motion_preview<'a>(
         h2("Preview"),
         mode_label("Test character", "Reactions and gaze as on the desktop."),
         container(bubble).width(Length::Fill).center_x(Length::Fill),
-        canvas(MotionStage { preview: m })
-            .width(Length::Fill)
-            .height(300),
+        container(canvas(MotionStage { preview: m }).width(Length::Fill).height(if m.alignment.is_some() { 220 } else { 300 })).clip(true),
+        alignment_controls(m),
         row![
             test("Click", Test::Click),
             test("Drag ←", Test::DragLeft),
@@ -1035,6 +1038,38 @@ pub(super) fn motion_preview<'a>(
     .into()
 }
 
+fn alignment_controls(m: &crate::mascot::preview::MotionPreview) -> Element<'_, Message> {
+    use crate::mascot::alignment::Action;
+    let Some(a) = &m.alignment else {
+        return space().height(0).into();
+    };
+    let message = |action| Message::Ui(UiMsg::Align(action));
+    let mut controls = column![
+        text("Align poses").size(15),
+        text("Drag the pose to move it. Arrow keys nudge. Size changes the pose; Zoom changes this preview.").size(12),
+        button(if a.side_by_side { "Use overlay" } else { "Show side by side" }).on_press(message(Action::Compare(!a.side_by_side))),
+        text("Overlay opacity").size(12),
+        slider(0.0..=1.0, a.opacity, move |v| message(Action::Opacity(v))).step(0.01_f32),
+        text(format!("Zoom {:.0}%", a.zoom * 100.0)).size(12),
+        slider(0.1..=2.0, a.zoom, move |v| message(Action::Zoom(v))).step(0.05_f32),
+        button("Match head size").on_press(message(Action::Match)),
+        row![button("Reset").on_press(message(Action::Reset)), button("Cancel").on_press(message(Action::Finish(false))), button("Apply").on_press(message(Action::Finish(true)))].spacing(5),
+    ].spacing(6);
+    if a.matching {
+        controls = controls.push(text(a.instruction()).size(13));
+    }
+    if let Some(error) = &a.error {
+        controls = controls.push(text(error).size(12));
+    }
+    controls.into()
+}
+
+#[derive(Default)]
+pub(super) struct PoseDrag {
+    start: Option<(iced::Point, [f32; 3])>,
+    focused: bool,
+}
+
 pub(super) struct MotionStage<'a> {
     preview: &'a crate::mascot::preview::MotionPreview,
 }
@@ -1045,11 +1080,22 @@ impl MotionStage<'_> {
         let rig = self.preview.rig();
         let canvas_size = rig.size();
         let pad = 18.0;
-        let k = ((size.width - pad * 2.0) / canvas_size.width)
-            .min((size.height - pad * 2.0) / canvas_size.height);
+        let side = self
+            .preview
+            .alignment
+            .as_ref()
+            .is_some_and(|a| a.side_by_side);
+        let available_width = if side { size.width / 2.0 } else { size.width };
+        let k = ((available_width - pad * 2.0) / canvas_size.width)
+            .min((size.height - pad * 2.0) / canvas_size.height)
+            * self.preview.alignment.as_ref().map_or(1.0, |a| a.zoom);
         let feet = rig.anchor();
         let origin = iced::Vector::new(
-            size.width / 2.0 - feet.x * k,
+            (if side {
+                size.width * 0.75
+            } else {
+                size.width / 2.0
+            }) - feet.x * k,
             size.height - pad - feet.y * k,
         );
         (k, origin)
@@ -1057,14 +1103,14 @@ impl MotionStage<'_> {
 }
 
 impl canvas::Program<Message> for MotionStage<'_> {
-    type State = ();
+    type State = PoseDrag;
 
     /// Drives the animation: each redraw advances the preview and asks for
     /// the next one, so only this canvas repaints per frame. While picking
     /// the bubble's anchor, a click on the stage sets it.
     fn update(
         &self,
-        _state: &mut (),
+        state: &mut PoseDrag,
         event: &canvas::Event,
         bounds: iced::Rectangle,
         cursor: iced::mouse::Cursor,
@@ -1095,6 +1141,61 @@ impl canvas::Program<Message> for MotionStage<'_> {
                 .unwrap_or(std::time::Duration::from_millis(7));
             return Some(canvas::Action::request_redraw_at(*now + wait));
         }
+        if let Some(a) = &self.preview.alignment {
+            use crate::mascot::alignment::Action;
+            let publish =
+                |action| canvas::Action::publish(Message::Ui(UiMsg::Align(action))).and_capture();
+            if let canvas::Event::Mouse(Event::ButtonPressed(Button::Left)) = event {
+                state.focused = point.is_some();
+                if let Some(point) = point {
+                    if a.matching {
+                        let mut point = point;
+                        if a.side_by_side && a.points.len() < 2 {
+                            point.x += bounds.width / (2.0 * k);
+                        }
+                        return Some(publish(Action::Point(point)));
+                    }
+                    if !self.preview.placing_grip {
+                        state.start = Some((point, a.art.place));
+                        return Some(canvas::Action::capture());
+                    }
+                }
+            }
+            if let canvas::Event::Mouse(Event::ButtonReleased(Button::Left)) = event {
+                state.start = None;
+            }
+            if let canvas::Event::Mouse(Event::CursorMoved { .. }) = event {
+                if let (Some((start, original)), Some(point)) = (state.start, point) {
+                    let stage = self.preview.rig().size();
+                    return Some(publish(Action::Place([
+                        (original[0] + (point.x - start.x) / stage.width).clamp(-1.0, 1.0),
+                        (original[1] + (point.y - start.y) / stage.height).clamp(-1.0, 1.0),
+                        original[2],
+                    ])));
+                }
+            }
+            if state.focused {
+                if let canvas::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key: iced::keyboard::Key::Named(key),
+                    ..
+                }) = event
+                {
+                    use iced::keyboard::key::Named;
+                    let mut place = a.art.place;
+                    let size = self.preview.rig().size();
+                    match key {
+                        Named::ArrowLeft => place[0] -= 1.0 / size.width,
+                        Named::ArrowRight => place[0] += 1.0 / size.width,
+                        Named::ArrowUp => place[1] -= 1.0 / size.height,
+                        Named::ArrowDown => place[1] += 1.0 / size.height,
+                        _ => return None,
+                    }
+                    place[0] = place[0].clamp(-1.0, 1.0);
+                    place[1] = place[1].clamp(-1.0, 1.0);
+                    return Some(publish(Action::Place(place)));
+                }
+            }
+        }
         if self.preview.placing_grip {
             if let canvas::Event::Mouse(Event::ButtonPressed(Button::Left)) = event {
                 if let (Some(point), Some(picture)) = (point, self.preview.placement_picture()) {
@@ -1102,7 +1203,10 @@ impl canvas::Program<Message> for MotionStage<'_> {
                     let fraction = picture.source_fraction(size, point);
                     let grip = [fraction.x, fraction.y];
                     if grip.iter().all(|v| (0.0..=1.0).contains(v)) {
-                        return Some(canvas::Action::publish(Message::Ui(UiMsg::GripSet(Some(grip)))).and_capture());
+                        return Some(
+                            canvas::Action::publish(Message::Ui(UiMsg::GripSet(Some(grip))))
+                                .and_capture(),
+                        );
                     }
                 }
             }
@@ -1143,11 +1247,13 @@ impl canvas::Program<Message> for MotionStage<'_> {
 
     fn mouse_interaction(
         &self,
-        _state: &(),
+        _state: &PoseDrag,
         bounds: iced::Rectangle,
         cursor: iced::mouse::Cursor,
     ) -> iced::mouse::Interaction {
-        if (self.preview.placing_bubble || self.preview.placing_mouth || self.preview.placing_grip) && cursor.is_over(bounds) {
+        if (self.preview.placing_bubble || self.preview.placing_mouth || self.preview.placing_grip)
+            && cursor.is_over(bounds)
+        {
             iced::mouse::Interaction::Crosshair
         } else {
             iced::mouse::Interaction::default()
@@ -1156,7 +1262,7 @@ impl canvas::Program<Message> for MotionStage<'_> {
 
     fn draw(
         &self,
-        _state: &(),
+        _state: &PoseDrag,
         renderer: &iced::Renderer,
         _theme: &Theme,
         bounds: iced::Rectangle,
@@ -1211,10 +1317,46 @@ impl canvas::Program<Message> for MotionStage<'_> {
         frame.translate(origin);
         frame.scale(k);
         if let Some(picture) = self.preview.placement_picture() {
-            rig.draw_picture(&mut frame, &picture);
+            if let Some(a) = &self.preview.alignment {
+                if !a.matching || a.points.len() < 2 {
+                    frame.with_save(|frame| {
+                        if a.side_by_side {
+                            frame.translate(iced::Vector::new(-size.width / (2.0 * k), 0.0));
+                        }
+                        rig.draw_pose(frame, &crate::mascot::motion::Pose::default());
+                    });
+                }
+                if !a.matching || a.points.len() >= 2 {
+                    rig.draw_picture_alpha(
+                        &mut frame,
+                        &picture,
+                        if a.matching || a.side_by_side {
+                            1.0
+                        } else {
+                            a.opacity
+                        },
+                    );
+                }
+                let feet = rig.anchor();
+                frame.stroke(
+                    &canvas::Path::line(
+                        iced::Point::new(0.0, feet.y),
+                        iced::Point::new(canvas_size.width, feet.y),
+                    ),
+                    canvas::Stroke::default()
+                        .with_color(iced::Color::from_rgb(0.4, 0.7, 0.5))
+                        .with_width(1.0 / k),
+                );
+            } else {
+                rig.draw_picture(&mut frame, &picture);
+            }
             if self.preview.placement_preview == Some(Event::Pickup) {
-                frame.stroke(&canvas::Path::circle(picture.hold_in(canvas_size), 6.0 / k),
-                    canvas::Stroke::default().with_color(iced::Color::from_rgb(1.0, 0.3, 0.4)).with_width(2.0 / k));
+                frame.stroke(
+                    &canvas::Path::circle(picture.hold_in(canvas_size), 6.0 / k),
+                    canvas::Stroke::default()
+                        .with_color(iced::Color::from_rgb(1.0, 0.3, 0.4))
+                        .with_width(2.0 / k),
+                );
             }
             return vec![frame.into_geometry()];
         }

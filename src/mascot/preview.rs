@@ -70,6 +70,7 @@ pub struct Control {
 }
 
 pub struct MotionPreview {
+    pub alignment: Option<super::alignment::Alignment>,
     pub placing_grip: bool,
     pub id: &'static str,
     rig: Rig,
@@ -137,6 +138,7 @@ impl MotionPreview {
             placing_bubble: false,
             placing_mouth: false,
             placing_grip: false,
+            alignment: None,
             id,
             labels: rig.motion_labels(),
             kinds: rig.motion_parts().iter().map(|p| p.kind).collect(),
@@ -379,12 +381,78 @@ impl MotionPreview {
         Some(picture.with_grip(art.grip))
     }
 
+    pub fn align(&mut self, action: super::alignment::Action) {
+        use super::alignment::{Action, Alignment};
+        match action {
+            Action::Open(event) => {
+                let art = if event == Event::Pickup {
+                    self.held()
+                } else {
+                    self.art(event)
+                };
+                if let Some(art) = art {
+                    self.alignment = Some(Alignment::new(event, art));
+                    self.placement_preview = Some(event);
+                }
+            }
+            Action::Finish(apply) => {
+                if let Some(a) = self.alignment.take() {
+                    if apply {
+                        if a.event == Event::Pickup {
+                            self.set_held(Some(a.art));
+                        } else {
+                            self.set_art(a.event, Some(a.art));
+                        }
+                    }
+                }
+                self.placement_preview = None;
+                self.placing_grip = false;
+            }
+            action => {
+                if let Some(a) = &mut self.alignment {
+                    match action {
+                        Action::Compare(side_by_side) => a.side_by_side = side_by_side,
+                        Action::Opacity(v) => a.opacity = v.clamp(0.0, 1.0),
+                        Action::Zoom(v) => a.zoom = v.clamp(0.1, 2.0),
+                        Action::Match => {
+                            a.matching = true;
+                            a.points.clear();
+                            a.error = None;
+                            self.placing_grip = false;
+                        }
+                        Action::Point(p) if a.matching => a.point(p, self.rig.size()),
+                        Action::Place(place) => {
+                            a.art.place = place;
+                            a.error = None;
+                        }
+                        Action::Reset => {
+                            a.art.place = [0.0, 0.0, 1.0];
+                            a.art.grip = None;
+                            a.matching = false;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
     pub fn placement_picture(&self) -> Option<super::rig::Picture> {
-        let event = self.placement_preview?;
-        self.picture_for(if event == Event::Pickup { self.held() } else { self.art(event) })
+        if self.live.borrow().test.is_some() { return None; }
+        let event = self.alignment.as_ref().map(|a| a.event).or(self.placement_preview)?;
+        self.picture_for(if event == Event::Pickup {
+            self.held()
+        } else {
+            self.art(event)
+        })
     }
 
     pub fn set_grip(&mut self, grip: Option<[f32; 2]>) {
+        if let Some(a) = &mut self.alignment {
+            a.art.grip = grip;
+            self.placing_grip = false;
+            return;
+        }
         if let Some(art) = self.entry_mut(Event::Pickup).held.as_mut() {
             art.grip = grip;
         }
@@ -392,10 +460,20 @@ impl MotionPreview {
     }
 
     pub fn held(&self) -> Option<super::reactions::Art> {
+        if let Some(a) = &self.alignment {
+            if a.event == Event::Pickup {
+                return Some(a.art.clone());
+            }
+        }
         super::reactions::held(&self.reactions_pack, &self.reactions)
     }
 
     pub fn art(&self, e: Event) -> Option<super::reactions::Art> {
+        if let Some(a) = &self.alignment {
+            if a.event == e {
+                return Some(a.art.clone());
+            }
+        }
         super::reactions::art(&self.reactions_pack, &self.reactions, e)
     }
 
@@ -426,6 +504,16 @@ impl MotionPreview {
 
     /// Nudges a picture's alignment: `which` is 0 x, 1 y, 2 scale.
     pub fn set_place(&mut self, e: Event, held: bool, which: usize, value: f32) {
+        if let Some(a) = &mut self.alignment {
+            if which < 3 {
+                a.art.place[which] = if which == 2 {
+                    value.clamp(0.1, 4.0)
+                } else {
+                    value.clamp(-1.0, 1.0)
+                };
+            }
+            return;
+        }
         let entry = self.entry_mut(e);
         let art = if held {
             entry.held.as_mut()
@@ -479,6 +567,7 @@ impl MotionPreview {
     /// Back to the pack's reaction sounds (unsaved until Save).
     pub fn reset_reactions(&mut self) {
         self.placing_grip = false;
+        self.alignment = None;
         self.placement_preview = None;
         self.reactions = Config::default();
     }
@@ -526,6 +615,7 @@ impl MotionPreview {
     /// Back to what's saved, dropping every unsaved change.
     pub fn discard(&mut self) {
         self.placing_grip = false;
+        self.alignment = None;
         self.placement_preview = None;
         self.specs = self.saved.clone();
         self.rig.set_motion(&self.specs);
@@ -908,6 +998,36 @@ mod tests {
     }
 
     #[test]
+    fn alignment_cancel_apply_and_preview_zoom_are_independent() {
+        use super::super::{alignment::Action, reactions::Art};
+        let mut p = yohta();
+        let mut art = Art::new(SoundRef::User("art-1.png".into()));
+        art.grip = Some([0.2, 0.3]);
+        p.set_held(Some(art.clone()));
+        p.align(Action::Open(Event::Pickup));
+        p.align(Action::Zoom(1.8));
+        assert_eq!(p.held().unwrap(), art);
+        p.align(Action::Place([0.1, 0.2, 1.4]));
+        p.set_grip(Some([0.4, 0.5]));
+        assert_eq!(
+            p.reactions
+                .entry(Event::Pickup)
+                .unwrap()
+                .held
+                .as_ref()
+                .unwrap(),
+            &art
+        );
+        p.align(Action::Finish(false));
+        assert_eq!(p.held().unwrap(), art);
+        p.align(Action::Open(Event::Pickup));
+        p.align(Action::Place([0.1, 0.2, 1.4]));
+        p.align(Action::Finish(true));
+        assert_eq!(p.held().unwrap().place, [0.1, 0.2, 1.4]);
+        assert_eq!(p.held().unwrap().grip, art.grip);
+    }
+
+    #[test]
     fn the_held_pose_shows_while_carried_and_drop_art_after() {
         use super::super::reactions::Art;
         let mut p = yohta();
@@ -922,7 +1042,10 @@ mod tests {
         assert_eq!(p.placement_picture().unwrap().place[0], 0.05);
         p.set_grip(Some([0.2, 0.3]));
         assert_eq!(p.held().unwrap().grip, Some([0.2, 0.3]));
-        assert_eq!(p.placement_picture().unwrap().hold, iced::Point::new(0.2, 0.3));
+        assert_eq!(
+            p.placement_picture().unwrap().hold,
+            iced::Point::new(0.2, 0.3)
+        );
         p.set_grip(None);
         assert_eq!(p.held().unwrap().grip, None);
         p.set_place(Event::Drop, false, 2, 1.35);

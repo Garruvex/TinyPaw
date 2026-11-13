@@ -705,8 +705,10 @@ impl Picture {
 
     pub fn source_fraction(&self, stage: Size, point: Point) -> Point {
         let size = self.size_in(stage);
-        Point::new((point.x - self.place[0] * stage.width) / (size.width * self.place[2]),
-            (point.y - self.place[1] * stage.height) / (size.height * self.place[2]))
+        Point::new(
+            (point.x - self.place[0] * stage.width) / (size.width * self.place[2]),
+            (point.y - self.place[1] * stage.height) / (size.height * self.place[2]),
+        )
     }
 
     /// `p`, in the picture's pixels, in the stage frame as placed.
@@ -811,6 +813,10 @@ impl Rig {
 
     /// Draws `picture` in place of the character, on the same stage.
     pub fn draw_picture(&self, frame: &mut Frame, picture: &Picture) {
+        self.draw_picture_alpha(frame, picture, 1.0);
+    }
+
+    pub fn draw_picture_alpha(&self, frame: &mut Frame, picture: &Picture, opacity: f32) {
         let [x, y, k] = picture.place;
         let size = picture.size_in(self.size);
         frame.draw_image(
@@ -818,7 +824,7 @@ impl Rig {
                 Point::new(x * self.size.width, y * self.size.height),
                 Size::new(size.width * k, size.height * k),
             ),
-            canvas::Image::new(picture.image.clone()),
+            canvas::Image::new(picture.image.clone()).opacity(opacity),
         );
     }
 }
@@ -1006,8 +1012,7 @@ mod tests {
     #[test]
     fn authored_grip_uses_source_padding_and_placement() {
         let pixels = RgbaImage::new(200, 100);
-        let picture = Picture::new(&pixels, [0.1, -0.2, 1.25])
-            .with_grip(Some([0.3, 0.4]));
+        let picture = Picture::new(&pixels, [0.1, -0.2, 1.25]).with_grip(Some([0.3, 0.4]));
         let grip = picture.hold_in(Size::new(400.0, 200.0));
         assert!((grip.x - 190.0).abs() < 0.001);
         assert!((grip.y - 60.0).abs() < 0.001);

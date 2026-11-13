@@ -9,6 +9,11 @@ impl App {
         out: &mut Outcomes,
     ) -> Task<Message> {
         match ui {
+            UiMsg::Align(action) => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.align(action);
+                }
+            }
             UiMsg::GripEdit => {
                 if let Some(p) = &mut self.studio.motion_preview {
                     p.placing_grip = !p.placing_grip;

@@ -167,6 +167,7 @@ pub enum UiMsg {
     CompanionTest(crate::mascot::companionship::State),
     CompanionMouth,
     /// Align a picture: event, whether it's the held pose, x/y/scale, value.
+    Align(crate::mascot::alignment::Action),
     GripEdit,
     GripSet(Option<[f32; 2]>),
     ReactionPlace(crate::mascot::reactions::Event, bool, usize, f32),
