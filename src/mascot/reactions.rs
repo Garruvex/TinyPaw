@@ -254,7 +254,11 @@ fn parse_art(v: &Json, user: bool) -> Result<Art, String> {
     let grip = match &v["grip"] {
         Json::Null => None,
         Json::Array(points) if points.len() == 2 => {
-            let coordinate = |v: &Json| v.as_f64().filter(|n| n.is_finite() && (0.0..=1.0).contains(n)).map(|n| n as f32);
+            let coordinate = |v: &Json| {
+                v.as_f64()
+                    .filter(|n| n.is_finite() && (0.0..=1.0).contains(n))
+                    .map(|n| n as f32)
+            };
             match (coordinate(&points[0]), coordinate(&points[1])) {
                 (Some(x), Some(y)) => Some([x, y]),
                 _ => return Err("grip coordinates must be between 0 and 1".into()),
@@ -265,15 +269,28 @@ fn parse_art(v: &Json, user: bool) -> Result<Art, String> {
     let source_size = match &v["source_size"] {
         Json::Null => None,
         Json::Array(size) if size.len() == 2 => {
-            let dimension = |v: &Json| v.as_u64().filter(|n| (1..=8192).contains(n)).map(|n| n as u32);
+            let dimension = |v: &Json| {
+                v.as_u64()
+                    .filter(|n| (1..=8192).contains(n))
+                    .map(|n| n as u32)
+            };
             match (dimension(&size[0]), dimension(&size[1])) {
                 (Some(w), Some(h)) => Some([w, h]),
-                _ => return Err("source_size must contain two pixel dimensions from 1 to 8192".into()),
+                _ => {
+                    return Err(
+                        "source_size must contain two pixel dimensions from 1 to 8192".into(),
+                    );
+                }
             }
         }
         _ => return Err("source_size must be [width, height]".into()),
     };
-    Ok(Art { image, place, grip, source_size })
+    Ok(Art {
+        image,
+        place,
+        grip,
+        source_size,
+    })
 }
 
 /// One event's entry in a `reactions` object: its sound and visual, plus
@@ -367,7 +384,10 @@ impl Config {
     }
 
     pub fn artwork(&self) -> impl Iterator<Item = &Art> {
-        self.events.iter().flatten().flat_map(|entry| [&entry.art, &entry.held].into_iter().flatten())
+        self.events
+            .iter()
+            .flatten()
+            .flat_map(|entry| [&entry.art, &entry.held].into_iter().flatten())
     }
 
     /// Every reaction picture this layer names.
@@ -1081,7 +1101,10 @@ mod tests {
         );
         assert_eq!(visual(&Config::default(), &c, Event::Drop), Visual::Artwork);
         assert!(art(&Config::default(), &c, Event::Drop).is_some());
-        assert_eq!(held(&Config::default(), &c).unwrap().grip, Some([0.31, 0.17]));
+        assert_eq!(
+            held(&Config::default(), &c).unwrap().grip,
+            Some([0.31, 0.17])
+        );
         assert_eq!(c.images().len(), 2);
         assert_eq!(c.entry(Event::Drop).unwrap().fall, Some(false));
         assert!(!falls(&Config::default(), &c));

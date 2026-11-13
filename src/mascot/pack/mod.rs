@@ -193,7 +193,12 @@ impl Character {
         };
         let path = self.sound_path(&art.image)?;
         let bytes = fs::read(&path).ok()?;
-        decode_png(&bytes, &path.to_string_lossy(), art.source_size.map(|[w,h]| (w,h)).unwrap_or(canvas)).ok()
+        decode_png(
+            &bytes,
+            &path.to_string_lossy(),
+            art.source_size.map(|[w, h]| (w, h)).unwrap_or(canvas),
+        )
+        .ok()
     }
 
     /// What `e` does to the picture, pack under user.
@@ -1284,7 +1289,9 @@ pub fn import_reaction_image(
     let art = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
         .map_err(|e| format!("not a readable PNG ({e})"))?
         .to_rgba8();
-    if trim(&art).is_none() { return Err("that PNG is empty".into()); }
+    if trim(&art).is_none() {
+        return Err("that PNG is empty".into());
+    }
     let dimensions = art.dimensions();
     let dir = user_sounds(&root, id);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -1292,20 +1299,34 @@ pub fn import_reaction_image(
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis());
     let file = loop {
+        use std::io::Write;
         let name = format!("art-{n}.png");
-        if !dir.join(&name).exists() {
-            break name;
+        let destination = dir.join(&name);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&destination)
+        {
+            Ok(mut output) => {
+                if let Err(error) = output.write_all(&bytes).and_then(|_| output.sync_all()) {
+                    drop(output);
+                    let _ = fs::remove_file(&destination);
+                    return Err(error.to_string());
+                }
+                break name;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(error) => return Err(error.to_string()),
         }
-        n += 1;
     };
-    art
-        .save_with_format(dir.join(&file), image::ImageFormat::Png)
-        .map_err(|e| e.to_string())?;
     let mut result = super::reactions::Art::new(SoundRef::User(file));
     result.source_size = Some([dimensions.0, dimensions.1]);
     let fit = (canvas.0 as f32 / dimensions.0 as f32).min(canvas.1 as f32 / dimensions.1 as f32);
-    result.place = [(1.0 - dimensions.0 as f32 * fit / canvas.0 as f32) / 2.0,
-        1.0 - dimensions.1 as f32 * fit / canvas.1 as f32, 1.0];
+    result.place = [
+        (1.0 - dimensions.0 as f32 * fit / canvas.0 as f32) / 2.0,
+        1.0 - dimensions.1 as f32 * fit / canvas.1 as f32,
+        1.0,
+    ];
     Ok(result)
 }
 

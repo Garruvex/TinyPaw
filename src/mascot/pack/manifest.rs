@@ -431,6 +431,29 @@ impl Manifest {
     }
 
     pub(in crate::mascot) fn validate_files(&self, folder: &Path) -> Result<(), String> {
+        for art in self.reactions.artwork() {
+            if let SoundRef::Pack(path) = &art.image {
+                let size = art.source_size.map(|[w, h]| (w, h)).unwrap_or(self.canvas);
+                let conflicting_pose = size != self.canvas
+                    && self
+                        .poses
+                        .iter()
+                        .any(|pose| pose.assets().contains(&path.as_str()));
+                let conflicting_art = self.reactions.artwork().any(|other| {
+                    other.image == art.image
+                        && other
+                            .source_size
+                            .map(|[w, h]| (w, h))
+                            .unwrap_or(self.canvas)
+                            != size
+                });
+                if conflicting_pose || conflicting_art {
+                    return Err(format!(
+                        "{path} has conflicting image dimensions in this character"
+                    ));
+                }
+            }
+        }
         for sound in self.sounds() {
             check_sound(folder, sound)?;
         }
