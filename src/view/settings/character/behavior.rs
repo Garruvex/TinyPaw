@@ -1041,19 +1041,42 @@ pub(super) fn motion_preview<'a>(
 fn alignment_controls(m: &crate::mascot::preview::MotionPreview) -> Element<'_, Message> {
     use crate::mascot::alignment::Action;
     let Some(a) = &m.alignment else {
-        return space().height(0).into();
+        return if m.held().is_some() {
+            button("Align held pose")
+                .on_press(Message::Ui(UiMsg::Align(Action::Open(Event::Pickup))))
+                .into()
+        } else {
+            space().height(0).into()
+        };
     };
     let message = |action| Message::Ui(UiMsg::Align(action));
+    let number = |label: &'static str, index: usize| {
+        column![
+            text(label).size(11),
+            iced::widget::text_input("0", &a.numbers[index])
+                .on_input(move |value| Message::Ui(UiMsg::Align(Action::Number(index, value))))
+                .size(12),
+        ]
+    };
     let mut controls = column![
         text("Align poses").size(15),
-        text("Drag the pose to move it. Arrow keys nudge. Size changes the pose; Zoom changes this preview.").size(12),
-        button(if a.side_by_side { "Use overlay" } else { "Show side by side" }).on_press(message(Action::Compare(!a.side_by_side))),
+        text("Drag the pose to move it. Arrow keys nudge. Size changes the pose. Zoom changes this preview.").size(12),
+        button(if a.side_by_side { "Use overlay" } else { "Show side by side" })
+            .on_press(message(Action::Compare(!a.side_by_side))),
         text("Overlay opacity").size(12),
-        slider(0.0..=1.0, a.opacity, move |v| message(Action::Opacity(v))).step(0.01_f32),
+        slider(0.0..=1.0, a.opacity, move |value| message(Action::Opacity(value)))
+            .step(0.01_f32),
         text(format!("Zoom {:.0}%", a.zoom * 100.0)).size(12),
-        slider(0.1..=2.0, a.zoom, move |v| message(Action::Zoom(v))).step(0.05_f32),
+        slider(0.1..=2.0, a.zoom, move |value| message(Action::Zoom(value)))
+            .step(0.05_f32),
+        row![number("Left/right %", 0), number("Up/down %", 1), number("Size %", 2)]
+            .spacing(5),
         button("Match head size").on_press(message(Action::Match)),
-        row![button("Reset").on_press(message(Action::Reset)), button("Cancel").on_press(message(Action::Finish(false))), button("Apply").on_press(message(Action::Finish(true)))].spacing(5),
+        row![
+            button("Reset").on_press(message(Action::Reset)),
+            button("Cancel").on_press(message(Action::Finish(false))),
+            button("Apply").on_press_maybe(a.error.is_none().then(|| message(Action::Finish(true)))),
+        ].spacing(5),
     ].spacing(6);
     if a.matching {
         controls = controls.push(text(a.instruction()).size(13));
@@ -1068,6 +1091,7 @@ fn alignment_controls(m: &crate::mascot::preview::MotionPreview) -> Element<'_, 
 pub(super) struct PoseDrag {
     start: Option<(iced::Point, [f32; 3])>,
     focused: bool,
+    gripping: bool,
 }
 
 pub(super) struct MotionStage<'a> {
@@ -1145,6 +1169,21 @@ impl canvas::Program<Message> for MotionStage<'_> {
             use crate::mascot::alignment::Action;
             let publish =
                 |action| canvas::Action::publish(Message::Ui(UiMsg::Align(action))).and_capture();
+            if let canvas::Event::Mouse(Event::CursorMoved { .. }) = event {
+                if state.gripping {
+                    if let (Some(point), Some(picture)) = (point, self.preview.placement_picture())
+                    {
+                        let grip = picture.source_fraction(self.preview.rig().size(), point);
+                        return Some(
+                            canvas::Action::publish(Message::Ui(UiMsg::GripSet(Some([
+                                grip.x.clamp(0.0, 1.0),
+                                grip.y.clamp(0.0, 1.0),
+                            ]))))
+                            .and_capture(),
+                        );
+                    }
+                }
+            }
             if let canvas::Event::Mouse(Event::ButtonPressed(Button::Left)) = event {
                 state.focused = point.is_some();
                 if let Some(point) = point {
@@ -1155,6 +1194,15 @@ impl canvas::Program<Message> for MotionStage<'_> {
                         }
                         return Some(publish(Action::Point(point)));
                     }
+                    if a.event == crate::mascot::reactions::Event::Pickup {
+                        if let Some(picture) = self.preview.placement_picture() {
+                            if point.distance(picture.hold_in(self.preview.rig().size())) < 9.0 / k
+                            {
+                                state.gripping = true;
+                                return Some(canvas::Action::capture());
+                            }
+                        }
+                    }
                     if !self.preview.placing_grip {
                         state.start = Some((point, a.art.place));
                         return Some(canvas::Action::capture());
@@ -1163,6 +1211,7 @@ impl canvas::Program<Message> for MotionStage<'_> {
             }
             if let canvas::Event::Mouse(Event::ButtonReleased(Button::Left)) = event {
                 state.start = None;
+                state.gripping = false;
             }
             if let canvas::Event::Mouse(Event::CursorMoved { .. }) = event {
                 if let (Some((start, original)), Some(point)) = (state.start, point) {

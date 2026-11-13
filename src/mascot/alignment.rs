@@ -10,6 +10,7 @@ pub enum Action {
     Match,
     Point(Point),
     Place([f32; 3]),
+    Number(usize, String),
     Reset,
     Finish(bool),
 }
@@ -17,6 +18,7 @@ pub enum Action {
 pub struct Alignment {
     pub event: Event,
     pub art: Art,
+    pub numbers: [String; 3],
     pub opacity: f32,
     pub side_by_side: bool,
     pub zoom: f32,
@@ -29,6 +31,7 @@ impl Alignment {
     pub fn new(event: Event, art: Art) -> Self {
         Self {
             event,
+            numbers: art.place.map(|value| format!("{:.2}", value * 100.0)),
             art,
             opacity: 0.5,
             side_by_side: false,
@@ -39,6 +42,44 @@ impl Alignment {
         }
     }
 
+    pub fn refresh_numbers(&mut self) {
+        self.numbers = self.art.place.map(|value| format!("{:.2}", value * 100.0));
+    }
+
+    pub fn number(&mut self, index: usize, text: String) {
+        if index >= 3 {
+            return;
+        }
+        self.numbers[index] = text;
+        let parsed: Option<Vec<f32>> = self
+            .numbers
+            .iter()
+            .map(|text| text.parse::<f32>().ok().map(|value| value / 100.0))
+            .collect();
+        let valid = parsed.filter(|values| {
+            values.iter().enumerate().all(|(index, value)| {
+                value.is_finite()
+                    && if index == 2 {
+                        (0.1..=4.0).contains(value)
+                    } else {
+                        value.abs() <= 1.0
+                    }
+            })
+        });
+        match valid {
+            Some(values) => {
+                self.art.place = [values[0], values[1], values[2]];
+                self.error = None;
+            }
+            None => {
+                self.error = Some(
+                    "Offsets must be between -100% and 100%. Size must be between 10% and 400%."
+                        .into(),
+                )
+            }
+        }
+    }
+
     pub fn point(&mut self, point: Point, stage: Size) {
         self.points.push(point);
         if self.points.len() < 4 {
@@ -46,7 +87,10 @@ impl Alignment {
         }
         let result = match_landmarks(self.art.place, &self.points, stage);
         match result {
-            Ok(place) => self.art.place = place,
+            Ok(place) => {
+                self.art.place = place;
+                self.refresh_numbers();
+            }
             Err(error) => self.error = Some(error.into()),
         }
         self.matching = false;
@@ -96,6 +140,23 @@ fn match_landmarks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn numeric_edits_reject_invalid_scale_and_preserve_last_valid_geometry() {
+        use super::super::lines::SoundRef;
+        let mut alignment =
+            Alignment::new(Event::Pickup, Art::new(SoundRef::User("art-1.png".into())));
+        alignment.number(2, "152".into());
+        assert_eq!(alignment.art.place[2], 1.52);
+        alignment.number(2, "NaN".into());
+        assert_eq!(alignment.art.place[2], 1.52);
+        assert!(alignment.error.is_some());
+        alignment.number(0, "-26".into());
+        assert!(alignment.error.is_some());
+        alignment.number(2, "152".into());
+        assert_eq!(alignment.art.place[0], -0.26);
+        assert!(alignment.error.is_none());
+    }
+
     #[test]
     fn matching_scales_and_aligns_midpoints_without_changing_head_proportions() {
         let points = [

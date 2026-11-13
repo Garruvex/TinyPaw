@@ -396,6 +396,7 @@ impl MotionPreview {
                 }
             }
             Action::Finish(apply) => {
+                if apply && self.alignment.as_ref().is_some_and(|a| a.error.is_some()) { return; }
                 if let Some(a) = self.alignment.take() {
                     if apply {
                         if a.event == Event::Pickup {
@@ -421,13 +422,17 @@ impl MotionPreview {
                             self.placing_grip = false;
                         }
                         Action::Point(p) if a.matching => a.point(p, self.rig.size()),
+                        Action::Number(index, text) => a.number(index, text),
                         Action::Place(place) => {
                             a.art.place = place;
+                            a.refresh_numbers();
                             a.error = None;
                         }
                         Action::Reset => {
                             a.art.place = [0.0, 0.0, 1.0];
                             a.art.grip = None;
+                            a.refresh_numbers();
+                            a.error = None;
                             a.matching = false;
                         }
                         _ => {}
@@ -511,6 +516,7 @@ impl MotionPreview {
                 } else {
                     value.clamp(-1.0, 1.0)
                 };
+                a.refresh_numbers();
             }
             return;
         }
