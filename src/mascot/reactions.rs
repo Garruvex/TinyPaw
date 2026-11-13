@@ -180,6 +180,8 @@ pub struct Art {
     pub place: [f32; 3],
     /// Grip in full source-image fractions. None selects automatic placement.
     pub grip: Option<[f32; 2]>,
+    /// Original PNG dimensions. Absence retains legacy shared-canvas drawing.
+    pub source_size: Option<[u32; 2]>,
 }
 
 impl Art {
@@ -188,11 +190,12 @@ impl Art {
             image,
             place: [0.0, 0.0, 1.0],
             grip: None,
+            source_size: None,
         }
     }
 
     fn to_json(&self) -> Json {
-        json!({ "image": file_json(&self.image), "place": self.place, "grip": self.grip })
+        json!({ "image": file_json(&self.image), "place": self.place, "grip": self.grip, "source_size": self.source_size })
     }
 }
 
@@ -259,7 +262,18 @@ fn parse_art(v: &Json, user: bool) -> Result<Art, String> {
         }
         _ => return Err("grip must be [x, y] or null for automatic".into()),
     };
-    Ok(Art { image, place, grip })
+    let source_size = match &v["source_size"] {
+        Json::Null => None,
+        Json::Array(size) if size.len() == 2 => {
+            let dimension = |v: &Json| v.as_u64().filter(|n| (1..=8192).contains(n)).map(|n| n as u32);
+            match (dimension(&size[0]), dimension(&size[1])) {
+                (Some(w), Some(h)) => Some([w, h]),
+                _ => return Err("source_size must contain two pixel dimensions from 1 to 8192".into()),
+            }
+        }
+        _ => return Err("source_size must be [width, height]".into()),
+    };
+    Ok(Art { image, place, grip, source_size })
 }
 
 /// One event's entry in a `reactions` object: its sound and visual, plus
@@ -350,6 +364,10 @@ impl Config {
             }
         }
         out
+    }
+
+    pub fn artwork(&self) -> impl Iterator<Item = &Art> {
+        self.events.iter().flatten().flat_map(|entry| [&entry.art, &entry.held].into_iter().flatten())
     }
 
     /// Every reaction picture this layer names.

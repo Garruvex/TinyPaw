@@ -1099,8 +1099,8 @@ impl canvas::Program<Message> for MotionStage<'_> {
             if let canvas::Event::Mouse(Event::ButtonPressed(Button::Left)) = event {
                 if let (Some(point), Some(picture)) = (point, self.preview.placement_picture()) {
                     let size = self.preview.rig().size();
-                    let [x, y, scale] = picture.place;
-                    let grip = [(point.x / size.width - x) / scale, (point.y / size.height - y) / scale];
+                    let fraction = picture.source_fraction(size, point);
+                    let grip = [fraction.x, fraction.y];
                     if grip.iter().all(|v| (0.0..=1.0).contains(v)) {
                         return Some(canvas::Action::publish(Message::Ui(UiMsg::GripSet(Some(grip)))).and_capture());
                     }

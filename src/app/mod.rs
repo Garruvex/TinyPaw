@@ -1847,7 +1847,9 @@ fn character_pictures(c: &Character) -> crate::mascot::desktop::Pictures {
     let picture = |art: Option<reactions::Art>| {
         let art = art?;
         let img = c.reaction_image(&art)?;
-        Some(crate::mascot::rig::Picture::new(&img, art.place).with_grip(art.grip))
+        let mut picture = crate::mascot::rig::Picture::new(&img, art.place).with_grip(art.grip);
+        picture.preserve_aspect = art.source_size.is_some();
+        Some(picture)
     };
     crate::mascot::desktop::Pictures {
         held: picture(reactions::held(&pack, &user)),

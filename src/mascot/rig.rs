@@ -659,6 +659,7 @@ impl Rig {
 /// offset in canvas fractions.
 #[derive(Debug, Clone)]
 pub struct Picture {
+    pub preserve_aspect: bool,
     pub image: Handle,
     pub place: [f32; 3],
     /// Where a held pose hangs from, in the picture's pixels: the top
@@ -685,25 +686,43 @@ impl Picture {
         );
         Self {
             image: handle(pixels.clone()),
+            preserve_aspect: false,
             place,
             hold: hold_point(pixels),
             art,
         }
     }
 
+    pub fn size_in(&self, stage: Size) -> Size {
+        if self.preserve_aspect {
+            if let Some((w, h)) = image_size(&self.image) {
+                let fit = (stage.width / w).min(stage.height / h);
+                return Size::new(w * fit, h * fit);
+            }
+        }
+        stage
+    }
+
+    pub fn source_fraction(&self, stage: Size, point: Point) -> Point {
+        let size = self.size_in(stage);
+        Point::new((point.x - self.place[0] * stage.width) / (size.width * self.place[2]),
+            (point.y - self.place[1] * stage.height) / (size.height * self.place[2]))
+    }
+
     /// `p`, in the picture's pixels, in the stage frame as placed.
     pub fn in_stage(&self, stage: Size, p: Point) -> Point {
         let [x, y, k] = self.place;
         let (pw, ph) = image_size(&self.image).unwrap_or((stage.width, stage.height));
+        let size = self.size_in(stage);
         Point::new(
-            x * stage.width + p.x * stage.width * k / pw,
-            y * stage.height + p.y * stage.height * k / ph,
+            x * stage.width + p.x * size.width * k / pw,
+            y * stage.height + p.y * size.height * k / ph,
         )
     }
 
     /// Alpha hit testing in the same stage coordinates used for drawing.
     pub fn hit(&self, stage: Size, point: Point) -> bool {
-        let [x, y, k] = self.place;
+        let fraction = self.source_fraction(stage, point);
         if let Handle::Rgba {
             width,
             height,
@@ -711,8 +730,8 @@ impl Picture {
             ..
         } = &self.image
         {
-            let px = (point.x / stage.width - x) / k * *width as f32;
-            let py = (point.y / stage.height - y) / k * *height as f32;
+            let px = fraction.x * *width as f32;
+            let py = fraction.y * *height as f32;
             if px >= 0.0 && py >= 0.0 && px < *width as f32 && py < *height as f32 {
                 return pixels[((py as u32 * width + px as u32) * 4 + 3) as usize] >= 32;
             }
@@ -793,10 +812,11 @@ impl Rig {
     /// Draws `picture` in place of the character, on the same stage.
     pub fn draw_picture(&self, frame: &mut Frame, picture: &Picture) {
         let [x, y, k] = picture.place;
+        let size = picture.size_in(self.size);
         frame.draw_image(
             Rectangle::new(
                 Point::new(x * self.size.width, y * self.size.height),
-                Size::new(self.size.width * k, self.size.height * k),
+                Size::new(size.width * k, size.height * k),
             ),
             canvas::Image::new(picture.image.clone()),
         );
@@ -965,6 +985,22 @@ mod tests {
         // The head counts for clicks, the empty corners don't.
         assert!(rig.opaque(Point::new(50.0, 20.0)));
         assert!(!rig.opaque(Point::new(3.0, 3.0)));
+    }
+
+    #[test]
+    fn original_rectangular_art_keeps_aspect_and_inverse_mapping() {
+        let pixels = RgbaImage::from_pixel(120, 40, image::Rgba([255; 4]));
+        let mut picture = Picture::new(&pixels, [0.1, 0.2, 1.25]);
+        picture.preserve_aspect = true;
+        let stage = Size::new(200.0, 300.0);
+        let size = picture.size_in(stage);
+        assert!((size.width / size.height - 3.0).abs() < 0.001);
+        let at = picture.in_stage(stage, Point::new(30.0, 20.0));
+        let fraction = picture.source_fraction(stage, at);
+        assert!((fraction.x - 0.25).abs() < 0.001);
+        assert!((fraction.y - 0.5).abs() < 0.001);
+        assert!(picture.hit(stage, at));
+        assert!(!picture.hit(stage, Point::ORIGIN));
     }
 
     #[test]

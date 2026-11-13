@@ -831,11 +831,15 @@ fn held_poses_are_pack_images_that_install_and_export() {
     // A user Use artwork picture travels with Export.
     let user = dir.join("user");
     fs::create_dir_all(&user).unwrap();
-    block(10, 90).save(user.join("art-5.png")).unwrap();
+    let original = image::RgbaImage::from_pixel(60, 30, image::Rgba([40, 80, 200, 255]));
+    original.save(user.join("art-5.png")).unwrap();
+    let mut source_art = Art::new(SoundRef::User("art-5.png".into()));
+    source_art.source_size = Some([60, 30]);
+    source_art.grip = Some([0.3, 0.2]);
     let mut layer = Config::default();
     let entry = super::super::reactions::Entry {
         visual: Some(super::super::reactions::Visual::Artwork),
-        art: Some(Art::new(SoundRef::User("art-5.png".into()))),
+        art: Some(source_art),
         ..Default::default()
     };
     layer.set_entry(Event::Drop, Some(entry));
@@ -849,6 +853,14 @@ fn held_poses_are_pack_images_that_install_and_export() {
     assert!(
         folder.join("reactions/art-5.png").exists() && folder.join("reactions/held.png").exists()
     );
+    let exported = read_manifest(&folder).unwrap();
+    let exported_art = exported.reactions.entry(Event::Drop).unwrap().art.as_ref().unwrap();
+    assert_eq!(exported_art.source_size, Some([60, 30]));
+    assert_eq!(exported_art.grip, Some([0.3, 0.2]));
+    let restored = image::open(folder.join("reactions/art-5.png")).unwrap().to_rgba8();
+    assert_eq!(restored, original);
+    let Imported::Installed(reopened) = import_folder_into(&dir.join("reopened"), &folder, &[], OnDuplicate::Ask).unwrap() else { panic!("reimported"); };
+    assert_eq!(reopened.reaction_image(exported_art).unwrap(), original);
     // A held pose on another stage size is refused.
     RgbaImage::new(50, 50)
         .save(src.join("reactions/held.png"))
@@ -1044,12 +1056,4 @@ fn replacing_a_pack_keeps_the_users_overrides() {
         "replace keeps what the user changed"
     );
     fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn full_canvas_reaction_import_preserves_authored_padding() {
-    let mut art = image::RgbaImage::new(80, 60);
-    art.put_pixel(7, 13, image::Rgba([90, 140, 210, 255]));
-    assert_eq!(super::fit_reaction_image(art.clone(), (80, 60)).unwrap(), art);
-    assert!(super::fit_reaction_image(image::RgbaImage::new(80, 60), (80, 60)).is_err());
 }

@@ -516,20 +516,19 @@ impl App {
             }
             Message::ReactionWavPicked(_, None) => {}
             Message::ReactionPicturePicked(e, Some(path)) => {
-                use crate::mascot::reactions::{Art, Event};
+                use crate::mascot::reactions::Event;
                 if let Some(p) = &mut self.studio.motion_preview {
                     let canvas = p.rig().size();
                     let canvas = (canvas.width as u32, canvas.height as u32);
                     match characters::import_reaction_image(p.id, &path, canvas) {
-                        Ok(file) => {
-                            let art = Art::new(file.clone());
+                        Ok(art) => {
                             let c = self.characters.iter().find(|c| c.id == p.id);
                             if let Some(img) = c.and_then(|c| c.reaction_image(&art)) {
-                                p.add_picture(file, &img);
+                                p.add_picture(art.image.clone(), &img);
                             }
                             if e == Event::Pickup {
                                 p.set_held(Some(art));
-                                p.test(crate::mascot::preview::Test::DragRight);
+                                p.placement_preview = Some(e);
                             } else {
                                 p.set_art(e, Some(art));
                             }

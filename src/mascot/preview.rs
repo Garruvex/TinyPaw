@@ -375,6 +375,7 @@ impl MotionPreview {
             .1
             .clone();
         picture.place = art.place;
+        picture.preserve_aspect = art.source_size.is_some();
         Some(picture.with_grip(art.grip))
     }
 

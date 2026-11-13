@@ -391,6 +391,13 @@ impl Manifest {
             .into_iter()
             .map(|a| (a, self.canvas))
             .collect();
+        for art in self.reactions.artwork() {
+            if let (SoundRef::Pack(path), Some([w, h])) = (&art.image, art.source_size) {
+                if let Some(resource) = out.iter_mut().find(|(name, _)| *name == path) {
+                    resource.1 = (w, h);
+                }
+            }
+        }
         out.extend(self.editor.iter().map(|r| (r.source.as_str(), r.size)));
         out
     }
