@@ -68,6 +68,7 @@ impl Renderer {
 
     pub fn layers(&mut self) -> &[Layer] {
         self.layers.flush();
+
         self.layers.as_slice()
     }
 
@@ -83,6 +84,14 @@ impl Renderer {
 
         self.layers.flush();
 
+        // Rotated image sampling must use a stable surface origin. Rebuilding
+        // its transform around each scratch region can move a boundary pixel.
+        let rotated_images = self.layers.iter().any(|layer| {
+            layer.images.iter().any(|image| match image {
+                graphics::Image::Raster { image, .. } => f32::from(image.rotation) != 0.0,
+                graphics::Image::Vector { svg, .. } => f32::from(svg.rotation) != 0.0,
+            })
+        });
         // TinyPaw patch: render each damaged region into a scratch pixmap the
         // size of that region and copy it back. Upstream drew into the whole
         // window with a window-sized clip mask, so every path was rasterized
@@ -99,6 +108,24 @@ impl Renderer {
                 continue;
             }
             let (w, h) = (x1 - x0, y1 - y0);
+            if rotated_images {
+                let mut clear = tiny_skia::Paint::default();
+                clear.set_color(engine::into_color(background_color));
+                clear.blend_mode = tiny_skia::BlendMode::Source;
+                clear.anti_alias = false;
+                pixels.fill_rect(
+                    tiny_skia::Rect::from_xywh(x0 as f32, y0 as f32, w as f32, h as f32).unwrap(),
+                    &clear,
+                    tiny_skia::Transform::identity(),
+                    None,
+                );
+                Self::draw_region(
+                    &mut self.engine, &self.layers, pixels, _clip_mask,
+                    scale_factor, Transformation::IDENTITY,
+                    Rectangle::new(Point::new(x0 as f32, y0 as f32), Size::new(w as f32, h as f32)),
+                );
+                continue;
+            }
             self.scratch.clear();
             self.scratch.resize(w as usize * h as usize, 0);
             if self

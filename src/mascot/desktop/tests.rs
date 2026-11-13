@@ -825,3 +825,34 @@ fn enlarged_held_art_keeps_room_to_swing() {
         );
     }
 }
+
+#[test]
+fn authored_grips_keep_full_swing_clearance_for_rectangular_original_art() {
+    for grip in [[0.0, 0.0], [1.0, 0.0], [0.15, 0.3], [0.5, 1.0]] {
+        for height in [73.0, 292.0, 584.0] {
+            let (mut desktop, _) =
+                Desktop::open("yohta", Rig::load(), height, (500.0, 500.0), 5, false);
+            let stage = desktop.rig.size();
+            let pixels = image::RgbaImage::from_pixel(100, 260, image::Rgba([120, 180, 220, 255]));
+            let mut picture =
+                super::super::rig::Picture::new(&pixels, [-0.1, 0.05, 1.25]).with_grip(Some(grip));
+            picture.preserve_aspect = true;
+            desktop.set_pictures(Pictures {
+                held: Some(picture),
+                ..Default::default()
+            });
+            let layout = desktop.layout;
+            let pivot = Point::new(stage.width * 0.5, desktop.rig.visible_rows().0);
+            let grab = Point::new(
+                layout.character.x + pivot.x * layout.scale,
+                layout.character.y + pivot.y * layout.scale,
+            );
+            for angle in [-HANG_SWING, -0.4, 0.0, 0.4, HANG_SWING] {
+                assert!(
+                    (desktop.fit_carry(grab, pivot, angle) - angle).abs() < 0.001,
+                    "grip {grip:?}, height {height}, angle {angle}"
+                );
+            }
+        }
+    }
+}
