@@ -1,0 +1,105 @@
+import { Slider, Switch } from "std-widgets.slint";
+import { Tokens } from "tokens.slint";
+import { Btn, NavItem, NavGroup, PageTitle, SectionTitle, Hint } from "kit.slint";
+
+export struct Instance {
+    name: string,
+    display: string,
+    size: float,
+    shown: bool,
+}
+
+export component SettingsWindow inherits Window {
+    title: "TinyPaw Settings (prototype)";
+    preferred-width: 1000px;
+    preferred-height: 680px;
+    background: Tokens.surface;
+    in property <[Instance]> instances;
+    callback size-changed(int, float);
+    callback shown-changed(int, bool);
+    callback customize();
+
+    HorizontalLayout {
+        Rectangle {
+            width: 208px;
+            background: Tokens.nav;
+            VerticalLayout {
+                padding: 16px;
+                spacing: 4px;
+                alignment: start;
+                NavGroup { text: "Annotate"; }
+                NavItem { text: "Pointer"; }
+                NavItem { text: "Ink & text"; }
+                NavItem { text: "Spotlight & lens"; }
+                NavGroup { text: "Desktop"; }
+                NavItem { text: "Characters"; selected: true; }
+                NavItem { text: "Music response"; }
+                NavGroup { text: "App"; }
+                NavItem { text: "Shortcuts"; }
+                NavItem { text: "Sound"; }
+                NavItem { text: "Display & motion"; }
+            }
+        }
+        VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+            alignment: start;
+            PageTitle { text: "Characters"; }
+            SectionTitle { text: "On the desktop"; }
+            Rectangle {
+                background: Tokens.well;
+                border-radius: Tokens.radius-card;
+                VerticalLayout {
+                    for inst[i] in root.instances: Rectangle {
+                        height: 60px;
+                        HorizontalLayout {
+                            padding: 10px;
+                            spacing: 14px;
+                            Rectangle {
+                                width: 40px;
+                                height: 40px;
+                                border-radius: Tokens.radius-control;
+                                background: Tokens.control;
+                            }
+                            VerticalLayout {
+                                width: 110px;
+                                alignment: center;
+                                Text { text: inst.name; font-weight: 600; font-size: Tokens.font-body; color: Tokens.text; }
+                                Text { text: inst.display; font-size: Tokens.font-label; color: Tokens.muted; }
+                            }
+                            Slider {
+                                horizontal-stretch: 1;
+                                min-width: 120px;
+                                minimum: 88;
+                                maximum: 292;
+                                value: inst.size;
+                                changed(v) => { root.size-changed(i, v); }
+                            }
+                            Text {
+                                width: 56px;
+                                vertical-alignment: center;
+                                text: round(inst.size) + " px";
+                                font-size: Tokens.font-body;
+                                color: Tokens.muted;
+                            }
+                            Switch {
+                                checked: inst.shown;
+                                toggled => { root.shown-changed(i, self.checked); }
+                            }
+                        }
+                    }
+                }
+            }
+            SectionTitle { text: "Library"; }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                Btn { text: "Add to desktop"; primary: true; }
+                Btn { text: "Customize"; clicked => { root.customize(); } }
+                Btn { text: "Export"; }
+                Btn { text: "Import"; }
+            }
+            Hint { text: "Prototype: instances are in-memory only."; }
+        }
+    }
+}

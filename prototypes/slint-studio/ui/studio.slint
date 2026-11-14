@@ -1,0 +1,123 @@
+import { Slider } from "std-widgets.slint";
+import { Tokens } from "tokens.slint";
+import { Tab, Hint, SectionTitle } from "kit.slint";
+
+// The preview picture is rendered by Rust (stand-in for the shared character
+// renderer). The selection box below is drawn here from the same state, so any
+// drift between the two shows up as misalignment.
+export component StudioWindow inherits Window {
+    title: "Character studio (prototype)";
+    preferred-width: 1100px;
+    preferred-height: 720px;
+    background: Tokens.surface;
+
+    in property <image> frame;
+    in property <string> stats;
+    in-out property <float> zoom: 1.0;
+    in-out property <length> layer-cx: 180px;
+    in-out property <length> layer-cy: 290px;
+    in property <length> layer-w: 90px;
+    in property <length> layer-h: 60px;
+    callback layer-changed();
+    changed layer-cx => { root.layer-changed(); }
+    changed layer-cy => { root.layer-changed(); }
+    changed zoom => { root.layer-changed(); }
+    out property <length> stage-w: 360px;
+    out property <length> stage-h: 440px;
+    out property <length> stage-left: stage.absolute-position.x;
+    out property <length> stage-top: stage.absolute-position.y;
+
+    HorizontalLayout {
+        VerticalLayout {
+            width: 380px;
+            padding: 10px;
+            spacing: 10px;
+            alignment: start;
+            Rectangle {
+                height: 36px;
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                    Tab { text: "Test"; }
+                    Tab { text: "Arrange"; selected: true; }
+                }
+            }
+            stage := Rectangle {
+                width: root.stage-w;
+                height: root.stage-h;
+                background: Tokens.well;
+                clip: true;
+                Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: root.frame;
+                    image-fit: fill;
+                }
+                box := Rectangle {
+                    x: (root.layer-cx - root.layer-w / 2 - root.stage-w / 2) * root.zoom + root.stage-w / 2 - 1px;
+                    y: (root.layer-cy - root.layer-h / 2 - root.stage-h / 2) * root.zoom + root.stage-h / 2 - 1px;
+                    width: root.layer-w * root.zoom + 2px;
+                    height: root.layer-h * root.zoom + 2px;
+                    border-width: 1px;
+                    border-color: #FF00FF;
+                }
+                // The touch area covers the fixed stage, not the box: the box
+                // moves with the layer, and a touch area that moves under the
+                // cursor reports shrinking offsets and makes the drag lag and shake.
+                TouchArea {
+                    property <bool> grabbed;
+                    property <length> start-x;
+                    property <length> start-y;
+                    mouse-cursor: self.grabbed || self.has-hover ? move : default;
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.down) {
+                            // Grab only when the press lands on the layer.
+                            self.grabbed = self.mouse-x >= box.x && self.mouse-x <= box.x + box.width
+                                && self.mouse-y >= box.y && self.mouse-y <= box.y + box.height;
+                            self.start-x = root.layer-cx;
+                            self.start-y = root.layer-cy;
+                        } else if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) {
+                            self.grabbed = false;
+                        }
+                    }
+                    moved => {
+                        if (self.grabbed) {
+                            root.layer-cx = self.start-x + (self.mouse-x - self.pressed-x) / root.zoom;
+                            root.layer-cy = self.start-y + (self.mouse-y - self.pressed-y) / root.zoom;
+                        }
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                Text { text: "Zoom"; font-size: Tokens.font-body; color: Tokens.muted; vertical-alignment: center; }
+                Slider {
+                    minimum: 0.5;
+                    maximum: 3;
+                    value: root.zoom;
+                    changed(v) => { root.zoom = v; }
+                }
+                Text { width: 44px; text: round(root.zoom * 100) + "%"; font-size: Tokens.font-body; color: Tokens.muted; vertical-alignment: center; }
+            }
+            Hint { text: root.stats; }
+        }
+        Rectangle {
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+                alignment: start;
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                    Tab { text: "Artwork"; }
+                    Tab { text: "Reactions"; selected: true; }
+                    Tab { text: "Speech"; }
+                    Tab { text: "Motion"; }
+                    Tab { text: "Advanced"; }
+                }
+                SectionTitle { text: "Drag the highlighted layer in the preview"; }
+                Hint { text: "The magenta box is drawn by Slint from the layer position and zoom. The green layer and the character are drawn by Rust into a pixel buffer. They must stay aligned at every zoom."; }
+            }
+        }
+    }
+}

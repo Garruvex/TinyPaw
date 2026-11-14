@@ -1,0 +1,23 @@
+# Step 0 prototype for docs/settings-and-multi-character-plan.md.
+# Isolated from the main package: it has its own workspace and lockfile.
+[package]
+name = "slint-studio-prototype"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software"] }
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd", "png-format"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_ProcessStatus", "Win32_System_Threading"] }
+
+[build-dependencies]
+slint-build = "=1.18.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -24,7 +24,7 @@ This plan replaces the single event loop with three, moves characters to a nativ
 | One master switch shows or hides all characters; each instance keeps its own shown flag | Agreed |
 | Code is licensed GPL-3.0-or-later; character artwork is not covered by the code licence | Agreed; licence files not yet added |
 | Three loops, with characters on a native stage outside Iced | Proposed; assumed by this plan |
-| Slint for Settings and the studio | Proposed; decided by the prototype in step 0 |
+| Slint for Settings and the studio | Chosen. Step 0 measured it (see [Step 0 results](#step-0-results)) and the drag feel was confirmed by hand |
 | Overlays and the quick bar stay on Iced | Proposed |
 
 GPUI is the fallback for Settings and the studio if the Slint prototype fails on the canvas. It is not planned for overlays: it renders on the GPU only, and the overlay measured 640–820 ms to activate and about 180 MiB retained on a GPU surface (see [measurements](measurements.md)).
@@ -172,7 +172,7 @@ Each instance has its own shown flag, changed from its menu or its row in Settin
 
 | Step | Work | Done when |
 |---|---|---|
-| 0 | Slint prototype: Characters page and the studio preview pane with one draggable layer, software renderer | Drag feel, window open time, memory and overlay alignment under zoom are recorded, and the framework is chosen |
+| 0 | Slint prototype: Characters page and the studio preview pane with one draggable layer, software renderer | Drag feel, window open time, memory and overlay alignment under zoom are recorded, and the framework is chosen. Done: Slint chosen; drag feel confirmed by hand |
 | 1 | Foundations: tokens, kit, templates, `docs/ui-guide.md`, the guard, and the typed boundary between core and UI | A sample page built only from the kit passes the guard |
 | 2 | Shared character renderer: the rig draws to a pixel buffer without Iced | The current desktop character and preview render from it with pixel checks unchanged |
 | 3 | Stage engine with one character | Same behaviour as today; no character traffic in the dispatcher; idle footprint within budget |
@@ -182,6 +182,47 @@ Each instance has its own shown flag, changed from its menu or its row in Settin
 | 7 | Social awareness | Planned separately |
 
 Each step ends with tests, strict Clippy and a Windows release build passing.
+
+## Step 0 results
+
+The prototype is in [prototypes/slint-studio](../prototypes/slint-studio/README.md): Slint 1.18.1, software renderer, a Characters page and a studio preview with one draggable layer. Release build, Windows 11, windows at their real sizes (1000×680 and 1100×720 logical). Times are means over 300 drag steps; "whole window" is a full software repaint, the worst case for presenting.
+
+| Measure | 100% scale | 150% scale | 200% scale |
+|---|---|---|---|
+| Process start to event loop | 8 ms | 10 ms | 8 ms |
+| Settings first full render | 4 ms | 8 ms | 13 ms |
+| Studio first frame | 4 ms | 10 ms | 16 ms |
+| Renderer plus hand-off per frame | 0.33 ms | 0.69 ms | 1.16 ms |
+| Whole studio window repaint | 3.8 ms | 8.5 ms | 15.4 ms |
+| Memory with both windows open (working set / private) | 15 / 3 MiB | 16 / 4 MiB | 17 / 5 MiB |
+| Slint box against Rust layer edges | within 1 px | within 1 px | within 1 px |
+
+The alignment test uses the green layer's exact pixels against the magenta box Slint draws, at zoom 0.5, 1, 1.37, 2 and 3 with fractional layer positions. At 200% the box sits two physical pixels outside the layer because its one logical pixel border is two physical pixels; that matches what was expected. At zoom 3 the layer runs past the bottom of the preview and is clipped, which shows as a one pixel difference at that edge.
+
+What this says:
+
+- **Hand-off is cheap.** Pushing a freshly rendered pixel buffer to Slint every frame costs about a millisecond even at 200%.
+- **The overlay stays aligned.** Drawing the editing overlay in Slint from the same state as the renderer holds to a pixel across zoom and scale.
+- **Memory and startup are small.** About 15 MiB with both windows open, and under 20 ms to a running event loop. This is in the range of the current tray footprint and far below a webview.
+- **Slint redraws only what changed in normal use**, so a drag repaints the preview region, not the whole window. The whole-window figure is an upper bound; at 200% it is high enough that this has to be confirmed on screen.
+
+The first hands-on drag was bad: the layer shook and trailed the cursor. Two causes were found and fixed, and both are rules for the real studio:
+
+- **Put the touch area on a fixed surface, never inside the thing being dragged.** The prototype's touch area sat inside the box, and the box moves with the layer. Slint reports the cursor relative to the touch area, so the offset shrank as the layer moved and the layer settled at half the cursor's distance (a test reproduced exactly 50 px of lag over a 100 px drag, at every zoom). The touch area now covers the stage and works out whether the press landed on the layer. After the fix the layer follows the cursor with no gap at zoom 0.5, 1 and 2.
+- **Redraw the picture when the state changes, not on a timer.** The box is drawn by Slint immediately but the picture came from a 16 ms timer, so the picture trailed the box by 3 to 6 px at a moderate drag speed. A change handler on the layer position and zoom now redraws the picture in the same frame, and the trail is 0 px. The frame timer is kept only for animation.
+
+What is not known yet:
+
+- **Drag feel with a real mouse after the fix, and display pacing.** The scripted tests use synthetic pointer events and CPU time, not frames shown. Drag the layer again to judge it.
+- **Idle CPU.** The prototype redraws the preview at 60 frames a second all the time. The real renderer should draw only when something changes.
+- **Wayland.** Not tried.
+
+Findings for the design system:
+
+- **Stock widgets do not take our tokens.** The standard Slider and Switch in the dark style use the style's blue accent, not the cyan in `Tokens`. A themed kit has to supply its own slider and switch, or override the style palette; the second option was not checked.
+- **Custom kit components were quick to write.** Button, navigation item, tab, page title and hint came to about 90 lines, and the pages are written only from them and the tokens.
+- **`SLINT_SCALE_FACTOR` was ignored by this backend.** Scale is changed by a window event in the test.
+- **Slint's licence.** The crate is `GPL-3.0-only OR` a royalty-free licence `OR` a commercial one. Our code can still be GPL-3.0-or-later, but a built binary that includes Slint is effectively GPL-3.0-only.
 
 ## Working rules for implementers
 
