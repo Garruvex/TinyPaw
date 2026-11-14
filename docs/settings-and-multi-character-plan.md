@@ -250,7 +250,7 @@ The Iced desktop character is a 2,400-line state machine (`mascot/desktop.rs`) t
 |---|---|---|
 | 3a | `src/stage`: a stage thread with a native layered window, drawn from the shared renderer, click-through outside the artwork, carried with the mouse, intents in and events out | Done; reachable with `tinypaw --stage-probe [animate]` |
 | 3b | Move the motion and gesture state machine (`Desktop` poll, press, flight, music, sleep, gaze) onto the stage thread, free of Iced tasks | Done; the stage hosts the real `Desktop` (see below) |
-| 3c | Speech bubble and right-click menu drawn by the stage; text drawn with cosmic-text, which Iced already depends on | Not started |
+| 3c | Speech bubble and right-click menu drawn by the stage; text drawn with cosmic-text, which Iced already depends on | Done; drawing checked in a test image, input not yet tried by hand (see below) |
 | 3d | Cut the dispatcher over: settings changes become intents, gestures become events, the Iced desktop view and its 15–60 Hz polling are deleted | Not started |
 
 Slice 3b results. The stage thread now runs the same `Desktop` state machine the Iced character uses, so the behaviour is shared rather than copied:
@@ -261,6 +261,16 @@ Slice 3b results. The stage thread now runs the same `Desktop` state machine the
 - Hit testing asks the character logic, so the click-through region is exactly today's (silhouette cells, reaction pictures), not just pixel alpha.
 - Checked with `tinypaw --stage-probe` in a release build: Yohta appears at the default spot, a press and release raises `Gesture(Click)`, points on the artwork take the click and the window corner passes through. Idle sway on (33 ms tier): 0.3% of one core (16 ms over 5 s), 21 MiB working set, 10.5 MiB private. The Desktop unit tests still pass unchanged (274 tests).
 - Not on the stage yet: speech bubble and right-click menu (slice 3c), so lines raise sound events but show no text and the right button does nothing. Carry, throw and fall use the existing logic and have not been tried by hand on the stage.
+
+Slice 3c results. The stage now draws the speech bubble and the right-click menu itself, so the character window no longer needs any Iced widget:
+
+- **Text** is shaped and rasterized with cosmic-text (the engine Iced uses) in `mascot/typeset.rs`, and **icons** with resvg, from the same SVG source the Iced icons use. Both are blended into the pixel buffer. The font database starts with Segoe UI only (regular, semibold, symbol, emoji) and loads every installed font once, the first time a line needs another script, so the stage does not hold all system fonts for English text. Text is shaped at the device size so it stays sharp at any display scale.
+- **Geometry and timing** follow the Iced view: bubble placement above or beside the anchor, pop and fade, tail, the menu's outline with its tail, row reveal, hover shift and highlight, switches, disabled rows. `desktop/paint.rs` holds it; the Iced version is deleted in step 3d.
+- **Input:** right-click on the artwork toggles the menu; a press and release on the same row raises `Event::Menu` with the row's command, and the menu closes; the menu area takes clicks and everything else passes through. Escape and a click outside still close it through the character logic. The app supplies the rows with `Intent::Menu`.
+- **Frames** are skipped when the pose, speech, menu and hover are unchanged and no hearts or sleep marks are moving.
+- **Checked** with a test that paints a bubble and a menu (one hovered row, one switch, one disabled row) into a buffer and looks at the result: layout, text, icons and colours came out as designed (`TINYPAW_PAINT_PNG=path cargo test stage_paints` saves it). Release probe memory with text loaded: 22 MiB working set, 11.4 MiB private.
+- **Not checked by hand:** clicking the live menu and seeing a bubble appear on a real click. While testing, the cursor could not be moved by script (something on this machine keeps it clamped), so the right-click and row-click paths were reviewed but not exercised. Please try `tinypaw --stage-probe`: click Yohta for a line, right-click for the menu, click a row.
+- **Known gaps:** a pressed menu row has no extra highlight yet, and the drawing is duplicated with the Iced view until the cutover.
 
 Slice 3a results (release build, Windows 11, Yohta at 300 px tall, a 237×329 window):
 

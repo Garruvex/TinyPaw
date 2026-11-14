@@ -25,9 +25,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use super::{Character, Event, Intent};
 use crate::mascot::Msg;
-use crate::mascot::desktop::{Desktop, Effects, Options};
-use crate::mascot::motion::Pose;
+use crate::mascot::desktop::{Desktop, Effects, Item, Options, SceneKey};
 use crate::mascot::surface::{Raster, Surface};
+use crate::mascot::typeset::{IconCache, Typeset};
 
 /// A handle to the stage thread.
 pub struct Stage {
@@ -136,8 +136,14 @@ struct Window {
     options: Option<Options>,
     raster: Option<Raster>,
     dib: Option<Dib>,
-    /// The pose last drawn, to skip frames where nothing moved.
-    drawn: Option<Pose>,
+    /// What was last drawn, to skip frames where nothing changed.
+    drawn: Option<SceneKey>,
+    items: Vec<Item>,
+    /// The menu row a press landed on, fired if the release is on it too.
+    armed: Option<usize>,
+    /// Created on first use: loading fonts is not free.
+    typeset: Option<Typeset>,
+    icons: IconCache,
     next_poll: Instant,
     /// Something changed outside a poll; draw at the next one.
     dirty: bool,
@@ -201,6 +207,10 @@ fn run(intents: Receiver<Intent>, events: Sender<Event>, shared: Arc<AtomicIsize
             raster: None,
             dib: None,
             drawn: None,
+            items: Vec::new(),
+            armed: None,
+            typeset: None,
+            icons: IconCache::default(),
             next_poll: Instant::now(),
             dirty: false,
             events,
@@ -303,6 +313,7 @@ impl Window {
                 }
             }
             Intent::Options(options) => self.options = Some(options),
+            Intent::Menu(items) => self.items = items,
             Intent::Audio { audio, voice_busy } => {
                 if let Some(d) = &mut self.desktop {
                     d.set_audio(audio);
@@ -397,13 +408,19 @@ impl Window {
             self.raster = Raster::new(size.0, size.1);
             self.dib = Dib::new(size.0, size.1);
         }
-        let pose = d.pose();
-        if !moving && !resized && !self.dirty && self.drawn.as_ref() == Some(pose) {
-            return;
-        }
-        let (Some(raster), Some(dib)) = (&mut self.raster, &self.dib) else {
+        let (Some(options), Some(raster), Some(dib)) = (self.options, &mut self.raster, &self.dib)
+        else {
             return;
         };
+        let key = d.scene_key(&options);
+        if !moving
+            && !resized
+            && !self.dirty
+            && !d.has_overlay()
+            && self.drawn.as_ref() == Some(&key)
+        {
+            return;
+        }
         raster.clear();
         raster.with_save(|r| {
             r.scale(k);
@@ -412,6 +429,12 @@ impl Window {
         raster.with_save(|r| {
             r.scale(k);
             d.paint_overlay(r);
+        });
+        let typeset = self.typeset.get_or_insert_with(Typeset::new);
+        raster.with_save(|r| {
+            r.scale(k);
+            d.paint_menu(r, typeset, &mut self.icons, &self.items);
+            d.paint_speech(r, typeset, &options);
         });
         // Premultiplied RGBA into the DIB's premultiplied BGRA.
         let count = (dib.size.0 * dib.size.1) as usize;
@@ -450,9 +473,15 @@ impl Window {
                 ULW_ALPHA,
             );
         }
-        self.drawn = Some(pose.clone());
+        self.drawn = Some(key);
         self.dirty = false;
     }
+}
+
+fn cursor() -> (i32, i32) {
+    let mut p = POINT { x: 0, y: 0 };
+    unsafe { GetCursorPos(&mut p) };
+    (p.x, p.y)
 }
 
 fn cursor_point(lparam: LPARAM) -> (i32, i32) {
@@ -471,7 +500,11 @@ unsafe extern "system" fn window_proc(
     match msg {
         WM_NCHITTEST => {
             let at = cursor_point(lparam);
-            let solid = with_window(|w| w.desktop.as_ref().is_some_and(|d| d.over_screen(at)));
+            let solid = with_window(|w| {
+                w.desktop
+                    .as_ref()
+                    .is_some_and(|d| d.over_screen(at) || d.over_menu_screen(at))
+            });
             return match solid {
                 Some(false) => HTTRANSPARENT as LRESULT,
                 _ => HTCLIENT as LRESULT,
@@ -480,8 +513,13 @@ unsafe extern "system" fn window_proc(
         WM_MOUSEACTIVATE => return MA_NOACTIVATE as LRESULT,
         WM_LBUTTONDOWN => {
             with_window(|w| {
+                let at = cursor();
                 if let (Some(d), Some(options)) = (&mut w.desktop, w.options) {
-                    d.step(Msg::Pressed, &options);
+                    if d.over_screen(at) {
+                        d.step(Msg::Pressed, &options);
+                    } else {
+                        w.armed = d.menu_row_at(at);
+                    }
                     w.dirty = true;
                     w.next_poll = Instant::now();
                 }
@@ -489,12 +527,34 @@ unsafe extern "system" fn window_proc(
             unsafe { SetCapture(hwnd) };
             return 0;
         }
+        WM_RBUTTONDOWN => {
+            with_window(|w| {
+                if let (Some(d), Some(options)) = (&mut w.desktop, w.options)
+                    && d.over_screen(cursor())
+                    && !d.pressing()
+                {
+                    d.step(Msg::Menu, &options);
+                    w.dirty = true;
+                    w.next_poll = Instant::now();
+                }
+            });
+            return 0;
+        }
         WM_LBUTTONUP => {
             unsafe { ReleaseCapture() };
             with_window(|w| {
                 if let (Some(d), Some(options)) = (&mut w.desktop, w.options) {
-                    let fx = d.step(Msg::Released, &options);
-                    w.effects(fx);
+                    let armed = w.armed.take();
+                    if let Some(row) = armed
+                        && d.menu_row_at(cursor()) == Some(row)
+                        && let Some(msg) = w.items.get(row).and_then(|i| i.on_press.clone())
+                    {
+                        d.close_menu();
+                        let _ = w.events.send(Event::Menu(msg));
+                    } else if armed.is_none() {
+                        let fx = d.step(Msg::Released, &options);
+                        w.effects(fx);
+                    }
                     w.dirty = true;
                     w.next_poll = Instant::now();
                 }
@@ -520,19 +580,48 @@ unsafe extern "system" fn window_proc(
 /// events the app would receive and runs until the process is stopped.
 pub fn probe() {
     use crate::features::mascot as feature;
+    use crate::mascot::desktop::Item;
     use crate::mascot::desktop::Pictures;
-    use crate::mascot::lines::Lines;
+    use crate::mascot::lines::{Line, Lines, Trigger};
     use crate::mascot::rig::Rig;
+    use crate::view::icons::Glyph;
     use windows_sys::Win32::UI::HiDpi::{
         DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
     };
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
     let stage = Stage::spawn();
+    let mut lines = Lines::default();
+    for trigger in [Trigger::Click, Trigger::Pickup, Trigger::Drop] {
+        lines.get_mut(trigger).push(Line {
+            text: "Hi! I'm Yohta. Click me again, or right-click for the menu.".into(),
+            sound: None,
+        });
+    }
+    stage.send(Intent::Menu(vec![
+        Item {
+            icon: Glyph::Pen,
+            label: "Annotation",
+            checked: Some(true),
+            on_press: Some(Msg::Command("system.master_toggle")),
+        },
+        Item {
+            icon: Glyph::Gear,
+            label: "Settings",
+            checked: None,
+            on_press: Some(Msg::CharacterSettings),
+        },
+        Item {
+            icon: Glyph::EyeOff,
+            label: "Hide",
+            checked: None,
+            on_press: Some(Msg::Command("mascot.hide")),
+        },
+    ]));
     stage.send(Intent::Open {
         character: Box::new(Character {
             id: "yohta",
             rig: Rig::load(),
-            lines: Lines::default(),
+            lines,
             click_compress: true,
             pictures: Pictures::default(),
             fall: false,
@@ -547,8 +636,8 @@ pub fn probe() {
             eyes: true,
             idle: true,
             reduced: false,
-            lines: false,
-            quiet: true,
+            lines: true,
+            quiet: false,
             idle_every: (60.0, 120.0),
             music: 0.0,
             energy: None,

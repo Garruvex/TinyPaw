@@ -871,3 +871,89 @@ fn authored_grips_keep_full_swing_clearance_for_rectangular_original_art() {
         }
     }
 }
+
+/// Paints the speech bubble and the open menu into a buffer and checks they
+/// land on the pixels they should. With `TINYPAW_PAINT_PNG` set to a path, the
+/// frame is also saved there for a look.
+#[test]
+fn stage_paints_speech_bubble_and_menu() {
+    use crate::mascot::surface::Raster;
+    use crate::mascot::typeset::{IconCache, Typeset};
+    use crate::view::icons::Glyph;
+
+    let o = Options {
+        bop: None,
+        dance: Default::default(),
+        eyes: false,
+        idle: false,
+        reduced: true,
+        lines: true,
+        quiet: false,
+        idle_every: (60.0, 120.0),
+        music: 0.0,
+        energy: None,
+        beat: None,
+    };
+    let (mut d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 500.0), 3, false);
+    let mut lines = Lines::default();
+    lines.get_mut(Trigger::Click).push(super::super::lines::Line {
+        text: "Hi! I'm Yohta. Click me again, or right-click for the menu.".into(),
+        sound: None,
+    });
+    d.set_lines(lines, &o);
+    d.reduced = true;
+    d.speech = Speech::new("Hi! I'm Yohta. Click me again, or right-click for the menu.", 0.0);
+    d.menu = Some(Side::Right);
+    d.hover = vec![0.0, 1.0, 0.0];
+    let items = vec![
+        Item {
+            icon: Glyph::Pen,
+            label: "Annotation",
+            checked: Some(true),
+            on_press: Some(Msg::Command("x")),
+        },
+        Item {
+            icon: Glyph::Gear,
+            label: "Settings",
+            checked: None,
+            on_press: Some(Msg::CharacterSettings),
+        },
+        Item {
+            icon: Glyph::EyeOff,
+            label: "Hide",
+            checked: None,
+            on_press: None,
+        },
+    ];
+    let k = 1.5;
+    let w = (d.layout.window.width * k).ceil() as u32;
+    let h = (d.layout.window.height * k).ceil() as u32;
+    let mut raster = Raster::new(w, h).unwrap();
+    let mut text = Typeset::new();
+    let mut icons = IconCache::default();
+    let before = raster.data().iter().filter(|b| **b != 0).count();
+    raster.with_save(|r| {
+        r.scale(k);
+        d.paint_character(r);
+    });
+    let drawn = raster.data().iter().filter(|b| **b != 0).count();
+    raster.with_save(|r| {
+        r.scale(k);
+        d.paint_menu(r, &mut text, &mut icons, &items);
+        d.paint_speech(r, &mut text, &o);
+    });
+    let after = raster.data().iter().filter(|b| **b != 0).count();
+    assert!(drawn > before, "the character drew nothing");
+    assert!(after > drawn + 2000, "the menu and bubble drew almost nothing");
+    // The menu is where the layout says: its box has pixels, a far corner none.
+    let m = d.layout.menu(Side::Right);
+    let at = |x: f32, y: f32| {
+        let (px, py) = ((x * k) as u32, (y * k) as u32);
+        raster.data()[((py * w + px) * 4 + 3) as usize]
+    };
+    assert!(at(m.x + m.width / 2.0, m.y + m.height / 2.0) > 200);
+    if let Some(path) = std::env::var_os("TINYPAW_PAINT_PNG") {
+        image::save_buffer(path, &raster.to_straight_rgba(), w, h, image::ExtendedColorType::Rgba8)
+            .unwrap();
+    }
+}

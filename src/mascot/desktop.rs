@@ -1915,11 +1915,6 @@ impl Desktop {
         }
     }
 
-    /// The latest frame of motion.
-    pub fn pose(&self) -> &Pose {
-        &self.pose
-    }
-
     /// The window's physical rectangle and its physical pixels per logical
     /// pixel, once attached.
     pub fn window_scale(&self) -> Option<((i32, i32, i32, i32), f32)> {
@@ -2471,6 +2466,9 @@ impl canvas::Program<Message> for Stage<'_> {
         }
     }
 }
+
+mod paint;
+pub use paint::SceneKey;
 
 #[cfg(test)]
 mod tests;

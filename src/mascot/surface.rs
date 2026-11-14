@@ -123,6 +123,132 @@ impl Raster {
         &self.pixels
     }
 
+    /// A point in the current transform's space, in device pixels.
+    pub fn device(&self, p: Point) -> Point {
+        let mut q = tiny_skia::Point { x: p.x, y: p.y };
+        self.transform.map_point(&mut q);
+        Point::new(q.x, q.y)
+    }
+
+    /// How much the current transform scales lengths (it is uniform where
+    /// text is drawn).
+    pub fn scale_factor(&self) -> f32 {
+        self.transform.sx.hypot(self.transform.ky)
+    }
+
+    pub fn fill_path(&mut self, path: &tiny_skia::Path, color: Color) {
+        self.pixels.fill_path(
+            path,
+            &paint(color, true),
+            FillRule::Winding,
+            self.transform,
+            None,
+        );
+    }
+
+    /// Strokes `path` with round joins.
+    pub fn stroke_path(&mut self, path: &tiny_skia::Path, color: Color, width: f32) {
+        let stroke = tiny_skia::Stroke {
+            width,
+            line_join: tiny_skia::LineJoin::Round,
+            ..tiny_skia::Stroke::default()
+        };
+        self.pixels
+            .stroke_path(path, &paint(color, true), &stroke, self.transform, None);
+    }
+
+    pub fn fill_round_rect(&mut self, rect: Rectangle, radius: f32, color: Color) {
+        if let Some(path) = round_rect_path(rect, radius) {
+            self.fill_path(&path, color);
+        }
+    }
+
+    /// Blends `color` through an 8-bit coverage mask whose top-left lands on
+    /// device pixel (`x`, `y`): glyphs and tinted icons.
+    pub fn blend_mask(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        mask: &[u8],
+        color: Color,
+    ) {
+        let (w, h) = (self.pixels.width() as i32, self.pixels.height() as i32);
+        let stride = self.pixels.width() as usize;
+        let data = self.pixels.data_mut();
+        for row in 0..height as i32 {
+            let py = y + row;
+            if py < 0 || py >= h {
+                continue;
+            }
+            for col in 0..width as i32 {
+                let px = x + col;
+                if px < 0 || px >= w {
+                    continue;
+                }
+                let coverage = mask[(row as u32 * width + col as u32) as usize];
+                if coverage == 0 {
+                    continue;
+                }
+                let a = f32::from(coverage) / 255.0 * color.a;
+                let at = (py as usize * stride + px as usize) * 4;
+                let keep = 1.0 - a;
+                for (i, c) in [color.r, color.g, color.b].into_iter().enumerate() {
+                    data[at + i] = (c * a * 255.0 + f32::from(data[at + i]) * keep)
+                        .round()
+                        .min(255.0) as u8;
+                }
+                data[at + 3] = (a * 255.0 + f32::from(data[at + 3]) * keep)
+                    .round()
+                    .min(255.0) as u8;
+            }
+        }
+    }
+
+    /// Blends straight RGBA pixels (colour glyphs such as emoji) at device
+    /// pixel (`x`, `y`).
+    pub fn blend_rgba(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        opacity: f32,
+    ) {
+        let (w, h) = (self.pixels.width() as i32, self.pixels.height() as i32);
+        let stride = self.pixels.width() as usize;
+        let data = self.pixels.data_mut();
+        for row in 0..height as i32 {
+            let py = y + row;
+            if py < 0 || py >= h {
+                continue;
+            }
+            for col in 0..width as i32 {
+                let px = x + col;
+                if px < 0 || px >= w {
+                    continue;
+                }
+                let s = ((row as u32 * width + col as u32) * 4) as usize;
+                let a = f32::from(rgba[s + 3]) / 255.0 * opacity;
+                if a <= 0.0 {
+                    continue;
+                }
+                let at = (py as usize * stride + px as usize) * 4;
+                let keep = 1.0 - a;
+                for i in 0..3 {
+                    data[at + i] = (f32::from(rgba[s + i]) * a + f32::from(data[at + i]) * keep)
+                        .round()
+                        .min(255.0) as u8;
+                }
+                data[at + 3] = (a * 255.0 + f32::from(data[at + 3]) * keep)
+                    .round()
+                    .min(255.0) as u8;
+            }
+        }
+    }
+
     /// Decoded images are cached by handle; drop any not in `keep`.
     pub fn retain_images(&mut self, keep: impl Fn(&Id) -> bool) {
         self.images.retain(|id, _| keep(id));
@@ -146,6 +272,25 @@ fn decode(handle: &Handle) -> Option<Pixmap> {
         *out = tiny_skia::ColorU8::from_rgba(src[0], src[1], src[2], src[3]).premultiply();
     }
     Some(map)
+}
+
+/// A rounded rectangle path, corners drawn as quarter circles.
+pub fn round_rect_path(rect: Rectangle, radius: f32) -> Option<tiny_skia::Path> {
+    let r = radius.min(rect.width / 2.0).min(rect.height / 2.0).max(0.0);
+    let (x0, y0, x1, y1) = (rect.x, rect.y, rect.x + rect.width, rect.y + rect.height);
+    let k = r * 0.4477;
+    let mut b = PathBuilder::new();
+    b.move_to(x0 + r, y0);
+    b.line_to(x1 - r, y0);
+    b.cubic_to(x1 - k, y0, x1, y0 + k, x1, y0 + r);
+    b.line_to(x1, y1 - r);
+    b.cubic_to(x1, y1 - k, x1 - k, y1, x1 - r, y1);
+    b.line_to(x0 + r, y1);
+    b.cubic_to(x0 + k, y1, x0, y1 - k, x0, y1 - r);
+    b.line_to(x0, y0 + r);
+    b.cubic_to(x0, y0 + k, x0 + k, y0, x0 + r, y0);
+    b.close();
+    b.finish()
 }
 
 fn paint(color: Color, anti_alias: bool) -> Paint<'static> {

@@ -4153,6 +4153,7 @@ dependencies = [
 name = "tinypaw"
 version = "0.1.2"
 dependencies = [
+ "cosmic-text",
  "cpal",
  "global-hotkey",
  "iced",
@@ -4160,6 +4161,7 @@ dependencies = [
  "iced_tiny_skia",
  "image",
  "interprocess",
+ "resvg",
  "rfd",
  "rodio",
  "serde_json",

@@ -17,6 +17,10 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # The character renderer draws to a pixel buffer with the same rasterizer the
 # overlays use (see src/mascot/surface.rs).
 tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
+# The stage draws speech and menu text and icons itself: the same text engine
+# and SVG renderer Iced already builds with.
+cosmic-text = "0.15"
+resvg = "0.45"
 
 [features]
 # Opt-in GPU renderer for comparisons. tiny-skia measured faster to activate

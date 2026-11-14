@@ -16,8 +16,9 @@ mod native;
 #[cfg(windows)]
 pub use native::{Stage, probe};
 
+use crate::mascot::Msg;
 use crate::mascot::companionship::Audio;
-use crate::mascot::desktop::{Options, Pictures};
+use crate::mascot::desktop::{Item, Options, Pictures};
 use crate::mascot::lines::{Lines, SoundRef};
 use crate::mascot::reactions::Event as Gesture;
 use crate::mascot::rig::Rig;
@@ -50,6 +51,8 @@ pub enum Intent {
     SetCharacter(Box<Character>),
     /// New behaviour settings, read on every step.
     Options(Options),
+    /// The menu's rows, as the app wants them shown.
+    Menu(Vec<Item>),
     /// What is playing and whether a voice line is busy.
     Audio {
         audio: Audio,
@@ -74,6 +77,8 @@ pub enum Event {
     Gesture(Gesture),
     /// A line's sound to play.
     Sound(SoundRef),
+    /// A menu row was chosen: a registered command or the character page.
+    Menu(Msg),
     /// The character came to rest here: the feet's physical position, to save.
     Placed(f64, f64),
 }

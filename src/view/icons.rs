@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use iced::widget::svg::{self, Handle, Svg};
 use iced::{Color, Length, Theme};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Glyph {
     Paw,
     PawSolid,
@@ -126,6 +126,14 @@ fn body(g: Glyph) -> &'static str {
         }
         Glyph::Pen => r##"<path d="M15.5 4.5l4 4L9 19H5v-4z"/><path d="M13 7l4 4"/>"##,
     }
+}
+
+/// The icon as a standalone SVG document, drawn in black.
+pub fn svg_source(g: Glyph) -> String {
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">{}</svg>"##,
+        body(g)
+    )
 }
 
 pub fn handle(g: Glyph) -> Handle {

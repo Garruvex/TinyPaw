@@ -165,6 +165,12 @@ pub struct Controller {
     affection: Affection,
 }
 impl Controller {
+    /// Whether hearts are rising or sleep marks are drifting, which move
+    /// the picture without the pose changing.
+    pub fn animates_overlay(&self) -> bool {
+        !self.affection.hearts.is_empty() || matches!(self.state, State::Asleep | State::Waking)
+    }
+
     pub fn new(seed: u64) -> Self {
         Self {
             seed: seed.max(1),

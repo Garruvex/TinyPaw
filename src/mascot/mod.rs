@@ -24,11 +24,13 @@ pub mod render;
 mod render_tests;
 pub mod rig;
 #[allow(dead_code)]
+pub mod typeset;
+#[allow(dead_code)]
 pub mod surface;
 mod yohta_pack;
 
 /// Messages from the desktop character window.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Msg {
     /// Left button pressed on visible artwork.
     Pressed,
