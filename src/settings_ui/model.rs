@@ -12,6 +12,8 @@ pub enum Kind {
     Choice = 2,
     Action = 3,
     Note = 4,
+    /// A command and its key combination, with a button to change it.
+    Shortcut = 5,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -75,6 +77,8 @@ pub struct Snapshot {
     pub current: usize,
     pub title: String,
     pub summary: String,
+    /// Why a change was refused, shown above the page.
+    pub notice: String,
     pub sections: Vec<Section>,
     pub extras: HashMap<String, Extra>,
 }

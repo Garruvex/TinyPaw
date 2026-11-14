@@ -1,5 +1,5 @@
 import { Tokens } from "tokens.slint";
-import { Page, Section } from "kit.slint";
+import { Page, Section, Notice } from "kit.slint";
 import { Scroller } from "kit.slint";
 import { SettingsShell, NavEntry } from "templates/settings_shell.slint";
 import { ItemView, ItemModel, SectionModel } from "pages/item.slint";
@@ -19,24 +19,54 @@ export component SettingsWindow inherits SettingsShell {
     in property <string> page-title;
     in property <string> page-summary;
     in property <[SectionModel]> sections;
+    // A message above the page: why a change was refused.
+    in property <string> notice;
+    // The shortcut row waiting for a new key combination, if any.
+    in-out property <string> capturing-id;
+    callback key-captured(string, string, bool, bool, bool);
     callback toggled(string, bool);
     callback ranged(string, float);
     callback chosen(string, int);
     callback pressed(string);
     Rectangle {
         background: Tokens.surface;
-        Scroller {
-            Page {
-                title: root.page-title;
-                summary: root.page-summary;
-                for section in root.sections: Section {
-                    title: section.title;
-                    for item in section.items: ItemView {
-                        item: item;
-                        toggled(on) => { root.toggled(item.id, on); }
-                        ranged(v) => { root.ranged(item.id, v); }
-                        chosen(i) => { root.chosen(item.id, i); }
-                        pressed => { root.pressed(item.id); }
+        scope := FocusScope {
+            key-pressed(event) => {
+                if (root.capturing-id != "") {
+                    root.key-captured(root.capturing-id, event.text, event.modifiers.control, event.modifiers.alt, event.modifiers.shift);
+                    return accept;
+                }
+                return reject;
+            }
+            Scroller {
+                Page {
+                    title: root.page-title;
+                    summary: root.page-summary;
+                    if root.notice != "": Notice {
+                        text: root.notice;
+                        warning: true;
+                    }
+                    for section in root.sections: Section {
+                        title: section.title;
+                        for item in section.items: ItemView {
+                            item: item;
+                            capturing: root.capturing-id == item.id;
+                            toggled(on) => { root.toggled(item.id, on); }
+                            ranged(v) => { root.ranged(item.id, v); }
+                            chosen(i) => { root.chosen(item.id, i); }
+                            pressed => {
+                                if (item.kind == 5) {
+                                    if (root.capturing-id == item.id) {
+                                        root.capturing-id = "";
+                                    } else {
+                                        root.capturing-id = item.id;
+                                        scope.focus();
+                                    }
+                                } else {
+                                    root.pressed(item.id);
+                                }
+                            }
+                        }
                     }
                 }
             }

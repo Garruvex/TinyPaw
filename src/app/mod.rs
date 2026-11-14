@@ -653,6 +653,8 @@ impl App {
             Message::External(External::Cli { line, reply }) => {
                 if line.trim() == "settings-state" {
                     let _ = reply.send(self.settings_state());
+                } else if let Some(rest) = line.trim().strip_prefix("shortcut-bind ") {
+                    let _ = reply.send(self.settings_bind(rest));
                 } else if let Some(name) = line.trim().strip_prefix("settings-action ") {
                     let answer = self.settings_action(name.trim(), now, &mut out, &mut tasks);
                     let _ = reply.send(answer);
@@ -707,32 +709,8 @@ impl App {
                                     base
                                 )
                             };
-                            let old = self.registry.clone();
-                            match self.registry.rebind(command, &binding) {
-                                Err(e) => self.notice = Some(e),
-                                Ok(()) => {
-                                    self.hotkeys = None;
-                                    match platform::hotkeys::register(&self.registry) {
-                                        Ok(h) if !h.taken.contains(&command) => {
-                                            self.hotkeys = Some(h);
-                                            self.notice =
-                                                preferences::save_shortcuts(&self.registry)
-                                                    .err()
-                                                    .map(|e| e.to_string());
-                                        }
-                                        result => {
-                                            drop(result);
-                                            self.registry = old;
-                                            self.hotkeys =
-                                                platform::hotkeys::register(&self.registry).ok();
-                                            self.notice = Some(
-                                                "Shortcut unavailable; kept the previous binding"
-                                                    .into(),
-                                            );
-                                        }
-                                    }
-                                }
-                            }
+                            self.notice = self.rebind_shortcut(command, &binding).err();
+
                         }
                     }
                 } else if Some(window) == self.settings_window
@@ -1044,14 +1022,7 @@ impl App {
                 self.rebinding = Some(id);
                 self.notice = Some("Press the new shortcut (Escape cancels)".into());
             }
-            UiMsg::ResetShortcuts => {
-                self.registry = Registry::build(crate::features::BUILTINS).expect("builtins");
-                self.hotkeys = None;
-                self.hotkeys = platform::hotkeys::register(&self.registry).ok();
-                self.notice = preferences::save_shortcuts(&self.registry)
-                    .err()
-                    .map(|e| e.to_string());
-            }
+            UiMsg::ResetShortcuts => self.reset_shortcuts(),
             UiMsg::ImportPack => {
                 return Task::perform(
                     rfd::AsyncFileDialog::new()
@@ -1372,6 +1343,36 @@ impl App {
             return Task::none();
         }
         self.open_classic_settings()
+    }
+
+    /// Rebinds a command's shortcut, keeping the old one when the new one is
+    /// taken or cannot be registered with the desktop.
+    pub(super) fn rebind_shortcut(&mut self, command: &'static str, binding: &str) -> Result<(), String> {
+        let old = self.registry.clone();
+        self.registry.rebind(command, binding)?;
+        self.hotkeys = None;
+        match platform::hotkeys::register(&self.registry) {
+            Ok(h) if !h.taken.contains(&command) => {
+                self.hotkeys = Some(h);
+                preferences::save_shortcuts(&self.registry).map_err(|e| e.to_string())
+            }
+            result => {
+                drop(result);
+                self.registry = old;
+                self.hotkeys = platform::hotkeys::register(&self.registry).ok();
+                Err("Shortcut unavailable; kept the previous binding".into())
+            }
+        }
+    }
+
+    /// Back to the built-in shortcuts.
+    pub(super) fn reset_shortcuts(&mut self) {
+        self.registry = Registry::build(crate::features::BUILTINS).expect("builtins");
+        self.hotkeys = None;
+        self.hotkeys = platform::hotkeys::register(&self.registry).ok();
+        self.notice = preferences::save_shortcuts(&self.registry)
+            .err()
+            .map(|e| e.to_string());
     }
 
     /// The Iced Settings window, until every page has moved to Slint.

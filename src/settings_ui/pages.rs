@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use super::DisplayInfo;
+use super::link::ShortcutInfo;
 use super::model::{Extra, Item, Kind, Section};
 use crate::features::{display, sound, system};
 use crate::registry::{Registry, SettingValues, Value};
@@ -51,6 +52,7 @@ pub struct Context<'a> {
     pub registry: &'a Registry,
     pub settings: &'a SettingValues,
     pub displays: &'a [DisplayInfo],
+    pub shortcuts: &'a [ShortcutInfo],
     pub has_custom_sound: bool,
 }
 
@@ -178,7 +180,14 @@ pub fn build(page: PageId, cx: &Context<'_>) -> Built {
                 "Where TinyPaw draws, and how much it moves.",
             )
         }
-        PageId::Pointer | PageId::Ink | PageId::Tools | PageId::Characters | PageId::Shortcuts => {
+        PageId::Shortcuts => {
+            shortcuts_page(&mut b);
+            (
+                "Shortcuts",
+                "How drawing starts, and the keys for each command.",
+            )
+        }
+        PageId::Pointer | PageId::Ink | PageId::Tools | PageId::Characters => {
             b.section("Not moved yet", |s, b| {
                 b.note(
                     s,
@@ -228,6 +237,54 @@ fn sound_page(b: &mut Builder<'_>) {
             s,
             "Also silences the desktop character's reactions and line sounds.",
             false,
+        );
+    });
+}
+
+fn shortcuts_page(b: &mut Builder<'_>) {
+    b.section("How drawing starts", |s, b| {
+        b.choice(
+            s,
+            system::ACTIVATION_STYLE,
+            Some("Activation style"),
+            vec![
+                ("toggle", "Toggle".to_owned()),
+                ("hold", "Hold to draw".to_owned()),
+            ],
+        );
+        b.note(
+            s,
+            "Toggle: the shortcut opens Point straight away. Press it again to give the game its mouse back.",
+            false,
+        );
+        b.note(
+            s,
+            "Hold to draw: the game keeps input. Hold the draw key to point and draw; let go and your marks stay.",
+            false,
+        );
+    });
+    b.section("Startup", |s, b| {
+        b.toggle(s, system::START_AT_SIGN_IN, None);
+    });
+    for (global, title) in [(true, "Available everywhere"), (false, "While drawing")] {
+        b.section(title, |s, b| {
+            for shortcut in b.cx.shortcuts.iter().filter(|c| c.global == global) {
+                let mut item = Item::new(&shortcut.id, Kind::Shortcut, &shortcut.label);
+                item.text = shortcut.binding.clone();
+                if shortcut.taken {
+                    item.hint = "In use by another app".into();
+                    item.warning = true;
+                }
+                s.items.push(item);
+            }
+        });
+    }
+    b.section("", |s, b| {
+        b.action(
+            s,
+            "shortcuts.reset",
+            "Defaults",
+            "Restore default shortcuts",
         );
     });
 }
@@ -283,6 +340,25 @@ mod tests {
     use crate::features;
     use crate::registry::Registry;
 
+    fn shortcuts() -> Vec<ShortcutInfo> {
+        vec![
+            ShortcutInfo {
+                id: "system.master_toggle".into(),
+                label: "Annotation enabled".into(),
+                binding: "Ctrl+Alt+P".into(),
+                global: true,
+                taken: false,
+            },
+            ShortcutInfo {
+                id: "edit.undo".into(),
+                label: "Undo".into(),
+                binding: "Ctrl+Z".into(),
+                global: false,
+                taken: true,
+            },
+        ]
+    }
+
     fn build_page(page: PageId, custom_sound: bool) -> Built {
         let registry = Registry::build(features::BUILTINS).expect("valid built-ins");
         let settings = registry.defaults();
@@ -296,6 +372,7 @@ mod tests {
                 registry: &registry,
                 settings: &settings,
                 displays: &displays,
+                shortcuts: &shortcuts(),
                 has_custom_sound: custom_sound,
             },
         )
@@ -323,7 +400,7 @@ mod tests {
                             item.id
                         );
                     }
-                    Kind::Action | Kind::Note => {}
+                    Kind::Action | Kind::Note | Kind::Shortcut => {}
                 }
                 if item.kind == Kind::Choice {
                     let extra = &built.extras[&item.id];
@@ -336,6 +413,26 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_shortcuts_page_lists_each_shortcut_in_its_scope_and_flags_taken_keys() {
+        let built = build_page(PageId::Shortcuts, false);
+        let section = |title: &str| {
+            built
+                .sections
+                .iter()
+                .find(|s| s.title == title)
+                .expect(title)
+        };
+        let global = section("Available everywhere");
+        let overlay = section("While drawing");
+        assert_eq!(global.items.len(), 1);
+        assert_eq!(global.items[0].kind, Kind::Shortcut);
+        assert_eq!(global.items[0].text, "Ctrl+Alt+P");
+        assert!(!global.items[0].warning);
+        assert_eq!(overlay.items[0].hint, "In use by another app");
+        assert!(overlay.items[0].warning);
     }
 
     #[test]

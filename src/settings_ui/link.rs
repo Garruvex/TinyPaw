@@ -27,8 +27,21 @@ pub struct DisplayInfo {
     pub text: String,
 }
 
+/// One shortcut the resident app has registered.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShortcutInfo {
+    pub id: String,
+    pub label: String,
+    pub binding: String,
+    /// `global` works everywhere; `overlay` only while drawing.
+    pub global: bool,
+    /// Another app already holds this key combination.
+    pub taken: bool,
+}
+
 /// What the resident app reports.
 pub struct State {
+    pub shortcuts: Vec<ShortcutInfo>,
     pub values: SettingValues,
     pub displays: Vec<DisplayInfo>,
     pub custom_sound: bool,
@@ -53,7 +66,25 @@ pub fn parse_state(registry: &Registry, reply: &str) -> Option<State> {
             })
         })
         .collect();
+    let shortcuts = json
+        .get("shortcuts")
+        .and_then(Json::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|s| {
+                    Some(ShortcutInfo {
+                        id: s.get("id")?.as_str()?.to_owned(),
+                        label: s.get("label")?.as_str()?.to_owned(),
+                        binding: s.get("binding")?.as_str()?.to_owned(),
+                        global: s.get("context")?.as_str()? == "global",
+                        taken: s.get("taken")?.as_bool()?,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     Some(State {
+        shortcuts,
         values,
         displays,
         custom_sound: json.get("custom_sound")?.as_bool()?,
@@ -72,13 +103,14 @@ pub fn value_text(value: &Value) -> String {
     }
 }
 
-fn snapshot(registry: &Registry, state: &State, page: usize) -> Snapshot {
+fn snapshot(registry: &Registry, state: &State, page: usize, notice: &str) -> Snapshot {
     let current = page.min(pages::NAV.len() - 1);
     let id: PageId = pages::NAV[current].2;
     let cx = Context {
         registry,
         settings: &state.values,
         displays: &state.displays,
+        shortcuts: &state.shortcuts,
         has_custom_sound: state.custom_sound,
     };
     let built = pages::build(id, &cx);
@@ -90,6 +122,7 @@ fn snapshot(registry: &Registry, state: &State, page: usize) -> Snapshot {
         current,
         title: built.title.to_owned(),
         summary: built.summary,
+        notice: notice.to_owned(),
         sections: built.sections,
         extras: built.extras,
     }
@@ -119,22 +152,35 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
         return super::quit();
     };
     let mut page = start_page;
-    super::show(snapshot(&registry, &state, page), false);
+    let mut notice = String::new();
+    super::show(snapshot(&registry, &state, page, &notice), false);
     let mut failures = 0;
     loop {
         match rx.recv_timeout(REFRESH) {
             Ok(Cmd::Set(id, value)) => {
                 // Show it now; the resident app confirms on the next refresh.
                 let _ = registry.set(&mut state.values, id, value.clone());
-                super::show(snapshot(&registry, &state, page), false);
+                notice.clear();
+                super::show(snapshot(&registry, &state, page, &notice), false);
                 let _ = ipc::request(&format!("set {id} {}", value_text(&value)));
             }
             Ok(Cmd::Action(name)) => {
+                notice.clear();
                 let _ = ipc::request(&format!("settings-action {name}"));
+            }
+            Ok(Cmd::Bind(id, binding)) => {
+                notice = match ipc::request(&format!("shortcut-bind {id} {binding}")) {
+                    Ok(reply) => reply
+                        .strip_prefix("error: ")
+                        .map(str::to_owned)
+                        .unwrap_or_default(),
+                    Err(_) => "TinyPaw is not answering.".into(),
+                };
             }
             Ok(Cmd::Navigate(index)) => {
                 page = index;
-                super::show(snapshot(&registry, &state, page), false);
+                notice.clear();
+                super::show(snapshot(&registry, &state, page, &notice), false);
                 continue;
             }
             Err(RecvTimeoutError::Timeout) => {}
@@ -145,7 +191,7 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
                 failures = 0;
                 let focus = next.focus;
                 state = next;
-                super::show(snapshot(&registry, &state, page), focus);
+                super::show(snapshot(&registry, &state, page, &notice), focus);
             }
             None => {
                 failures += 1;

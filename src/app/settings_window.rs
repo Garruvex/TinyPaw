@@ -46,7 +46,27 @@ impl App {
             .iter()
             .map(|d| serde_json::json!({ "name": d.name, "text": d.to_string() }))
             .collect();
+        let taken = self
+            .hotkeys
+            .as_ref()
+            .map_or(&[][..], |h| h.taken.as_slice());
+        let mut shortcuts = Vec::new();
+        for (context, name) in [
+            (crate::registry::ShortcutContext::Global, "global"),
+            (crate::registry::ShortcutContext::Overlay, "overlay"),
+        ] {
+            for (shortcut, def) in self.registry.shortcuts(context) {
+                shortcuts.push(serde_json::json!({
+                    "id": def.id,
+                    "label": def.label,
+                    "binding": shortcut.label(),
+                    "context": name,
+                    "taken": taken.contains(&def.id),
+                }));
+            }
+        }
         let state = serde_json::json!({
+            "shortcuts": shortcuts,
             "values": crate::preferences::to_json(self.session.settings()),
             "displays": displays,
             "custom_sound": self.audio.has_custom(),
@@ -67,8 +87,25 @@ impl App {
             "sound.preview" => tasks.push(self.ui_message(UiMsg::PreviewSound, now, out)),
             "sound.import" => tasks.push(self.ui_message(UiMsg::ImportWav, now, out)),
             "open-classic" => tasks.push(self.open_classic_settings()),
+            "shortcuts.reset" => self.reset_shortcuts(),
             _ => return format!("error: unknown settings action `{name}`"),
         }
         "ok".into()
+    }
+}
+
+impl App {
+    /// `shortcut-bind <command> <binding>` from the Settings window.
+    pub(super) fn settings_bind(&mut self, rest: &str) -> String {
+        let Some((id, binding)) = rest.split_once(char::is_whitespace) else {
+            return "error: usage: shortcut-bind <command> <binding>".into();
+        };
+        let Some(command) = self.registry.command(id).map(|d| d.id) else {
+            return format!("error: unknown command `{id}`");
+        };
+        match self.rebind_shortcut(command, binding.trim()) {
+            Ok(()) => "ok".into(),
+            Err(why) => format!("error: {why}"),
+        }
     }
 }

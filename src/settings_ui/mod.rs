@@ -29,6 +29,8 @@ pub enum Cmd {
     Set(&'static str, Value),
     Action(String),
     Navigate(usize),
+    /// Bind a command to a key combination, as `Ctrl+Alt+X` or `F5`.
+    Bind(String, String),
 }
 
 struct UiState {
@@ -102,6 +104,21 @@ pub fn run(page: &str) -> ExitCode {
         let cmds = cmds.clone();
         window.on_navigate_to(move |index| send(&cmds, Cmd::Navigate(index as usize)));
     }
+    {
+        let (cmds, weak) = (cmds.clone(), window.as_weak());
+        window.on_key_captured(move |id, text, ctrl, alt, shift| {
+            let Some(window) = weak.upgrade() else { return };
+            match capture(&text, ctrl, alt, shift) {
+                // Still waiting: a modifier alone, or a key that means nothing.
+                Capture::Keep => {}
+                Capture::Cancel => window.set_capturing_id("".into()),
+                Capture::Binding(binding) => {
+                    window.set_capturing_id("".into());
+                    send(&cmds, Cmd::Bind(id.to_string(), binding));
+                }
+            }
+        });
+    }
     window.window().on_close_requested(|| {
         let _ = slint::quit_event_loop();
         CloseRequestResponse::HideWindow
@@ -127,6 +144,85 @@ pub fn run(page: &str) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+enum Capture {
+    Keep,
+    Cancel,
+    Binding(String),
+}
+
+/// What a key press means while a shortcut waits for a new combination.
+fn capture(text: &str, ctrl: bool, alt: bool, shift: bool) -> Capture {
+    use slint::platform::Key;
+    let Some(key) = text.chars().next() else {
+        return Capture::Keep;
+    };
+    let is = |k: Key| key == char::from(k);
+    if is(Key::Escape) {
+        return Capture::Cancel;
+    }
+    if is(Key::Alt) || is(Key::AltGr) {
+        return Capture::Binding("Alt".into());
+    }
+    if is(Key::Control)
+        || is(Key::ControlR)
+        || is(Key::Shift)
+        || is(Key::ShiftR)
+        || is(Key::Meta)
+        || is(Key::MetaR)
+        || is(Key::CapsLock)
+    {
+        return Capture::Keep;
+    }
+    let function = [
+        Key::F1,
+        Key::F2,
+        Key::F3,
+        Key::F4,
+        Key::F5,
+        Key::F6,
+        Key::F7,
+        Key::F8,
+        Key::F9,
+        Key::F10,
+        Key::F11,
+        Key::F12,
+        Key::F13,
+        Key::F14,
+        Key::F15,
+        Key::F16,
+        Key::F17,
+        Key::F18,
+        Key::F19,
+        Key::F20,
+        Key::F21,
+        Key::F22,
+        Key::F23,
+        Key::F24,
+    ]
+    .iter()
+    .position(|k| is(*k))
+    .map(|n| format!("F{}", n + 1));
+    let base = if let Some(name) = function {
+        name
+    } else if key == ' ' {
+        "Space".into()
+    } else if key.is_ascii_alphanumeric() {
+        key.to_ascii_uppercase().to_string()
+    } else if (key as u32) >= 1 && (key as u32) <= 26 && ctrl {
+        // Some systems report Ctrl+A as a control character.
+        char::from(b'A' + (key as u8 - 1)).to_string()
+    } else {
+        return Capture::Binding(String::new());
+    };
+    Capture::Binding(format!(
+        "{}{}{}{}",
+        if ctrl { "Ctrl+" } else { "" },
+        if alt { "Alt+" } else { "" },
+        if shift { "Shift+" } else { "" },
+        base
+    ))
 }
 
 /// Shows `snapshot`. Called on the window's thread.
@@ -163,6 +259,7 @@ fn apply(snapshot: Snapshot, focus: bool) {
         window.set_current_page(snapshot.current as i32);
         window.set_page_title(snapshot.title.as_str().into());
         window.set_page_summary(snapshot.summary.as_str().into());
+        window.set_notice(snapshot.notice.as_str().into());
         *state.extras.borrow_mut() = snapshot.extras.clone();
         if same_shape {
             let last = state
@@ -249,4 +346,62 @@ fn shape(snapshot: &Snapshot) -> Vec<(&str, Vec<(&str, i32)>)> {
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use slint::platform::Key;
+
+    fn binding(text: &str, ctrl: bool, alt: bool, shift: bool) -> Option<String> {
+        match capture(text, ctrl, alt, shift) {
+            Capture::Binding(b) => Some(b),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn captured_keys_become_the_bindings_the_registry_accepts() {
+        assert_eq!(
+            binding("p", true, true, false).as_deref(),
+            Some("Ctrl+Alt+P")
+        );
+        assert_eq!(binding("7", false, false, false).as_deref(), Some("7"));
+        assert_eq!(
+            binding(" ", false, false, true).as_deref(),
+            Some("Shift+Space")
+        );
+        assert_eq!(
+            binding(&char::from(Key::F5).to_string(), false, false, false).as_deref(),
+            Some("F5")
+        );
+        assert_eq!(
+            binding(&char::from(Key::F24).to_string(), true, false, false).as_deref(),
+            Some("Ctrl+F24")
+        );
+        assert_eq!(
+            binding(&char::from(Key::Alt).to_string(), false, true, false).as_deref(),
+            Some("Alt")
+        );
+        // A control character with Ctrl held is that letter.
+        assert_eq!(
+            binding("\u{1}", true, false, false).as_deref(),
+            Some("Ctrl+A")
+        );
+    }
+
+    #[test]
+    fn modifiers_alone_keep_waiting_and_escape_cancels() {
+        for key in [Key::Control, Key::Shift, Key::Meta, Key::CapsLock] {
+            assert!(matches!(
+                capture(&char::from(key).to_string(), false, false, false),
+                Capture::Keep
+            ));
+        }
+        assert!(matches!(capture("", false, false, false), Capture::Keep));
+        assert!(matches!(
+            capture(&char::from(Key::Escape).to_string(), false, false, false),
+            Capture::Cancel
+        ));
+    }
 }

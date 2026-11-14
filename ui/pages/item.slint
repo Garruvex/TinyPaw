@@ -1,5 +1,5 @@
 import { Tokens } from "../tokens.slint";
-import { SettingRow, Toggle, Range, Select, Btn, Notice, Hint } from "../kit.slint";
+import { SettingRow, Toggle, Range, Select, Btn, Notice, Hint, Keycap } from "../kit.slint";
 
 // One setting as the registry's page definitions describe it. The Rust side
 // fills these in; the control shown depends on `kind`.
@@ -30,6 +30,8 @@ export struct SectionModel {
 // item from the app replaces it.
 export component ItemView inherits VerticalLayout {
     in property <ItemModel> item;
+    // A shortcut row is waiting for the new key combination.
+    in property <bool> capturing;
     callback toggled(bool);
     callback ranged(float);
     callback chosen(int);
@@ -48,8 +50,10 @@ export component ItemView inherits VerticalLayout {
         warning: true;
     }
     if root.item.kind == 4 && !root.item.warning: Rectangle {
-        Hint {
+        min-height: note.preferred-height + Tokens.space-2;
+        note := Hint {
             x: Tokens.space-3;
+            y: Tokens.space-1;
             width: parent.width - 2 * Tokens.space-3;
             text: root.item.text;
         }
@@ -57,6 +61,18 @@ export component ItemView inherits VerticalLayout {
     if root.item.kind != 4: SettingRow {
         label: root.item.label;
         hint: root.item.hint;
+        hint-warning: root.item.warning;
+        if root.item.kind == 5: HorizontalLayout {
+            spacing: Tokens.space-2;
+            Keycap {
+                text: root.item.text;
+                waiting: root.capturing;
+            }
+            Btn {
+                text: root.capturing ? "Cancel" : "Change";
+                clicked => { root.pressed(); }
+            }
+        }
         if root.item.kind == 0: Toggle {
             checked <=> root.on;
             enabled: root.item.enabled;

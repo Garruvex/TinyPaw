@@ -250,6 +250,8 @@ export component Section inherits VerticalLayout {
 export component SettingRow inherits Rectangle {
     in property <string> label;
     in property <string> hint;
+    // Shows the hint as a warning (amber) instead of quiet text.
+    in property <bool> hint-warning;
     min-height: Tokens.h-row;
     HorizontalLayout {
         padding: Tokens.space-3;
@@ -258,7 +260,10 @@ export component SettingRow inherits Rectangle {
             alignment: center;
             horizontal-stretch: 1;
             Text { text: root.label; font-size: Tokens.font-body; color: Tokens.text; }
-            if root.hint != "": Hint { text: root.hint; }
+            if root.hint != "": Hint {
+                text: root.hint;
+                color: root.hint-warning ? Tokens.amber-text : Tokens.muted;
+            }
         }
         VerticalLayout {
             alignment: center;
@@ -267,6 +272,28 @@ export component SettingRow inherits Rectangle {
                 @children
             }
         }
+    }
+}
+
+// A key combination, drawn as a keycap. `waiting` asks for a new one.
+export component Keycap inherits Rectangle {
+    in property <string> text;
+    in property <bool> waiting;
+    height: Tokens.h-control;
+    preferred-width: Tokens.label-w / 2;
+    border-radius: Tokens.radius-control;
+    border-width: Tokens.hairline;
+    border-color: root.waiting ? Tokens.cyan : Tokens.line-strong;
+    background: Tokens.control;
+    Text {
+        x: Tokens.space-3;
+        y: (parent.height - self.height) / 2;
+        width: parent.width - 2 * Tokens.space-3;
+        horizontal-alignment: center;
+        overflow: elide;
+        text: root.waiting ? "Press keys…" : root.text;
+        font-size: Tokens.font-body;
+        color: root.waiting ? Tokens.cyan-text : Tokens.subtle;
     }
 }
 

@@ -288,11 +288,19 @@ Slice 3d results. The app now runs the desktop character on the stage and nothin
 | Slice | Scope | State |
 |---|---|---|
 | 4a | Slint in the main crate; the Settings window as its own process; page definitions that the registry mounts; Sound and Display & motion pages | Done; opt in with `TINYPAW_SLINT_SETTINGS=1` |
-| 4b | Shortcuts (rebinding is custom) | Not started |
+| 4b | Shortcuts (rebinding is custom) | Done |
 | 4c | Ink & text, Spotlight & lens | Not started |
 | 4d | Pointer | Not started |
 | 4e | Music response (moved out of the Character page) and the Characters page, with Customize opening the existing editor until step 5 | Not started |
 | 4f | First-run window; delete the Iced settings views | Not started |
+
+Slice 4b results. The Shortcuts page moved over:
+
+- **Page:** activation style (choice, with a line for each style), start at sign-in, then every shortcut in two groups, "Available everywhere" and "While drawing", and Restore default shortcuts. A shortcut row shows the key combination as a keycap and a Change button; a combination another app already holds shows "In use by another app" in amber.
+- **Rebinding happens in the Settings window.** Change makes the row wait ("Press keys…"); the next key combination is captured by the window (letters, digits, F1 to F24, Space, Alt alone; Ctrl, Alt and Shift prefixes; Escape cancels; a modifier alone keeps waiting) and sent as `shortcut-bind <command> <binding>`. The resident app applies it with the logic that used to live in the Iced key handler, now one function (`rebind_shortcut`) shared by both windows: validate, register with the desktop, keep the old binding if the new one is taken or unavailable, save. A refusal comes back as text and the window shows it in a banner above the page.
+- **Model additions:** a shortcut item kind, a page banner, and a `Keycap` component. The state the resident app reports now includes the shortcut list.
+- **Checked:** the page in the real app; a free key (accepted and shown in the open window within two seconds), a symbol (refused with "use a letter, digit, function key, Space or Alt") and a duplicate (refused with "already assigned") all sent as the window sends them; eight unit tests, including the key-to-binding mapping and the page's grouping (283 tests pass).
+- **Not checked by hand:** pressing keys in the window to capture a combination. Whether Ctrl+letter arrives as the letter on this keyboard layout is covered by a fallback for control characters but not by a real key press.
 
 Slice 4a results:
 
