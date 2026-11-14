@@ -2,6 +2,10 @@
 
 Proposed roadmap, 11 November 2026. This review covers the Windows alpha working tree. It uses the current views, command registrations and desktop host as the baseline. The [character scope](mascot-feature.md) defines the pack format and limits. This plan settles where those features belong in the app and the order to ship them.
 
+## Character and editor consolidation
+
+Added 14 November 2026. The [character and editor improvement plan](character-editor-improvement-plan.md) is the current roadmap for shared artwork, pose variants, character editing and creation prompts. Its first milestone migrates Yohta to one shared head and eye set across sitting and standing, with working Nod, gaze and save/import/export, while retaining both sleep poses and held artwork. The earlier deliverables below provide the original roadmap context.
+
 ## What to build first
 
 | Order | Deliverable | Ship when |

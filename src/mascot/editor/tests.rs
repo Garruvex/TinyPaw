@@ -2,6 +2,30 @@ use super::*;
 use crate::mascot::pack::{OnDuplicate, test_install_folder};
 
 #[test]
+fn art_save_preserves_standing_music_assets() {
+    let dir = std::env::temp_dir().join(format!("tinypaw-standing-save-{}", std::process::id()));
+    let (root, character) = test_install_folder(&dir, OnDuplicate::Ask);
+    let folder = root.join(character.id);
+    std::fs::create_dir_all(folder.join("music")).unwrap();
+    for name in ["body", "relaxed", "phone", "stick"] {
+        std::fs::copy(folder.join("sit/body.png"),folder.join(format!("music/{name}.png"))).unwrap();
+    }
+    let path = folder.join("character.json");
+    let mut manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    manifest["music"] = serde_json::json!({"bop":"light_wave","artwork":{
+        "body":"music/body.png","relaxed_arm":"music/relaxed.png",
+        "phone_arm":"music/phone.png","stick_arm":"music/stick.png","pivot":[0.5,0.6]}});
+    std::fs::write(&path,serde_json::to_string(&manifest).unwrap()).unwrap();
+    let editor = Editor::open_in(&root,&character).unwrap();
+    let saved = editor.save_into(&root).unwrap();
+    assert_eq!(saved.rig().unwrap().music_items(),3);
+    let reopened = read_manifest(&folder).unwrap();
+    reopened.validate_files(&folder).unwrap();
+    assert_eq!(reopened.music_art.unwrap().pivot,(0.5,0.6));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn saving_many_padded_layers_compacts_sources_and_preserves_placement() {
     let dir = std::env::temp_dir().join(format!("tinypaw-padded-save-{}", std::process::id()));
     let (root, character) = test_install_folder(&dir, OnDuplicate::Ask);
@@ -28,9 +52,9 @@ fn saving_many_padded_layers_compacts_sources_and_preserves_placement() {
             behind: kind.behind_by_default(),
             motion: MotionSpec::default_for(kind),
             faces: if kind == PartType::Head {
-                [None, Some(layer.clone()), Some(layer.clone())]
+                [None, Some(layer.clone()), Some(layer.clone()), None]
             } else {
-                [None, None, None]
+                [None, None, None, None]
             },
         })
         .collect();
@@ -302,6 +326,15 @@ fn reference_results_assemble_save_and_reimport_with_their_roles() {
             .is_empty()
     );
     e.set_image(Target::Held, &dir.join("held.png")).unwrap();
+    for event in [
+        super::super::reactions::Event::Headpat,
+        super::super::reactions::Event::Sleep,
+        super::super::reactions::Event::Wake,
+    ] {
+        e.set_reference_reaction(event, &dir.join("held.png"))
+            .unwrap();
+    }
+    e.enable_reference_headpat();
     let saved = e.save_into(&root).unwrap();
     let folder = saved.folder.clone().unwrap();
     assert!(folder.join(HELD_FILE).exists());
@@ -322,6 +355,16 @@ fn reference_results_assemble_save_and_reimport_with_their_roles() {
         .save_into(&root)
         .unwrap();
     assert!(held(&again.pack_reactions(), &Config::default()).is_some());
+    let reactions = again.pack_reactions();
+    assert!(reactions.companionship.as_ref().unwrap().petting);
+    for event in [
+        super::super::reactions::Event::Headpat,
+        super::super::reactions::Event::Sleep,
+        super::super::reactions::Event::Wake,
+    ] {
+        let art = super::super::reactions::art(&reactions, &Config::default(), event).unwrap();
+        assert!(again.reaction_image(&art).is_some());
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -486,8 +529,8 @@ fn edit_add_parts_and_save() {
         .unwrap()
         .visible_centre(e.canvas)
         .unwrap();
-    e.set_pupil_size(0, 1.5).unwrap();
-    e.set_pupil_size(0, 2.0).unwrap();
+    e.set_eye_layer_size(0, EyeSlot::Pupil, 1.5).unwrap();
+    e.set_eye_layer_size(0, EyeSlot::Pupil, 2.0).unwrap();
     let pupil = e.eyes[0].pupil.as_ref().unwrap();
     let resized_centre = pupil.visible_centre(e.canvas).unwrap();
     assert!((pupil_centre.0 - resized_centre.0).abs() < 0.0001);
@@ -499,6 +542,11 @@ fn edit_add_parts_and_save() {
     assert_eq!(e.eyes[0].pupil.as_ref().unwrap().placement.scale, 1.0);
     e.redo();
     assert_eq!(e.eyes[0].pupil.as_ref().unwrap().placement.scale, 2.0);
+    e.set_eye_size(0, 1.5).unwrap();
+    assert_eq!(e.eyes[0].mask.as_ref().unwrap().placement.scale, 1.5);
+    assert_eq!(e.eyes[0].pupil.as_ref().unwrap().placement.scale, 3.0);
+    assert!(e.set_eye_size(0, 8.0).is_err());
+    assert_eq!(e.eyes[0].white.as_ref().unwrap().placement.scale, 1.5);
     let saved = e.save_into(&root).unwrap();
     assert_eq!(saved.id, c.id, "saving keeps the character's identity");
     let rig = saved.rig().unwrap();

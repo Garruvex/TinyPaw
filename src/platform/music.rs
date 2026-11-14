@@ -223,7 +223,7 @@ fn run(shared: &Shared) {
                     .filter(|(a, _)| source.is_app(&a.exe))
                     .fold(0.0f32, |m, (_, p)| m.max(*p))
             }),
-            Source::Input(_) => input.as_ref().map(|(_, p)| p.take()),
+            Source::Input(_) => input.as_mut().and_then(|(_, p)| p.take()),
         };
         shown_heard = fall(shown_heard, peak.unwrap_or(0.0), dt);
         shared
@@ -243,7 +243,9 @@ fn run(shared: &Shared) {
             }
             None => {
                 envelope.reset();
-                if !matches!(source, Source::Input(_)) {
+                if matches!(source, Source::Input(_)) {
+                    input = None;
+                } else {
                     sessions = None;
                 }
                 shared
@@ -413,6 +415,9 @@ fn input_names() -> Vec<String> {
 struct InputPeak {
     _stream: cpal::Stream,
     peak: Arc<AtomicU32>,
+    packets: Arc<AtomicU32>,
+    last_packets: u32,
+    last_packet: Instant,
 }
 
 impl InputPeak {
@@ -420,7 +425,10 @@ impl InputPeak {
         use cpal::traits::StreamTrait;
         let peak = Arc::new(AtomicU32::new(0));
         let p = peak.clone();
+        let packets = Arc::new(AtomicU32::new(0));
+        let callback_packets = packets.clone();
         let stream = super::beat::open_input(name, move |chunk: &[f32]| {
+            callback_packets.fetch_add(1, Ordering::Relaxed);
             let loudest = chunk.iter().fold(0.0f32, |m, s| m.max(s.abs()));
             // Non-negative floats order the same as their bits.
             p.fetch_max(loudest.to_bits(), Ordering::Relaxed);
@@ -429,17 +437,46 @@ impl InputPeak {
         Some(Self {
             _stream: stream,
             peak,
+            packets,
+            last_packets: 0,
+            last_packet: Instant::now(),
         })
     }
 
-    fn take(&self) -> f32 {
-        f32::from_bits(self.peak.swap(0, Ordering::Relaxed))
+    fn take(&mut self) -> Option<f32> {
+        let packets = self.packets.load(Ordering::Relaxed);
+        if packets != self.last_packets {
+            self.last_packets = packets;
+            self.last_packet = Instant::now();
+        }
+        if self.last_packet.elapsed() >= Duration::from_secs(2) {
+            return None;
+        }
+        Some(f32::from_bits(self.peak.swap(0, Ordering::Relaxed)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "reads a real input selected through TINYPAW_AUDIO_INPUT"]
+    fn the_meter_reads_a_selected_input() {
+        let name = std::env::var("TINYPAW_AUDIO_INPUT").expect("set TINYPAW_AUDIO_INPUT");
+        let meter = Meter::start(Source::Input(name));
+        for _ in 0..12 {
+            std::thread::sleep(Duration::from_millis(250));
+            println!(
+                "state {:?}, heard {:.4}, level {:.4}, all {:.4}",
+                meter.state(),
+                meter.heard(),
+                meter.level(),
+                meter.all_apps()
+            );
+        }
+        println!("inputs {:?}", meter.inputs());
+    }
 
     /// Reads this PC's real playback meters for a moment; it needs an audio
     /// device, so it isn't part of the regular run.

@@ -165,7 +165,18 @@ pub fn misfits(m: &Manifest, folder: &Path) -> Result<Vec<Misfit>, String> {
             .map_err(|e| format!("{asset}: {e}"))?
             .into_dimensions()
             .map_err(|e| format!("{asset}: {e}"))?;
-        if size != m.canvas {
+        let expected = m
+            .resources()
+            .into_iter()
+            .find(|(name, _)| *name == asset)
+            .map(|(_, size)| size)
+            .unwrap_or(m.canvas);
+        if size != expected {
+            if expected != m.canvas {
+                return Err(format!(
+                    "{asset} does not match its declared original source size"
+                ));
+            }
             if size.0 > MAX_SOURCE_SIDE || size.1 > MAX_SOURCE_SIDE {
                 return Err(format!(
                     "{asset} must be at most {MAX_SOURCE_SIDE} × {MAX_SOURCE_SIDE} pixels"

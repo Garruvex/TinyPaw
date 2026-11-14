@@ -1,15 +1,55 @@
 use super::*;
 
 impl App {
+    pub(super) fn dance_options(&self) -> crate::mascot::motion::Dance {
+        let s = self.session.settings();
+        crate::mascot::motion::Dance {
+            pose: match s.choice(character::MUSIC_POSE) {
+                "sit" => 1,
+                "stand" => 2,
+                _ => 0,
+            },
+            stand_threshold: s.float(character::EXCITEMENT) as f32 / 100.0,
+            hand_offset: iced::Vector::new(
+                s.float(character::WAVE_X) as f32 / 100.0,
+                s.float(character::WAVE_Y) as f32 / 100.0,
+            ),
+            hand_angle: (s.float(character::WAVE_ANGLE) as f32).to_radians(),
+            wave_range: s.float(character::WAVE_RANGE) as f32 / 100.0,
+            every: s.choice(character::DANCE_EVERY).parse().unwrap_or(16),
+            included: character::DANCE_STYLES.map(|id| s.bool(id)),
+            item: match s.choice(character::DANCE_ITEM) {
+                "glow_stick" => 0,
+                "phone" => 1,
+                _ => 2,
+            },
+        }
+    }
+
     #[cfg(windows)]
     /// Playback loudness scaled by Music strength, 0 when off or silent.
     pub(super) fn music_level(&self) -> f32 {
         #[cfg(windows)]
         if let Some(m) = &self.music {
+            if !self.session.settings().bool(character::MUSIC) {
+                return 0.0;
+            }
             let strength = self.session.settings().float(character::MUSIC_STRENGTH) as f32;
             return m.level() * strength;
         }
         0.0
+    }
+
+    pub(super) fn music_energy(&self) -> Option<f32> {
+        #[cfg(windows)]
+        if let Some(m) = &self.music {
+            return Some(if self.session.settings().bool(character::MUSIC) {
+                m.level()
+            } else {
+                0.0
+            });
+        }
+        Some(0.0)
     }
 
     pub(super) fn beat_sensitivity(&self) -> crate::mascot::beat::Sensitivity {
@@ -166,15 +206,29 @@ impl App {
     /// desktop character is showing, or the Character page is open to show
     /// the meter; otherwise it's stopped and costs nothing. Also passes on
     /// "music started" to the character.
+    pub(super) fn companion_audio(&self) -> crate::mascot::companionship::Audio {
+        use crate::mascot::companionship::Audio;
+        match self.music.as_ref().map(|m| m.state()) {
+            Some(platform::music::State::Silent) => Audio::Quiet,
+            Some(platform::music::State::Playing) => Audio::Playing,
+            _ => Audio::Unknown,
+        }
+    }
+
     pub(super) fn sync_music(&mut self) {
         #[cfg(windows)]
         {
             let on = self.session.settings().bool(character::MUSIC);
             let showing = self.mascot.as_ref().is_some_and(|m| !m.is_hidden());
-            let wanted = on && (showing || self.studio.motion_preview.is_some());
+            let sleep_audio = self.mascot.as_ref().is_some_and(|m| m.sleep_enabled()) && showing;
+            let wanted = (on && (showing || self.studio.motion_preview.is_some())) || sleep_audio;
             use crate::mascot::music::Source;
             use platform::beat::Target;
-            let source = self.music_source();
+            let source = if sleep_audio && !on {
+                Source::All
+            } else {
+                self.music_source()
+            };
             match (wanted, &self.music) {
                 (true, None) => self.music = Some(platform::music::Meter::start(source.clone())),
                 (true, Some(m)) => m.set_source(&source),
@@ -201,7 +255,7 @@ impl App {
                     }
                 }
             };
-            let follow = wanted && self.session.settings().bool(character::BEAT);
+            let follow = on && wanted && self.session.settings().bool(character::BEAT);
             let sensitivity = self.beat_sensitivity();
             let engine = self.beat_engine();
             match (follow.then_some(target).flatten(), &self.beat) {
@@ -215,7 +269,7 @@ impl App {
                 (None, Some(_)) => self.beat = None,
                 (None, None) => {}
             }
-            if self.music.as_ref().is_some_and(|m| m.take_started()) {
+            if on && self.music.as_ref().is_some_and(|m| m.take_started()) {
                 let options = self.mascot_options();
                 if let Some(m) = &mut self.mascot {
                     m.say(crate::mascot::lines::Trigger::MusicStart, &options);

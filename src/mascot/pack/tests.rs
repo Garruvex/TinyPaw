@@ -1,6 +1,153 @@
 use super::*;
 
 #[test]
+fn mohawk_yohta_artwork_covers_reactions_and_sleep_positions() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("assets/mascot/yohta/yohta-chibi-sitting-mohawk-pet");
+    let manifest = read_manifest(&source).unwrap();
+    manifest.validate_files(&source).unwrap();
+    assert_eq!(manifest.bop, Some(Bop::LightWave));
+    assert_eq!(manifest.lines.total(), 74);
+    assert_eq!(manifest.default_pose().body, "sit/body.png");
+    assert_eq!(manifest.default_pose().parts.len(), 2);
+    assert_eq!(manifest.music_art.as_ref().unwrap().pivot, (540.0/1024.0,583.0/1024.0));
+    let bottom = |file: &str| {
+        let pixels = image::open(source.join(file)).unwrap().to_rgba8();
+        (0..pixels.height()).rev().find(|&y|
+            (0..pixels.width()).any(|x| pixels.get_pixel(x,y)[3] >= 32)).unwrap() + 1
+    };
+    assert_eq!(bottom("sit/body.png"), bottom("music/standing-torso-v2.png"),
+        "standing and sitting feet share the ground baseline");
+    assert!(inspect_folder(&source).unwrap().misfits.is_empty());
+    let poses = super::super::reactions::sleep_poses(
+        &manifest.reactions,
+        &super::super::reactions::Config::default(),
+    );
+    assert_eq!(poses.len(), 2, "seated dozing and curled sleeping");
+    assert_ne!(poses[0].mouth, poses[1].mouth);
+    let dir = scratch("mohawk-artwork");
+    let root = dir.join("characters");
+    let Imported::Installed(character) =
+        import_folder_into(&root, &source, &[], OnDuplicate::Ask).unwrap()
+    else {
+        panic!("fresh character installs");
+    };
+    assert!(character.rig().is_ok());
+    let out = dir.join("out");
+    fs::create_dir_all(&out).unwrap();
+    // Verify authored defaults independently of this machine's saved preferences.
+    let exported = export_with(&character, &out, &Overrides::default(), |_| None).unwrap();
+    let reopened = read_manifest(&exported).unwrap();
+    reopened.validate_files(&exported).unwrap();
+    assert_eq!(reopened.music_art.as_ref().unwrap().head.as_deref(), Some("music/standing-head-v2.png"));
+    assert_eq!(reopened.music_art.as_ref().unwrap().head_pivot, Some((470.0/1024.0,570.0/1024.0)));
+    for asset in ["held.png", "reactions/click.png", "reactions/drop.png",
+        "reactions/headpat.png", "reactions/sleep.png", "reactions/sleep-curled.png",
+        "reactions/wake.png", "sit/part-1-head-petted.png"] {
+        assert!(exported.join(asset).is_file(), "export keeps {asset}");
+    }
+    for name in ["standing-head-v2", "standing-torso-v2", "standing-relaxed-arm", "standing-phone-arm", "standing-stick-arm"] {
+        assert!(exported.join(format!("music/{name}.png")).is_file());
+    }
+    assert_eq!(reopened.bop, Some(Bop::LightWave));
+    assert_eq!(reopened.lines.total(), 74);
+    assert_eq!(reopened.music_art.as_ref().unwrap().body, "music/standing-torso-v2.png");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Produce the artwork review with the same renderer used on the desktop.
+#[test]
+#[ignore = "writes Yohta music preview and thumbnail"]
+fn render_mohawk_yohta_music_artwork() {
+    use image::imageops;
+    use iced::advanced::{Renderer as _, graphics::{Viewport, geometry::Renderer as _}};
+    use iced::widget::canvas::Frame;
+    use iced::{Color, Rectangle, Size};
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("assets/mascot/yohta/yohta-chibi-sitting-mohawk-pet");
+    let rig = load_folder(&source).unwrap().rig().unwrap();
+    let parts = rig.motion_parts();
+    let render = |angle: f32, phone: bool, active: bool, raised: bool, sample: Option<&super::super::motion::Pose>, background: Color| {
+        let viewport = Viewport::with_physical_size(Size::new(512, 512), 1.0);
+        let mut renderer = iced::Renderer::new(iced::Font::DEFAULT, 14.0.into());
+        let bounds = Rectangle::with_size(viewport.logical_size());
+        renderer.reset(bounds);
+        let mut frame = Frame::new(&renderer, bounds.size());
+        frame.scale(0.5_f32);
+        let mut pose = super::super::motion::Pose {
+            light_lift: if raised { 1.0 } else { 0.0 },
+            light_phone: phone,
+            music_active: active,
+            light_swing: (angle + 1.8) / 0.45,
+            angles: parts.iter().map(|p| match p.kind {
+                PartType::HoldingArm | PartType::Grip | PartType::Phone |
+                PartType::GlowStick | PartType::PhoneGlow | PartType::StickGlow => angle,
+                _ => 0.0,
+            }).collect(),
+            ..Default::default()
+        };
+        if let Some(sample) = sample {
+            pose = sample.clone();
+            pose.music_active = active;
+        }
+        pose.music_mix = None;
+        super::super::motion::place(&mut frame, &pose, rig.anchor(), rig.visible_height());
+        rig.draw_pose(&mut frame, &pose);
+        renderer.draw_geometry(frame.into_geometry());
+        let mut pixels = tiny_skia::Pixmap::new(512, 512).unwrap();
+        let mut mask = tiny_skia::Mask::new(512, 512).unwrap();
+        renderer.draw(&mut pixels.as_mut(), &mut mask, &viewport, &[bounds], background);
+        RgbaImage::from_fn(512, 512, |x,y| {
+            let p = pixels.pixel(x,y).unwrap().demultiply();
+            image::Rgba([p.blue(), p.green(), p.red(), p.alpha()])
+        })
+    };
+    let mut review = RgbaImage::new(2048,1024);
+    for (column, (angle, phone, active, raised)) in [(0.0,false,false,false),
+        (0.0,false,true,false),(-1.35,true,true,true),(-2.25,true,true,true),
+        (-1.35,false,true,true),(-1.8,false,true,true),(-2.25,false,true,true),
+        (0.0,false,false,false)].into_iter().enumerate() {
+        imageops::replace(&mut review,
+            &render(angle,phone,active,raised,None,Color::from_rgb8(28,32,43)),
+            (column % 4) as i64*512, (column / 4) as i64*512);
+    }
+    review.save(source.join("music-preview.png")).unwrap();
+    let sample = |animator: &mut super::super::motion::Animator, phase: f32| {
+        animator.step(&parts, &super::super::motion::Inputs {
+            music: 1.0, beat: Some(phase), bop: Bop::Nod,
+            music_items: rig.music_items(),
+            dance: super::super::motion::Dance { pose: 2, ..Default::default() },
+            dt: 1.0 / 30.0, ..Default::default()
+        })
+    };
+    let mut nod_review = RgbaImage::new(2048,512);
+    for (column, phase) in [0.0, 0.3, 0.58, 0.9].into_iter().enumerate() {
+        let pose = sample(&mut super::super::motion::Animator::default(), phase);
+        imageops::replace(&mut nod_review,
+            &render(0.0,false,true,false,Some(&pose),Color::from_rgb8(28,32,43)),
+            column as i64*512, 0);
+    }
+    nod_review.save(source.join("standing-nod-preview.png")).unwrap();
+    let frames = Path::new(env!("CARGO_MANIFEST_DIR")).join(".work/nod-reference-frames");
+    fs::create_dir_all(&frames).unwrap();
+    let mut animator = super::super::motion::Animator::default();
+    for n in 0..60 {
+        let pose = sample(&mut animator, (n % 15) as f32 / 15.0);
+        let mut frame = RgbaImage::new(1024,512);
+        for (column, standing) in [false,true].into_iter().enumerate() {
+            imageops::replace(&mut frame,
+                &render(0.0,false,standing,false,Some(&pose),Color::from_rgb8(28,32,43)),
+                column as i64*512, 0);
+        }
+        frame.save(frames.join(format!("{n:03}.png"))).unwrap();
+    }
+
+    let resting = render(0.0,false,false,false,None,Color::TRANSPARENT);
+    imageops::resize(&resting, 96, 96, imageops::FilterType::Lanczos3)
+        .save(source.join("thumb.png")).unwrap();
+}
+
+#[test]
 fn bundled_yohta_is_an_ordinary_pack_that_exports_and_copies() {
     let dir = scratch("bundled");
     let rig = bundled_rig();
@@ -113,6 +260,14 @@ fn reference_prompt_folders_pass_import_with_every_requested_image_mapped() {
     fs::create_dir(&source).unwrap();
     let mut request = Request::new("My Cat.png".into());
     request.canvas = 512;
+    request.dance = true;
+    request.extras = vec![
+        crate::mascot::reference::Role::Petted,
+        crate::mascot::reference::Role::Sleep,
+        crate::mascot::reference::Role::Wake,
+        crate::mascot::reference::Role::Click,
+        crate::mascot::reference::Role::Drop,
+    ];
     for (layered, eyes, tracking) in [
         (false, false, false),
         (true, false, false),
@@ -143,6 +298,14 @@ fn reference_prompt_folders_pass_import_with_every_requested_image_mapped() {
         }
         request.validate_folder(&source).unwrap();
         prepare_folder_into(&dir.join("library"), &source, None).unwrap();
+        let mut changed: Json = serde_json::from_str(json).unwrap();
+        let items = changed["poses"]["sit"]["parts"].as_array_mut().unwrap();
+        let phone = items.iter_mut().find(|p| p["type"] == "phone").unwrap();
+        phone["pivot"] = json!([0.25, 0.25]);
+        fs::write(source.join("character.json"), changed.to_string()).unwrap();
+        assert!(request.validate_folder(&source).is_err(), "a detached item pivot must fail");
+        fs::write(source.join("character.json"), json).unwrap();
+
         if tracking {
             let mut changed: Json = serde_json::from_str(json).unwrap();
             changed["poses"]["sit"]["eyes"][0]["mask"] = json!("body.png");
@@ -824,11 +987,15 @@ fn held_poses_are_pack_images_that_install_and_export() {
     // A user Use artwork picture travels with Export.
     let user = dir.join("user");
     fs::create_dir_all(&user).unwrap();
-    block(10, 90).save(user.join("art-5.png")).unwrap();
+    let original = image::RgbaImage::from_pixel(60, 30, image::Rgba([40, 80, 200, 255]));
+    original.save(user.join("art-5.png")).unwrap();
+    let mut source_art = Art::new(SoundRef::User("art-5.png".into()));
+    source_art.source_size = Some([60, 30]);
+    source_art.grip = Some([0.3, 0.2]);
     let mut layer = Config::default();
     let entry = super::super::reactions::Entry {
         visual: Some(super::super::reactions::Visual::Artwork),
-        art: Some(Art::new(SoundRef::User("art-5.png".into()))),
+        art: Some(source_art),
         ..Default::default()
     };
     layer.set_entry(Event::Drop, Some(entry));
@@ -842,6 +1009,14 @@ fn held_poses_are_pack_images_that_install_and_export() {
     assert!(
         folder.join("reactions/art-5.png").exists() && folder.join("reactions/held.png").exists()
     );
+    let exported = read_manifest(&folder).unwrap();
+    let exported_art = exported.reactions.entry(Event::Drop).unwrap().art.as_ref().unwrap();
+    assert_eq!(exported_art.source_size, Some([60, 30]));
+    assert_eq!(exported_art.grip, Some([0.3, 0.2]));
+    let restored = image::open(folder.join("reactions/art-5.png")).unwrap().to_rgba8();
+    assert_eq!(restored, original);
+    let Imported::Installed(reopened) = import_folder_into(&dir.join("reopened"), &folder, &[], OnDuplicate::Ask).unwrap() else { panic!("reimported"); };
+    assert_eq!(reopened.reaction_image(exported_art).unwrap(), original);
     // A held pose on another stage size is refused.
     RgbaImage::new(50, 50)
         .save(src.join("reactions/held.png"))

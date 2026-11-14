@@ -9,6 +9,39 @@ impl App {
         out: &mut Outcomes,
     ) -> Task<Message> {
         match ui {
+            UiMsg::Align(action) => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.align(action);
+                }
+            }
+            UiMsg::GripEdit => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.placing_grip = !p.placing_grip;
+                    p.placement_preview = Some(crate::mascot::reactions::Event::Pickup);
+                }
+            }
+            UiMsg::GripSet(grip) => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.set_grip(grip);
+                }
+            }
+            UiMsg::CompanionMouth => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.placing_mouth = !p.placing_mouth;
+                }
+            }
+            UiMsg::Companionship(settings) => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.reactions.companionship = Some(settings);
+                    p.placing_mouth = false;
+                }
+            }
+            UiMsg::CompanionTest(state) => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.placement_preview = None;
+                    p.companion_test(state);
+                }
+            }
             UiMsg::ReactionSound(e, sound) => {
                 if let Some(p) = &mut self.studio.motion_preview {
                     p.set_reaction_sound(e, sound);
@@ -58,6 +91,21 @@ impl App {
                 // Use artwork starts by choosing its PNG.
                 return self.ui_message(UiMsg::ReactionPicture(e), now, out);
             }
+            UiMsg::SleepPoseEdit(index, remove) => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.edit_sleep_pose(index, remove);
+                }
+            }
+            UiMsg::SleepPoseAdd => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.adding_sleep_pose = true;
+                }
+                return self.ui_message(
+                    UiMsg::ReactionPicture(crate::mascot::reactions::Event::Sleep),
+                    now,
+                    out,
+                );
+            }
             UiMsg::ReactionPicture(e) => {
                 return Task::perform(
                     rfd::AsyncFileDialog::new()
@@ -77,12 +125,14 @@ impl App {
                     p.set_held(None);
                 }
             }
+            UiMsg::PlacementPreview(event) => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.placement_preview = event;
+                }
+            }
             UiMsg::ReactionPlace(e, held, which, value) => {
                 if let Some(p) = &mut self.studio.motion_preview {
                     p.set_place(e, held, which, value);
-                    if held {
-                        p.test(crate::mascot::preview::Test::DragRight);
-                    }
                 }
             }
             UiMsg::ReactionVisual(e, v) => {

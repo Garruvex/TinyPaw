@@ -111,7 +111,7 @@ const MAX_EYES: usize = 4;
 /// Image files per pack, across every pose.
 const MAX_IMAGES: usize = 32;
 /// Head faces, in the order the rig takes them.
-const FACES: [&str; 3] = ["blink", "pressed", "dragging"];
+const FACES: [&str; 4] = ["blink", "pressed", "dragging", "petted"];
 /// Furthest a pupil may travel, as a fraction of the canvas.
 pub(super) const MAX_GAZE: f32 = 0.1;
 
@@ -193,7 +193,12 @@ impl Character {
         };
         let path = self.sound_path(&art.image)?;
         let bytes = fs::read(&path).ok()?;
-        decode_png(&bytes, &path.to_string_lossy(), canvas).ok()
+        decode_png(
+            &bytes,
+            &path.to_string_lossy(),
+            art.source_size.map(|[w, h]| (w, h)).unwrap_or(canvas),
+        )
+        .ok()
     }
 
     /// What `e` does to the picture, pack under user.
@@ -277,11 +282,23 @@ fn build_rig(m: &Manifest, png: impl Fn(&str) -> Result<RgbaImage, String>) -> R
             rig.set_motion(&[w]);
         }
         rig.set_bop(m.bop.unwrap_or_default());
+        if let Some(art) = &m.music_art {
+            rig.set_music_art(
+                png(&art.body)?,
+                png(&art.relaxed_arm)?,
+                png(&art.phone_arm)?,
+                png(&art.stick_arm)?,
+                art.pivot,
+            )?;
+            if let (Some(head), Some(pivot)) = (&art.head, art.head_pivot) {
+                rig.set_music_head(png(head)?, pivot)?;
+            }
+        }
         return Ok(rig);
     }
     let mut parts = Vec::new();
     for part in &pose.parts {
-        let mut faces = [None, None, None];
+        let mut faces = [None, None, None, None];
         for (slot, face) in faces.iter_mut().zip(&part.faces) {
             if let Some(asset) = face {
                 *slot = Some(png(asset)?);
@@ -314,6 +331,18 @@ fn build_rig(m: &Manifest, png: impl Fn(&str) -> Result<RgbaImage, String>) -> R
         eyes,
     });
     rig.set_bop(m.bop.unwrap_or_default());
+    if let Some(art) = &m.music_art {
+        rig.set_music_art(
+            png(&art.body)?,
+            png(&art.relaxed_arm)?,
+            png(&art.phone_arm)?,
+            png(&art.stick_arm)?,
+            art.pivot,
+        )?;
+        if let (Some(head), Some(pivot)) = (&art.head, art.head_pivot) {
+            rig.set_music_head(png(head)?, pivot)?;
+        }
+    }
     Ok(rig)
 }
 
@@ -610,6 +639,7 @@ fn install_into_guarded(
         rest: super::rest::RestMode::Auto,
         lines: Lines::default(),
         bop: None,
+        music_art: None,
         reactions: super::reactions::new_character(),
     };
     let art = draft.art.clone();
@@ -1274,7 +1304,7 @@ pub fn import_reaction_image(
     id: &str,
     from: &Path,
     canvas: (u32, u32),
-) -> Result<SoundRef, String> {
+) -> Result<super::reactions::Art, String> {
     let root = user_dir().ok_or("no per-user data folder")?;
     if fs::metadata(from).map_err(|e| e.to_string())?.len() > MAX_FILE {
         return Err("the PNG is larger than 64 MiB".into());
@@ -1284,33 +1314,45 @@ pub fn import_reaction_image(
     let art = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
         .map_err(|e| format!("not a readable PNG ({e})"))?
         .to_rgba8();
-    let (trimmed, _) = trim(&art).ok_or("that PNG is empty")?;
-    let k = (canvas.1 as f32 / trimmed.height() as f32)
-        .min(canvas.0 as f32 / trimmed.width() as f32)
-        .min(1.0);
-    let place = super::placement::Placement {
-        x: (canvas.0 as f32 - trimmed.width() as f32 * k) / 2.0,
-        y: canvas.1 as f32 - trimmed.height() as f32 * k,
-        scale: k,
-        angle: 0.0,
-    };
-    let fitted = super::placement::bake(&trimmed, place, canvas);
+    if trim(&art).is_none() {
+        return Err("that PNG is empty".into());
+    }
+    let dimensions = art.dimensions();
     let dir = user_sounds(&root, id);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let mut n = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis());
     let file = loop {
+        use std::io::Write;
         let name = format!("art-{n}.png");
-        if !dir.join(&name).exists() {
-            break name;
+        let destination = dir.join(&name);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&destination)
+        {
+            Ok(mut output) => {
+                if let Err(error) = output.write_all(&bytes).and_then(|_| output.sync_all()) {
+                    drop(output);
+                    let _ = fs::remove_file(&destination);
+                    return Err(error.to_string());
+                }
+                break name;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(error) => return Err(error.to_string()),
         }
-        n += 1;
     };
-    fitted
-        .save_with_format(dir.join(&file), image::ImageFormat::Png)
-        .map_err(|e| e.to_string())?;
-    Ok(SoundRef::User(file))
+    let mut result = super::reactions::Art::new(SoundRef::User(file));
+    result.source_size = Some([dimensions.0, dimensions.1]);
+    let fit = (canvas.0 as f32 / dimensions.0 as f32).min(canvas.1 as f32 / dimensions.1 as f32);
+    result.place = [
+        (1.0 - dimensions.0 as f32 * fit / canvas.0 as f32) / 2.0,
+        1.0 - dimensions.1 as f32 * fit / canvas.1 as f32,
+        1.0,
+    ];
+    Ok(result)
 }
 
 /// Deletes the user's sounds that neither the saved lines nor the saved
@@ -1461,6 +1503,9 @@ fn bake(
     }
     if let Some(user) = &o.reactions {
         let mut merged = m.reactions.clone();
+        if user.companionship.is_some() {
+            merged.companionship = user.companionship.clone();
+        }
         if user.settings.is_some() {
             merged.settings = user.settings;
         }

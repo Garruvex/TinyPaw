@@ -37,6 +37,10 @@ const MUSIC: f32 = 4.0;
 
 /// What changes every frame while the preview animates.
 struct Live {
+    companion: super::companionship::Controller,
+    pointer: Option<iced::Point>,
+    pointer_button: bool,
+    companion_events: Vec<Event>,
     animator: Animator,
     pose: Pose,
     now: f32,
@@ -53,9 +57,11 @@ struct Live {
 /// Idle, reduced motion, music and the frame pace, as of the last refresh.
 #[derive(Clone, Copy, Default)]
 pub struct Control {
+    pub dance: super::motion::Dance,
     pub idle: bool,
     pub reduced: bool,
     pub music: f32,
+    pub energy: Option<f32>,
     pub beat: Option<f32>,
     /// How fast the beat phase advances (cycles per second) and when it was
     /// sampled, so frames between samples carry it forward smoothly.
@@ -66,6 +72,8 @@ pub struct Control {
 }
 
 pub struct MotionPreview {
+    pub alignment: Option<super::alignment::Alignment>,
+    pub placing_grip: bool,
     pub id: &'static str,
     rig: Rig,
     /// The motion being edited, per part.
@@ -98,6 +106,10 @@ pub struct MotionPreview {
     pictures: Vec<(super::lines::SoundRef, super::rig::Picture)>,
     /// A click on the preview sets where the bubble's tail aims.
     pub placing_bubble: bool,
+    /// A still pose pinned on the shared stage while positioning its artwork.
+    pub placement_preview: Option<Event>,
+    pub adding_sleep_pose: bool,
+    pub placing_mouth: bool,
 }
 
 impl MotionPreview {
@@ -120,12 +132,17 @@ impl MotionPreview {
             reactions,
             reactions_pack: pack_reactions,
             pictures: Vec::new(),
+            placement_preview: None,
             bop_saved: rig.bop(),
             bop_default: pack_bop,
             lines_saved: lines.clone(),
             lines,
             lines_defaults: pack_lines,
             placing_bubble: false,
+            adding_sleep_pose: false,
+            placing_mouth: false,
+            placing_grip: false,
+            alignment: None,
             id,
             labels: rig.motion_labels(),
             kinds: rig.motion_parts().iter().map(|p| p.kind).collect(),
@@ -134,6 +151,10 @@ impl MotionPreview {
             defaults,
             rig,
             live: RefCell::new(Live {
+                companion: super::companionship::Controller::new(17),
+                pointer: None,
+                pointer_button: false,
+                companion_events: Vec::new(),
                 animator: Animator::default(),
                 pose: Pose::default(),
                 now: 0.0,
@@ -146,6 +167,110 @@ impl MotionPreview {
             }),
             control: Cell::new(Control::default()),
         }
+    }
+
+    pub fn sleep_poses(&self) -> Vec<super::reactions::SleepPose> {
+        super::reactions::sleep_poses(&self.reactions_pack, &self.reactions)
+    }
+    fn sleep_art(&self, index: usize) -> Option<super::reactions::Art> {
+        self.sleep_poses().get(index).map(|p| p.art.clone())
+    }
+    pub fn edit_sleep_pose(&mut self, index: usize, remove: bool) {
+        let mut poses = self.sleep_poses();
+        if index >= poses.len() {
+            return;
+        }
+        if remove {
+            poses.remove(index);
+        } else {
+            poses.swap(0, index);
+        }
+        let base = if poses.is_empty() {
+            None
+        } else {
+            Some(poses.remove(0))
+        };
+        if let Some(base) = base {
+            let mut settings =
+                super::reactions::companionship(&self.reactions_pack, &self.reactions);
+            settings.mouth = base.mouth;
+            self.reactions.companionship = Some(settings);
+            self.set_art(Event::Sleep, Some(base.art));
+        } else {
+            self.set_art(Event::Sleep, None);
+        }
+        self.entry_mut(Event::Sleep).sleep_poses = poses;
+        self.live.get_mut().companion.reset();
+        self.placement_preview = (!remove).then_some(Event::Sleep);
+    }
+    pub fn add_sleep_pose(&mut self, art: super::reactions::Art) {
+        let mut poses = self.sleep_poses();
+        if poses.len() >= 8 {
+            return;
+        }
+        let mouth = self.companionship().mouth;
+        if poses.is_empty() {
+            self.set_art(Event::Sleep, Some(art));
+        } else {
+            poses.push(super::reactions::SleepPose { art, mouth });
+            self.entry_mut(Event::Sleep).sleep_poses = poses.into_iter().skip(1).collect();
+        }
+    }
+    pub fn companionship(&self) -> super::companionship::Settings {
+        let mut settings = super::reactions::companionship(&self.reactions_pack, &self.reactions);
+        if let Ok(live) = self.live.try_borrow()
+            && live.companion.sleep_motion(live.now)
+                && let Some(pose) = self.sleep_poses().get(live.companion.sleep_pose) {
+                    settings.mouth = pose.mouth;
+                }
+        settings
+    }
+    pub fn companion_test(&self, state: super::companionship::State) {
+        let settings = self.companionship();
+        let mut live = self.live.borrow_mut();
+        let now = live.now;
+        live.companion
+            .set_sleep_pose_count(self.sleep_poses().len());
+        match state {
+            super::companionship::State::Asleep => live.companion.sleep_now(now, &settings),
+            super::companionship::State::Petting => live.companion.pet_now(now),
+            _ => {
+                live.companion.wake(now);
+                live.test = None;
+                live.showing = Some((now + 0.7, Event::Wake));
+            }
+        }
+    }
+    pub fn companion_pointer(&self, cursor: Option<iced::Point>, button: Option<bool>) {
+        let mut live = self.live.borrow_mut();
+        live.pointer = cursor;
+        if let Some(button) = button {
+            live.pointer_button = button;
+        }
+    }
+    pub fn draw_affection(&self, frame: &mut iced::widget::canvas::Frame) {
+        let live = self.live.borrow();
+        if live.test.is_none() {
+            live.companion.draw_affection(
+                frame,
+                self.rig.size(),
+                self.rig.visible_bounds(),
+                live.now,
+                self.control.get().reduced,
+            );
+        }
+    }
+    pub fn stirring(&self) -> bool {
+        self.live.borrow().companion.stirring
+    }
+    pub fn take_companion_events(&mut self) -> Vec<Event> {
+        std::mem::take(&mut self.live.get_mut().companion_events)
+    }
+    pub fn time(&self) -> f32 {
+        self.live.borrow().now
+    }
+    pub fn companion_state(&self) -> super::companionship::State {
+        self.live.borrow().companion.state
     }
 
     pub fn rig(&self) -> &Rig {
@@ -313,14 +438,113 @@ impl MotionPreview {
             .1
             .clone();
         picture.place = art.place;
-        Some(picture)
+        picture.preserve_aspect = art.source_size.is_some();
+        Some(picture.with_grip(art.grip))
+    }
+
+    pub fn align(&mut self, action: super::alignment::Action) {
+        use super::alignment::{Action, Alignment};
+        match action {
+            Action::Open(event) => {
+                let art = if event == Event::Pickup {
+                    self.held()
+                } else {
+                    self.art(event)
+                };
+                if let Some(art) = art {
+                    self.alignment = Some(Alignment::new(event, art));
+                    self.placement_preview = Some(event);
+                }
+            }
+            Action::Finish(apply) => {
+                if apply && self.alignment.as_ref().is_some_and(|a| a.error.is_some()) {
+                    return;
+                }
+                if let Some(a) = self.alignment.take()
+                    && apply {
+                        if a.event == Event::Pickup {
+                            self.set_held(Some(a.art));
+                        } else {
+                            self.set_art(a.event, Some(a.art));
+                        }
+                    }
+                self.placement_preview = None;
+                self.placing_grip = false;
+            }
+            action => {
+                if let Some(a) = &mut self.alignment {
+                    match action {
+                        Action::Compare(side_by_side) => a.side_by_side = side_by_side,
+                        Action::Opacity(v) => a.opacity = v.clamp(0.0, 1.0),
+                        Action::Zoom(v) => a.zoom = v.clamp(0.1, 2.0),
+                        Action::Match => {
+                            a.matching = true;
+                            a.points.clear();
+                            a.error = None;
+                            self.placing_grip = false;
+                        }
+                        Action::Point(p) if a.matching => a.point(p, self.rig.size()),
+                        Action::Number(index, text) => a.number(index, text),
+                        Action::Place(place) => {
+                            a.art.place = place;
+                            a.refresh_numbers();
+                            a.error = None;
+                        }
+                        Action::Reset => {
+                            a.art.place = [0.0, 0.0, 1.0];
+                            a.art.grip = None;
+                            a.refresh_numbers();
+                            a.error = None;
+                            a.matching = false;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn placement_picture(&self) -> Option<super::rig::Picture> {
+        if self.live.borrow().test.is_some() {
+            return None;
+        }
+        let event = self
+            .alignment
+            .as_ref()
+            .map(|a| a.event)
+            .or(self.placement_preview)?;
+        self.picture_for(if event == Event::Pickup {
+            self.held()
+        } else {
+            self.art(event)
+        })
+    }
+
+    pub fn set_grip(&mut self, grip: Option<[f32; 2]>) {
+        if let Some(a) = &mut self.alignment {
+            a.art.grip = grip;
+            self.placing_grip = false;
+            return;
+        }
+        if let Some(art) = self.entry_mut(Event::Pickup).held.as_mut() {
+            art.grip = grip;
+        }
+        self.placing_grip = false;
     }
 
     pub fn held(&self) -> Option<super::reactions::Art> {
+        if let Some(a) = &self.alignment
+            && a.event == Event::Pickup {
+                return Some(a.art.clone());
+            }
         super::reactions::held(&self.reactions_pack, &self.reactions)
     }
 
     pub fn art(&self, e: Event) -> Option<super::reactions::Art> {
+        if let Some(a) = &self.alignment
+            && a.event == e {
+                return Some(a.art.clone());
+            }
         super::reactions::art(&self.reactions_pack, &self.reactions, e)
     }
 
@@ -351,6 +575,17 @@ impl MotionPreview {
 
     /// Nudges a picture's alignment: `which` is 0 x, 1 y, 2 scale.
     pub fn set_place(&mut self, e: Event, held: bool, which: usize, value: f32) {
+        if let Some(a) = &mut self.alignment {
+            if which < 3 {
+                a.art.place[which] = if which == 2 {
+                    value.clamp(0.1, 4.0)
+                } else {
+                    value.clamp(-1.0, 1.0)
+                };
+                a.refresh_numbers();
+            }
+            return;
+        }
         let entry = self.entry_mut(e);
         let art = if held {
             entry.held.as_mut()
@@ -365,6 +600,7 @@ impl MotionPreview {
             } else {
                 value.clamp(-1.0, 1.0)
             };
+            self.placement_preview = Some(e);
         }
     }
 
@@ -385,7 +621,21 @@ impl MotionPreview {
         if let Some((Test::DragLeft | Test::DragRight, _)) = live.test {
             return None;
         }
+        match live.companion.state {
+            super::companionship::State::Asleep | super::companionship::State::Waking => {
+                return if live.companion.sleep_picture(live.now) {
+                    self.picture_for(self.sleep_art(live.companion.sleep_pose))
+                } else {
+                    None
+                };
+            }
+            super::companionship::State::Petting => {
+                return self.picture_for(self.art(Event::Headpat));
+            }
+            _ => {}
+        }
         match live.showing {
+            Some((_, Event::Wake)) if live.companion.sleep_pose != 0 => None,
             Some((until, e)) if live.now < until => self.picture_for(self.art(e)),
             _ => None,
         }
@@ -393,6 +643,9 @@ impl MotionPreview {
 
     /// Back to the pack's reaction sounds (unsaved until Save).
     pub fn reset_reactions(&mut self) {
+        self.placing_grip = false;
+        self.alignment = None;
+        self.placement_preview = None;
         self.reactions = Config::default();
     }
 
@@ -438,6 +691,9 @@ impl MotionPreview {
 
     /// Back to what's saved, dropping every unsaved change.
     pub fn discard(&mut self) {
+        self.placing_grip = false;
+        self.alignment = None;
+        self.placement_preview = None;
         self.specs = self.saved.clone();
         self.rig.set_motion(&self.specs);
         self.lines = self.lines_saved.clone();
@@ -446,12 +702,26 @@ impl MotionPreview {
     }
 
     pub fn test(&mut self, test: Test) {
+        self.placing_grip = false;
+        self.placement_preview = None;
         if let Test::Say(t) = test {
             self.say(t);
             let gesture = match t {
                 Trigger::Click => Some(Test::Click),
                 Trigger::Pickup | Trigger::Drop => Some(Test::DragRight),
                 Trigger::MusicStart => Some(Test::Music),
+                Trigger::Headpat => {
+                    self.companion_test(super::companionship::State::Petting);
+                    None
+                }
+                Trigger::Sleep => {
+                    self.companion_test(super::companionship::State::Asleep);
+                    None
+                }
+                Trigger::Wake => {
+                    self.companion_test(super::companionship::State::Awake);
+                    None
+                }
                 Trigger::Idle | Trigger::AnnotationEnd => None,
             };
             if let Some(g) = gesture {
@@ -507,7 +777,11 @@ impl MotionPreview {
 
     /// The line being said in the preview.
     pub fn speech(&self) -> Option<String> {
-        self.live.borrow().speech.as_ref().map(|s| s.text().to_owned())
+        self.live
+            .borrow()
+            .speech
+            .as_ref()
+            .map(|s| s.text().to_owned())
     }
 
     pub fn hold_speech(&mut self, seconds: f32) {
@@ -527,18 +801,23 @@ impl MotionPreview {
     pub fn advance(&self, at: Instant) -> bool {
         let dt = {
             let mut live = self.live.borrow_mut();
-            let dt = live.last.map_or(0.0, |l| at.duration_since(l).as_secs_f32());
+            let dt = live
+                .last
+                .map_or(0.0, |l| at.duration_since(l).as_secs_f32());
             live.last = Some(at);
             dt
         };
         let c = self.control.get();
         let beat = c.beat.map(|phase| {
-            let ahead = c.sampled.map_or(0.0, |s| at.saturating_duration_since(s).as_secs_f32());
+            let ahead = c
+                .sampled
+                .map_or(0.0, |s| at.saturating_duration_since(s).as_secs_f32());
             (phase + c.beat_rate * ahead).rem_euclid(1.0)
         });
         let before = self.live.borrow().speech.is_some();
         self.tick(dt, c.idle, c.reduced, c.music, beat);
         before != self.live.borrow().speech.is_some()
+            || !self.live.borrow().companion_events.is_empty()
     }
 
     /// Advances the preview by `dt` seconds.
@@ -547,6 +826,55 @@ impl MotionPreview {
         let mut live = self.live.borrow_mut();
         let live = &mut *live;
         live.now += dt.clamp(0.0, 0.1);
+        let mut settings = self.companionship();
+        settings.sleep = true;
+        settings.petting = true;
+        live.companion
+            .set_sleep_pose_count(self.sleep_poses().len());
+        let touching = live.pointer.is_some_and(|p| {
+            if live.companion.sleep_picture(live.now)
+                && let Some(picture) = self.picture_for(self.sleep_art(live.companion.sleep_pose)) {
+                    return picture.hit(self.rig.size(), p);
+                }
+            self.rig.hit(p, &live.pose).is_some()
+        });
+        if let Some(event) = live.companion.step(
+            &settings,
+            super::companionship::Input {
+                now: live.now,
+                cursor: live.pointer,
+                nearby: true,
+                touching,
+                pet_region: touching
+                    && live
+                        .pointer
+                        .is_some_and(|p| self.rig.pet_region(p, &live.pose)),
+                button: live.pointer_button && touching,
+                busy: live.test.is_some(),
+                response_busy: live.speech.is_some(),
+                audio: super::companionship::Audio::Quiet,
+                height: self.rig.visible_height(),
+            },
+        ) {
+            let e = match event {
+                super::companionship::Event::Headpat => Event::Headpat,
+                super::companionship::Event::Sleep => Event::Sleep,
+                super::companionship::Event::Wake => Event::Wake,
+            };
+            live.companion_events.push(e);
+            let trigger = match e {
+                Event::Headpat => Trigger::Headpat,
+                Event::Sleep => Trigger::Sleep,
+                _ => Trigger::Wake,
+            };
+            if let Some(line) = live.picker.pick(&self.lines, trigger) {
+                live.speech = Speech::new(&line.text, live.now);
+                live.sound = line.sound.clone();
+            }
+            if e == Event::Wake {
+                live.showing = Some((live.now + 0.7, e));
+            }
+        }
         if let Some(s) = &mut live.speech
             && !s.advance(live.now)
         {
@@ -560,7 +888,15 @@ impl MotionPreview {
             music,
             beat,
             bop: self.rig.bop(),
+            music_items: self.rig.music_items(),
+            energy: self.control.get().energy,
+            dance: self.control.get().dance,
             ..Inputs::default()
+        };
+        let music_duration = if self.rig.bop() == Bop::Random {
+            self.control.get().dance.every as f32 + 2.0
+        } else {
+            MUSIC
         };
         if let Some((test, started)) = live.test {
             let t = live.now - started;
@@ -584,10 +920,13 @@ impl MotionPreview {
                     inputs.dragging = true;
                     inputs.velocity = Vector::new(sign * speed, 0.0);
                 }
-                Test::Music if t < MUSIC => {
+                Test::Music if t < music_duration => {
                     // Rises and falls like a short phrase.
-                    inputs.music = inputs.music.max((t / MUSIC * std::f32::consts::PI).sin());
+                    inputs.music = inputs
+                        .music
+                        .max((t / music_duration * std::f32::consts::PI).sin());
                     inputs.beat = Some((t * 2.0).fract());
+                    inputs.energy = Some(inputs.music.clamp(0.0, 1.0));
                 }
                 Test::DragLeft | Test::DragRight => {
                     // Dropped: the drop's artwork shows briefly.
@@ -599,7 +938,34 @@ impl MotionPreview {
                 Test::Speak | Test::Music | Test::Say(_) => live.test = None,
             }
         }
+        let sleeping = live.companion.sleep_motion(live.now);
+        if sleeping {
+            inputs.idle = false;
+            inputs.music = 0.0;
+            inputs.beat = None;
+        }
         live.pose = live.animator.step(&self.rig.motion_parts(), &inputs);
+        if live.companion.state == super::companionship::State::Petting {
+            live.pose.expression = super::motion::Expression::Petted;
+        }
+        let whole_picture = self.art(Event::Headpat).is_some()
+            && live.companion.state == super::companionship::State::Petting;
+        live.companion
+            .apply_affection(&self.rig, &mut live.pose, live.now, reduced, whole_picture);
+        if sleeping {
+            if settings.breathing && !reduced {
+                live.pose.squash = (live.now * 1.6).sin() * 0.05;
+            }
+            live.pose.expression = super::motion::Expression::Blink;
+            live.pose.gaze = Vector::ZERO;
+        }
+        let whole_picture = live.companion.sleep_picture(live.now)
+            && self.art(Event::Sleep).is_some()
+            || live
+                .showing
+                .is_some_and(|(until, e)| live.now < until && self.art(e).is_some());
+        live.companion
+            .apply_sleep(&self.rig, &mut live.pose, live.now, reduced, whole_picture);
         // A test drag carries like the desktop: held near the top of the
         // head, leaning around that point rather than around the feet.
         if inputs.dragging {
@@ -634,6 +1000,57 @@ mod tests {
         )
     }
 
+    #[test]
+    fn wake_test_shows_the_wake_art_from_sleep_and_while_awake() {
+        let mut p = yohta();
+        let file = super::super::lines::SoundRef::User("wake.png".into());
+        p.add_picture(
+            file.clone(),
+            &image::RgbaImage::from_pixel(1, 1, image::Rgba([240, 100, 10, 255])),
+        );
+        p.set_art(Event::Wake, Some(super::super::reactions::Art::new(file)));
+        p.companion_test(super::super::companionship::State::Asleep);
+        p.companion_test(super::super::companionship::State::Awake);
+        assert!(p.picture().is_some());
+        for _ in 0..20 {
+            p.tick(0.05, false, false, 0.0, None);
+        }
+        assert!(p.picture().is_none());
+        p.companion_test(super::super::companionship::State::Awake);
+        assert!(p.picture().is_some());
+        p.test(Test::DragRight);
+        p.companion_test(super::super::companionship::State::Awake);
+        assert!(p.picture().is_some(), "wake preview replaces the drag test");
+    }
+
+    #[test]
+    fn optional_sleep_poses_preserve_placement_mouth_and_draft() {
+        use super::super::lines::SoundRef;
+        use super::super::reactions::Art;
+        let mut p = yohta();
+        let mut first = Art::new(SoundRef::Pack("sleep.png".into()));
+        first.place = [0.1, 0.0, 0.9];
+        p.add_sleep_pose(first.clone());
+        let mut settings = p.companionship();
+        settings.mouth = [0.2, 0.3];
+        p.reactions.companionship = Some(settings);
+        let second = Art::new(SoundRef::Pack("curled.png".into()));
+        p.add_sleep_pose(second.clone());
+        assert_eq!(p.sleep_poses().len(), 2);
+        p.edit_sleep_pose(1, false);
+        assert_eq!(p.art(Event::Sleep), Some(second));
+        assert_eq!(p.sleep_poses()[1].art, first);
+        assert_eq!(p.sleep_poses()[1].mouth, [0.2, 0.3]);
+        let saved = p.overrides(Default::default()).reactions.unwrap();
+        assert_eq!(
+            super::super::reactions::Config::parse(&saved.to_json(), true).unwrap(),
+            saved
+        );
+        p.edit_sleep_pose(0, true);
+        assert_eq!(p.art(Event::Sleep), Some(first));
+        p.edit_sleep_pose(0, true);
+        assert!(p.sleep_poses().is_empty());
+    }
     #[test]
     fn editing_marks_changes_and_reset_returns_to_the_pack() {
         let mut p = yohta();
@@ -722,6 +1139,36 @@ mod tests {
     }
 
     #[test]
+    fn alignment_cancel_apply_and_preview_zoom_are_independent() {
+        use super::super::{alignment::Action, reactions::Art};
+        let mut p = yohta();
+        let mut art = Art::new(SoundRef::User("art-1.png".into()));
+        art.grip = Some([0.2, 0.3]);
+        p.set_held(Some(art.clone()));
+        p.align(Action::Open(Event::Pickup));
+        p.align(Action::Zoom(1.8));
+        assert_eq!(p.held().unwrap(), art);
+        p.align(Action::Place([0.1, 0.2, 1.4]));
+        p.set_grip(Some([0.4, 0.5]));
+        assert_eq!(
+            p.reactions
+                .entry(Event::Pickup)
+                .unwrap()
+                .held
+                .as_ref()
+                .unwrap(),
+            &art
+        );
+        p.align(Action::Finish(false));
+        assert_eq!(p.held().unwrap(), art);
+        p.align(Action::Open(Event::Pickup));
+        p.align(Action::Place([0.1, 0.2, 1.4]));
+        p.align(Action::Finish(true));
+        assert_eq!(p.held().unwrap().place, [0.1, 0.2, 1.4]);
+        assert_eq!(p.held().unwrap().grip, art.grip);
+    }
+
+    #[test]
     fn the_held_pose_shows_while_carried_and_drop_art_after() {
         use super::super::reactions::Art;
         let mut p = yohta();
@@ -733,10 +1180,21 @@ mod tests {
         p.set_held(Some(Art::new(file.clone())));
         p.set_art(Event::Drop, Some(Art::new(file.clone())));
         p.set_place(Event::Pickup, true, 0, 0.05);
-        assert_eq!(p.held().unwrap().place[0], 0.05);
+        assert_eq!(p.placement_picture().unwrap().place[0], 0.05);
+        p.set_grip(Some([0.2, 0.3]));
+        assert_eq!(p.held().unwrap().grip, Some([0.2, 0.3]));
+        assert_eq!(
+            p.placement_picture().unwrap().hold,
+            iced::Point::new(0.2, 0.3)
+        );
+        p.set_grip(None);
+        assert_eq!(p.held().unwrap().grip, None);
+        p.set_place(Event::Drop, false, 2, 1.35);
+        assert_eq!(p.placement_picture().unwrap().place[2], 1.35);
         assert!(p.picture().is_none(), "at rest the normal art shows");
         p.test(Test::DragRight);
         p.tick(0.05, false, false, 0.0, None);
+        assert!(p.placement_picture().is_none());
         assert!(p.hanging().is_some(), "carried: the held pose hangs");
         for _ in 0..30 {
             p.tick(0.05, false, false, 0.0, None);

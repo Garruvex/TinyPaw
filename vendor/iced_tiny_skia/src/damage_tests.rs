@@ -1,6 +1,104 @@
 use crate::core::{Color, Font, Pixels, Point, Rectangle, Renderer as _, Shadow, Size, Vector, renderer};
 use crate::{Renderer, graphics::Viewport};
 
+#[cfg(feature = "image")]
+#[test]
+fn changing_between_rest_and_swung_poses_clears_previous_pixels() {
+    use crate::core::{Radians, image};
+    for scale in [1.0, 1.25, 1.5, 2.0] {
+        let size = Size::new(300, 300);
+        let viewport = Viewport::with_physical_size(size, scale);
+        let screen = Rectangle::with_size(viewport.logical_size());
+        let mut renderer = Renderer::new(Font::DEFAULT, Pixels(16.0));
+        let mut pixels = tiny_skia::Pixmap::new(size.width, size.height).unwrap();
+        let mut mask = tiny_skia::Mask::new(size.width, size.height).unwrap();
+        let mut previous = Vec::new();
+        let rest = image::Handle::from_rgba(16, 16, vec![255; 16 * 16 * 4]);
+        let held = image::Handle::from_rgba(8, 24, vec![180; 8 * 24 * 4]);
+        for cycle in 0..3 {
+            for angle in [0.0, 0.7, -0.7, 0.0] {
+                renderer.reset(screen);
+                let sitting = angle == 0.0;
+                let bounds = if sitting {
+                    Rectangle::new(Point::new(30.0, 55.0), Size::new(70.0, 40.0))
+                } else {
+                    Rectangle::new(Point::new(55.0, 20.0), Size::new(25.0, 90.0))
+                };
+                image::Renderer::draw_image(
+                    &mut renderer,
+                    crate::core::Image::new(if sitting { rest.clone() } else { held.clone() })
+                        .rotation(Radians(angle)),
+                    bounds,
+                    screen,
+                );
+                let damage = crate::graphics::damage::diff(
+                    &previous,
+                    renderer.layers(),
+                    |layer| vec![layer.bounds],
+                    crate::Layer::damage,
+                );
+                let damage = crate::graphics::damage::group(damage, screen);
+                renderer.draw(
+                    &mut pixels.as_mut(),
+                    &mut mask,
+                    &viewport,
+                    &damage,
+                    Color::TRANSPARENT,
+                );
+                previous = renderer.layers().to_vec();
+                let mut fresh = tiny_skia::Pixmap::new(size.width, size.height).unwrap();
+                renderer.draw(
+                    &mut fresh.as_mut(),
+                    &mut mask,
+                    &viewport,
+                    &[screen],
+                    Color::TRANSPARENT,
+                );
+                assert!(
+                    pixels.data() == fresh.data(),
+                    "cycle {cycle}, angle {angle}, scale {scale}, differences {:?}",
+                    pixels
+                        .data()
+                        .iter()
+                        .zip(fresh.data())
+                        .enumerate()
+                        .filter(|(_, (a, b))| a != b)
+                        .take(12)
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+}
+
+#[cfg(feature = "image")]
+#[test]
+fn rotated_pose_tips_survive_partial_redraw() {
+    use crate::core::{image, Radians};
+    for scale in [1.0, 1.25, 1.5, 2.0] {
+        let size = Size::new(240, 240);
+        let viewport = Viewport::with_physical_size(size, scale);
+        let screen = Rectangle::with_size(viewport.logical_size());
+        let mut renderer = Renderer::new(Font::DEFAULT, Pixels(16.0));
+        renderer.reset(screen);
+        image::Renderer::draw_image(
+            &mut renderer,
+            crate::core::Image::new(image::Handle::from_rgba(8, 8, vec![255; 8 * 8 * 4]))
+                .rotation(Radians(0.7)),
+            Rectangle::new(Point::new(45.0, 20.0), Size::new(25.0, 70.0)),
+            screen,
+        );
+        let mut pixels = tiny_skia::Pixmap::new(size.width, size.height).unwrap();
+        let mut mask = tiny_skia::Mask::new(size.width, size.height).unwrap();
+        renderer.draw(&mut pixels.as_mut(), &mut mask, &viewport, &[screen], Color::TRANSPARENT);
+        let expected = pixels.clone();
+        // Rotated art extends left of x=45, outside its upright rectangle.
+        let tip = Rectangle::new(Point::new(28.0, 65.0), Size::new(12.0, 10.0));
+        renderer.draw(&mut pixels.as_mut(), &mut mask, &viewport, &[tip], Color::TRANSPARENT);
+        assert!(pixels.data() == expected.data(), "rotated tip at display scale {scale}, differences {:?}", pixels.data().iter().zip(expected.data()).enumerate().filter(|(_, (a,b))| a != b).take(12).collect::<Vec<_>>());
+    }
+}
+
 #[test]
 fn partial_redraw_matches_a_fresh_transparent_frame() {
     let size = Size::new(180, 135);

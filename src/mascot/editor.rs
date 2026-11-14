@@ -112,7 +112,7 @@ pub struct EditPart {
     pub behind: bool,
     pub motion: MotionSpec,
     /// Head faces: blink, pressed, dragging.
-    pub faces: [Option<Layer>; 3],
+    pub faces: [Option<Layer>; 4],
 }
 
 #[derive(Debug, Clone, Default)]
@@ -123,6 +123,17 @@ pub struct EditEye {
     pub blink: Option<Layer>,
     /// Pupil travel, as a fraction of the canvas width (height uses 3/4).
     pub travel: f32,
+}
+
+impl EditEye {
+    fn slot_mut(&mut self, slot: EyeSlot) -> &mut Option<Layer> {
+        match slot {
+            EyeSlot::White => &mut self.white,
+            EyeSlot::Pupil => &mut self.pupil,
+            EyeSlot::Mask => &mut self.mask,
+            EyeSlot::Blink => &mut self.blink,
+        }
+    }
 }
 
 /// The eye images, in the order the Art tab shows them.
@@ -147,7 +158,7 @@ pub enum EyeStyle {
 }
 
 /// Display names for head faces, by slot. File names keep `FACE_NAMES`.
-pub const FACE_LABELS: [&str; 3] = ["Eyes closed", "Pressed", "Being carried"];
+pub const FACE_LABELS: [&str; 4] = ["Eyes closed", "Pressed", "Being carried", "Headpat"];
 
 /// A readable layer name from a file name: `eye_screen_left.png` becomes
 /// "Eye screen left".
@@ -197,7 +208,8 @@ pub enum Gesture {
     Nudge,
     Field(usize),
     Travel(usize),
-    PupilSize(usize),
+    EyeSize(usize),
+    EyeLayerSize(usize, EyeSlot),
     Rename(usize),
 }
 
@@ -234,7 +246,7 @@ struct Snapshot {
 /// Where a held pose made in the editor is written in the pack.
 const HELD_FILE: &str = "reactions/held.png";
 
-pub const FACE_NAMES: [&str; 3] = ["Blink", "Pressed", "Dragging"];
+pub const FACE_NAMES: [&str; 4] = ["Blink", "Pressed", "Dragging", "Petted"];
 const DEFAULT_TRAVEL: f32 = 0.012;
 
 #[derive(Debug, Clone)]
@@ -261,6 +273,7 @@ pub struct Editor {
     gesture: Option<Gesture>,
     /// A held pose added here, written as the pack's `reactions/held.png`.
     pub held: Option<Layer>,
+    reference_art: Vec<(super::reactions::Event, Layer)>,
     pub fields: [String; 4],
     pub canvas_fields: [String; 2],
     pub new_install: bool,
@@ -272,6 +285,7 @@ pub struct Editor {
     /// The pack's lines, bop and reactions, kept as they are by an art save.
     lines: super::lines::Lines,
     bop: Option<super::motion::Bop>,
+    music_art: Option<super::pack::MusicArtwork>,
     reactions: super::reactions::Config,
     /// Poses this editor doesn't show, kept as they are.
     others: Vec<Pose>,
@@ -299,7 +313,7 @@ impl Editor {
         };
         let mut parts = Vec::new();
         for p in &pose.parts {
-            let mut faces = [None, None, None];
+            let mut faces = [None, None, None, None];
             for (slot, face) in faces.iter_mut().zip(&p.faces) {
                 if let Some(asset) = face {
                     *slot = Some(png(asset)?);
@@ -349,6 +363,7 @@ impl Editor {
             eye_style: None,
             gesture: None,
             held: None,
+            reference_art: Vec::new(),
             fields: Default::default(),
             canvas_fields: [m.canvas.0.to_string(), m.canvas.1.to_string()],
             new_install: false,
@@ -364,6 +379,7 @@ impl Editor {
             author: m.author.clone(),
             lines: m.lines.clone(),
             bop: m.bop,
+            music_art: m.music_art.clone(),
             reactions: m.reactions.clone(),
             others: m
                 .poses
@@ -526,7 +542,7 @@ impl Editor {
                     motion: MotionSpec::default_for(kind),
                     layer,
                     pivot,
-                    faces: [None, None, None],
+                    faces: [None, None, None, None],
                 });
                 self.select(Selected::Part(self.parts.len() - 1));
             }
@@ -543,7 +559,7 @@ impl Editor {
                     motion: MotionSpec::of(super::motion::Preset::Still),
                     layer,
                     pivot: (cx, cy),
-                    faces: [None, None, None],
+                    faces: [None, None, None, None],
                 });
                 self.select(Selected::Part(self.parts.len() - 1));
             }
@@ -552,18 +568,12 @@ impl Editor {
                 if p.kind != PartType::Head {
                     return Err("only the head has faces".into());
                 }
-                p.faces[slot.min(2)] = Some(layer);
-                self.select(Selected::Face(part, slot.min(2)));
+                *p.faces.get_mut(slot).ok_or("Unknown head expression.")? = Some(layer);
+                self.select(Selected::Face(part, slot));
             }
             Target::Eye(eye, slot) => {
                 let e = self.eyes.get_mut(eye).ok_or("that eye is gone")?;
-                let field = match slot {
-                    EyeSlot::White => &mut e.white,
-                    EyeSlot::Pupil => &mut e.pupil,
-                    EyeSlot::Mask => &mut e.mask,
-                    EyeSlot::Blink => &mut e.blink,
-                };
-                *field = Some(layer);
+                *e.slot_mut(slot) = Some(layer);
             }
         }
         Ok(())
@@ -638,7 +648,7 @@ impl Editor {
             p.motion = MotionSpec::default_for(kind);
             p.behind = kind.behind_by_default();
             if kind != PartType::Head {
-                p.faces = [None, None, None];
+                p.faces = [None, None, None, None];
             } else {
                 p.on_head = false;
             }
@@ -679,6 +689,27 @@ impl Editor {
         {
             p.pivot = at;
         }
+    }
+
+    pub fn set_reference_reaction(
+        &mut self,
+        event: super::reactions::Event,
+        path: &Path,
+    ) -> Result<(), String> {
+        let held = self.held.take();
+        let result = self.set_image(Target::Held, path);
+        if result.is_ok()
+            && let Some(layer) = self.held.take() {
+                self.reference_art.push((event, layer));
+            }
+        self.held = held;
+        result
+    }
+    pub fn enable_reference_headpat(&mut self) {
+        self.reactions
+            .companionship
+            .get_or_insert_with(Default::default)
+            .petting = true;
     }
 
     /// The draft as a rig, so Test character shows unsaved artwork. Baking
@@ -722,7 +753,7 @@ impl Editor {
                 },
                 behind: p.behind,
                 motion: p.motion,
-                faces: [0, 1, 2].map(|i| p.faces[i].as_ref().map(bake)),
+                faces: [0, 1, 2, 3].map(|i| p.faces[i].as_ref().map(bake)),
             })
             .collect();
         Rig::layered(LayeredArt {
@@ -778,33 +809,78 @@ impl Editor {
         }
     }
 
-    /// Scale the pupil around its visible centre, keeping neutral gaze aligned.
-    pub fn set_pupil_size(&mut self, index: usize, scale: f32) -> Result<(), String> {
-        let pupil = self
+    /// Scale the tracking layers together around the visible eye background.
+    pub fn set_eye_size(&mut self, index: usize, scale: f32) -> Result<(), String> {
+        let mut eye = self.eyes.get(index).ok_or("Unknown eye.")?.clone();
+        let white = eye
+            .white
+            .as_ref()
+            .ok_or("Choose an eye background first.")?;
+        let (cx, cy, _) = white
+            .visible_centre(self.canvas)
+            .ok_or("The eye background is empty.")?;
+        let (x, y) = (cx * self.canvas.0 as f32, cy * self.canvas.1 as f32);
+        let ratio = scale / white.placement.scale;
+        for layer in [
+            &mut eye.white,
+            &mut eye.mask,
+            &mut eye.pupil,
+            &mut eye.blink,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let p = &mut layer.placement;
+            p.x = x + (p.x - x) * ratio;
+            p.y = y + (p.y - y) * ratio;
+            p.scale *= ratio;
+            if !p.valid(self.canvas) {
+                return Err("This eye size exceeds the stage's placement range.".into());
+            }
+        }
+        self.checkpoint_gesture(Gesture::EyeSize(index));
+        self.eyes[index] = eye;
+        Ok(())
+    }
+
+    /// Resize a single eye layer around its visible centre.
+    pub fn set_eye_layer_size(
+        &mut self,
+        index: usize,
+        slot: EyeSlot,
+        scale: f32,
+    ) -> Result<(), String> {
+        let layer = self
             .eyes
             .get(index)
-            .and_then(|eye| eye.pupil.as_ref())
-            .ok_or("Choose a pupil image first.")?;
+            .and_then(|eye| match slot {
+                EyeSlot::White => eye.white.as_ref(),
+                EyeSlot::Mask => eye.mask.as_ref(),
+                EyeSlot::Blink => eye.blink.as_ref(),
+                EyeSlot::Pupil => eye.pupil.as_ref(),
+            })
+            .ok_or("Choose an eye image first.")?;
         if !scale.is_finite() {
-            return Err("Pupil size must be a finite number.".into());
+            return Err("Eye layer size must be a finite number.".into());
         }
-        let centre = pupil
+        let centre = layer
             .visible_centre(self.canvas)
-            .ok_or("The pupil image is empty.")?;
-        let mut placement = pupil.placement;
+            .ok_or("The eye image is empty.")?;
+        let mut placement = layer.placement;
         placement.scale = scale.clamp(0.01, 8.0);
-        let mut resized = pupil.clone();
+        let mut resized = layer.clone();
         resized.placement = placement;
         let next = resized
             .visible_centre(self.canvas)
-            .ok_or("The pupil image is empty.")?;
+            .ok_or("The eye image is empty.")?;
         placement.x += (centre.0 - next.0) * self.canvas.0 as f32;
         placement.y += (centre.1 - next.1) * self.canvas.1 as f32;
         if !placement.valid(self.canvas) {
-            return Err("This pupil size exceeds the stage's placement range.".into());
+            return Err("This eye layer size exceeds the stage's placement range.".into());
         }
-        self.checkpoint_gesture(Gesture::PupilSize(index));
-        self.eyes[index].pupil.as_mut().unwrap().placement = placement;
+        self.checkpoint_gesture(Gesture::EyeLayerSize(index, slot));
+        resized.placement = placement;
+        *self.eyes[index].slot_mut(slot) = Some(resized);
         Ok(())
     }
 }
@@ -852,6 +928,7 @@ impl Editor {
             author: None,
             lines: super::lines::Lines::default(),
             bop: None,
+            music_art: None,
             // A new character's touch events start at None, written out.
             reactions: super::reactions::new_character(),
             others: Vec::new(),
@@ -862,6 +939,7 @@ impl Editor {
             eye_style: None,
             gesture: None,
             held: None,
+            reference_art: Vec::new(),
             fields: Default::default(),
             canvas_fields: [canvas.0.to_string(), canvas.1.to_string()],
             new_install: true,
@@ -1066,7 +1144,7 @@ impl Editor {
                 on_head: self.head().is_some(),
                 behind: false,
                 motion: MotionSpec::default_for(PartType::Other),
-                faces: [None, None, None],
+                faces: [None, None, None, None],
             });
         }
         self.select(Selected::Part(self.parts.len() - 1));
@@ -1222,6 +1300,9 @@ fn guess_kind(path: &Path, has_head: bool) -> PartType {
         .and_then(|s| s.to_str())
         .unwrap_or_default()
         .to_lowercase();
+    for kind in PartType::ALL {
+        if name == kind.name() { return kind; }
+    }
     for (word, kind) in [
         ("tail", PartType::Tail),
         ("ear", PartType::Ear),

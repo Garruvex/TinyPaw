@@ -1,4 +1,5 @@
 use super::*;
+use crate::mascot::reference::Role;
 
 impl App {
     /// Create from reference.
@@ -33,6 +34,9 @@ impl App {
                     r.tail = on;
                 }
             }
+            UiMsg::ReferenceDance(on) => {
+                if let Some(r) = &mut self.studio.reference { r.dance = on; }
+            }
             UiMsg::ReferenceHead(on) => {
                 if let Some(r) = &mut self.studio.reference {
                     r.head = on;
@@ -42,6 +46,7 @@ impl App {
                 if let Some(r) = &mut self.studio.reference {
                     r.eyes = on;
                     if on {
+                        r.extras.retain(|r| *r != Role::HeadPetted);
                         r.tracking = false;
                         r.blink = false;
                         r.faces = false;
@@ -74,6 +79,21 @@ impl App {
                     r.faces = on;
                     if on {
                         r.eyes = false;
+                    }
+                }
+            }
+            UiMsg::ReferenceExtra(role, on) => {
+                if let Some(r) = &mut self.studio.reference {
+                    r.extras.retain(|existing| *existing != role);
+                    if on {
+                        if role == Role::HeadPetted {
+                            r.eyes = false;
+                            r.extras.retain(|r| *r != Role::Petted);
+                        }
+                        if role == Role::Petted {
+                            r.extras.retain(|r| *r != Role::HeadPetted);
+                        }
+                        r.extras.push(role);
                     }
                 }
             }
@@ -145,6 +165,15 @@ impl App {
                 let head = r.file_for(Role::Head).map(PathBuf::from);
                 let tail = r.file_for(Role::Tail).map(PathBuf::from);
                 let held = r.file_for(Role::Held).map(PathBuf::from);
+                let extra_art: Vec<_> = r
+                    .roles()
+                    .into_iter()
+                    .filter_map(|role| Some((role.reaction()?, r.file_for(role)?.to_owned())))
+                    .collect();
+                let petting = r
+                    .extras
+                    .iter()
+                    .any(|role| matches!(role, Role::Petted | Role::HeadPetted));
                 let head_faces: Vec<(usize, PathBuf)> = r
                     .roles()
                     .into_iter()
@@ -235,6 +264,14 @@ impl App {
                         && let Err(e) = editor.set_image(Target::Held, &held)
                     {
                         errors.push(format!("held pose: {e}"));
+                    }
+                    for (event, path) in extra_art {
+                        if let Err(e) = editor.set_reference_reaction(event, &path) {
+                            errors.push(e);
+                        }
+                    }
+                    if petting {
+                        editor.enable_reference_headpat();
                     }
                     Ok(CharacterWork::Editor(Box::new(editor), errors))
                 });

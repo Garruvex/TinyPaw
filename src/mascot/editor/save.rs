@@ -36,6 +36,19 @@ impl Editor {
         let mut files: Vec<(String, Layer)> = vec![(format!("{dir}/body.png"), self.body.clone())];
         // A held pose made here is pack art: Pick up shows it while carried.
         let mut reactions = self.reactions.clone();
+        for (event, layer) in &self.reference_art {
+            let file = format!("reactions/{}.png", event.key());
+            files.push((file.clone(), layer.clone()));
+            let mut entry = reactions
+                .entry(*event)
+                .cloned()
+                .unwrap_or_else(super::super::reactions::Entry::none);
+            entry.visual = Some(super::super::reactions::Visual::Artwork);
+            entry.art = Some(super::super::reactions::Art::new(
+                super::super::lines::SoundRef::Pack(file),
+            ));
+            reactions.set_entry(*event, Some(entry));
+        }
         if self.held.is_some() {
             use super::super::reactions::{Art, Entry, Event};
             let file = HELD_FILE.to_owned();
@@ -53,7 +66,7 @@ impl Editor {
             let base = format!("{dir}/part-{}-{}", n + 1, p.kind.name());
             names.push((format!("{base}.png"), p.name.clone()));
             files.push((format!("{base}.png"), p.layer.clone()));
-            let mut faces = [None, None, None];
+            let mut faces = [None, None, None, None];
             for (slot, face) in p.faces.iter().enumerate() {
                 if let Some(face) = face {
                     let file = format!("{base}-{}.png", FACE_NAMES[slot].to_lowercase());
@@ -141,12 +154,14 @@ impl Editor {
                 }
             })
             .collect();
+        let mut source_index = 0;
         let manifest = Manifest {
             id: self.id.to_owned(),
             name: name.chars().take(60).collect(),
             author: self.author.clone(),
             lines: self.lines.clone(),
             bop: self.bop,
+            music_art: self.music_art.clone(),
             reactions,
             canvas: self.canvas,
             default_pose: self.pose.clone(),
@@ -156,14 +171,19 @@ impl Editor {
             editor: files
                 .iter()
                 .zip(&sources)
-                .enumerate()
-                .map(|(i, ((file, _), layer))| SourceRecord {
+                .map(|((file, _), layer)| SourceRecord {
                     name: names
                         .iter()
                         .find(|(f, _)| f == file)
                         .map(|(_, n)| n.clone()),
                     target: file.clone(),
-                    source: format!("editor/sources/{dir}/layer-{i}.png"),
+                    source: loop {
+                        let candidate = format!("editor/sources/{dir}/layer-{source_index}.png");
+                        source_index += 1;
+                        if !self.other_sources.iter().any(|r| r.source == candidate) {
+                            break candidate;
+                        }
+                    },
                     size: layer.image.dimensions(),
                     placement: layer.placement,
                 })
@@ -183,6 +203,9 @@ impl Editor {
             })
             .collect();
         kept.extend(self.other_sources.iter().map(|r| r.source.clone()));
+        if let Some(art) = &self.music_art {
+            kept.extend(art.assets().into_iter().map(str::to_owned));
+        }
         let write = |stage: &Path| {
             for (file, image) in &files {
                 let to = stage.join(file);

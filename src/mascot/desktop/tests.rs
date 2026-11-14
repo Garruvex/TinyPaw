@@ -347,6 +347,9 @@ fn hit_testing_follows_the_drawn_lean() {
 fn a_carried_character_leans_around_the_grab_and_trails_unprotected_parts() {
     let (mut d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 500.0), 5, false);
     let o = Options {
+        energy: None,
+        bop: None,
+        dance: Default::default(),
         eyes: false,
         idle: true,
         reduced: false,
@@ -421,6 +424,9 @@ fn a_carried_character_leans_around_the_grab_and_trails_unprotected_parts() {
 fn a_released_character_falls_to_rest_once_and_a_pickup_catches_it() {
     let (mut d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 300.0), 5, false);
     let o = Options {
+        energy: None,
+        bop: None,
+        dance: Default::default(),
         eyes: false,
         idle: false,
         reduced: false,
@@ -611,6 +617,9 @@ fn the_carry_limit_is_the_window_edge_not_a_step_short_of_it() {
 fn a_held_pose_swings_from_its_scruff_when_shaken_and_settles() {
     let (mut d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 500.0), 5, false);
     let o = Options {
+        energy: None,
+        bop: None,
+        dance: Default::default(),
         eyes: false,
         idle: false,
         reduced: false,
@@ -686,6 +695,9 @@ fn a_held_pose_swings_from_its_scruff_when_shaken_and_settles() {
 fn gestures_emit_each_event_once_and_cancellation_none() {
     let (mut d, _) = Desktop::open("yohta", Rig::load(), 160.0, (500.0, 500.0), 5, false);
     let o = Options {
+        energy: None,
+        bop: None,
+        dance: Default::default(),
         eyes: false,
         idle: false,
         reduced: false,
@@ -729,6 +741,9 @@ fn gestures_emit_each_event_once_and_cancellation_none() {
 fn a_held_press_keeps_its_pose_and_eases_out_on_release() {
     let (mut d, _) = Desktop::open("yohta", Rig::load(), 160.0, (500.0, 500.0), 5, false);
     let o = Options {
+        energy: None,
+        bop: None,
+        dance: Default::default(),
         eyes: false,
         idle: true,
         reduced: false,
@@ -792,4 +807,67 @@ fn a_held_press_keeps_its_pose_and_eases_out_on_release() {
         d.step_motion(&o, 1.0);
     }
     assert!(d.released.is_none(), "back on live motion");
+}
+
+#[test]
+fn enlarged_held_art_keeps_room_to_swing() {
+    let (mut d, _) = Desktop::open("yohta", Rig::load(), 292.0, (500.0, 500.0), 5, false);
+    let size = d.rig.size();
+    let mut art = image::RgbaImage::new(size.width as u32, size.height as u32);
+    for y in 20..size.height as u32 - 1 {
+        for x in 80..size.width as u32 - 80 {
+            art.put_pixel(x, y, image::Rgba([100, 120, 200, 255]));
+        }
+    }
+    d.set_pictures(Pictures {
+        held: Some(super::super::rig::Picture::new(
+            &art,
+            [-0.125, -0.125, 1.25],
+        )),
+        ..Default::default()
+    });
+    let l = d.layout;
+    let pivot = Point::new(size.width * 0.5, d.rig.visible_rows().0);
+    let grab = Point::new(
+        l.character.x + pivot.x * l.scale,
+        l.character.y + pivot.y * l.scale,
+    );
+    for angle in [-HANG_SWING, -0.4, 0.0, 0.4, HANG_SWING] {
+        assert!(
+            (d.fit_carry(grab, pivot, angle) - angle).abs() < 0.001,
+            "requested {angle}, allowed {}",
+            d.fit_carry(grab, pivot, angle)
+        );
+    }
+}
+
+#[test]
+fn authored_grips_keep_full_swing_clearance_for_rectangular_original_art() {
+    for grip in [[0.0, 0.0], [1.0, 0.0], [0.15, 0.3], [0.5, 1.0]] {
+        for height in [73.0, 292.0, 584.0] {
+            let (mut desktop, _) =
+                Desktop::open("yohta", Rig::load(), height, (500.0, 500.0), 5, false);
+            let stage = desktop.rig.size();
+            let pixels = image::RgbaImage::from_pixel(100, 260, image::Rgba([120, 180, 220, 255]));
+            let mut picture =
+                super::super::rig::Picture::new(&pixels, [-0.1, 0.05, 1.25]).with_grip(Some(grip));
+            picture.preserve_aspect = true;
+            desktop.set_pictures(Pictures {
+                held: Some(picture),
+                ..Default::default()
+            });
+            let layout = desktop.layout;
+            let pivot = Point::new(stage.width * 0.5, desktop.rig.visible_rows().0);
+            let grab = Point::new(
+                layout.character.x + pivot.x * layout.scale,
+                layout.character.y + pivot.y * layout.scale,
+            );
+            for angle in [-HANG_SWING, -0.4, 0.0, 0.4, HANG_SWING] {
+                assert!(
+                    (desktop.fit_carry(grab, pivot, angle) - angle).abs() < 0.001,
+                    "grip {grip:?}, height {height}, angle {angle}"
+                );
+            }
+        }
+    }
 }

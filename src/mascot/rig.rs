@@ -32,6 +32,35 @@ pub struct Rig {
     /// Top and bottom of the visible artwork at rest, in rig pixels:
     /// what the character's Size measures, without transparent padding.
     visible: (f32, f32),
+    music: Option<MusicRig>,
+}
+
+#[derive(Debug, Clone)]
+struct MusicRig {
+    head: Option<MusicHead>,
+    pieces: [Piece; 4], // standing body, relaxed arm, phone arm, glow-stick arm
+    silhouettes: Vec<Silhouette>,
+    pivot: Point,
+}
+
+#[derive(Debug, Clone)]
+struct MusicHead {
+    piece: Piece,
+    silhouette: Silhouette,
+    pivot: Point,
+}
+
+impl MusicRig {
+    fn arm(pose: &Pose) -> (usize, f32) {
+        if pose.light_lift > 0.01 {
+            (
+                if pose.light_phone { 2 } else { 3 },
+                pose.light_swing * 0.16 + pose.hand_angle,
+            )
+        } else {
+            (1, 0.0)
+        }
+    }
 }
 
 /// Top and bottom rows of pixels at least as opaque as hit testing needs,
@@ -81,7 +110,7 @@ struct Part {
     kind: PartType,
     piece: Piece,
     /// Head faces: blink, pressed, dragging.
-    faces: [Option<Piece>; 3],
+    faces: [Option<Piece>; 4],
     pivot: Point,
     parent: Option<usize>,
     behind: bool,
@@ -116,7 +145,7 @@ pub struct PartArt {
     pub behind: bool,
     pub motion: MotionSpec,
     /// Head faces: blink, pressed, dragging.
-    pub faces: [Option<RgbaImage>; 3],
+    pub faces: [Option<RgbaImage>; 4],
 }
 
 pub struct EyeArt {
@@ -243,6 +272,7 @@ struct Silhouette {
     cells: Vec<bool>,
     /// Lowest visible rig row: where the feet meet the ground.
     ground: f32,
+    bounds: Option<Rectangle>,
 }
 
 impl Silhouette {
@@ -254,6 +284,7 @@ impl Silhouette {
             rows,
             cells: vec![false; columns * rows],
             ground: 0.0,
+            bounds: None,
         }
     }
 
@@ -262,6 +293,13 @@ impl Silhouette {
             size.width / pixels.width() as f32,
             size.height / pixels.height() as f32,
         );
+        if let Some((x, y, w, h)) = visible(pixels) {
+            let rect = Rectangle::new(
+                Point::new(at.x + x as f32 * sx, at.y + y as f32 * sy),
+                Size::new(w as f32 * sx, h as f32 * sy),
+            );
+            self.bounds = Some(self.bounds.map_or(rect, |old| old.union(&rect)));
+        }
         for (x, y, p) in pixels.enumerate_pixels() {
             if p[3] < 32 {
                 continue;
@@ -310,6 +348,7 @@ impl Rig {
             // The whole image sways a little, like a tilting head.
             motion: vec![MotionSpec::of(Preset::Tilt)],
             bop: Bop::default(),
+            music: None,
         }
     }
 
@@ -343,7 +382,8 @@ impl Rig {
             parts.push(Part {
                 kind: p.kind,
                 piece: main,
-                faces: [0, 1, 2].map(|i| p.faces[i].as_ref().and_then(piece).map(|(face, _)| face)),
+                faces: [0, 1, 2, 3]
+                    .map(|i| p.faces[i].as_ref().and_then(piece).map(|(face, _)| face)),
                 pivot: Point::new(p.pivot.0 * size.width, p.pivot.1 * size.height),
                 parent: p.parent,
                 behind: p.behind,
@@ -369,7 +409,65 @@ impl Rig {
             kind: Kind::Layered { body, parts, eyes },
             size,
             silhouettes,
+            music: None,
         }
+    }
+
+    pub fn set_music_art(
+        &mut self,
+        body: RgbaImage,
+        relaxed: RgbaImage,
+        phone: RgbaImage,
+        stick: RgbaImage,
+        pivot: (f32, f32),
+    ) -> Result<(), String> {
+        let mut pieces = Vec::new();
+        let mut silhouettes = Vec::new();
+        for pixels in [body, relaxed, phone, stick] {
+            let (p, pixels) = piece(&pixels).ok_or("music artwork must contain visible pixels")?;
+            let mut silhouette = Silhouette::new(self.size);
+            silhouette.stamp(&pixels, (p.at, p.size));
+            pieces.push(p);
+            silhouettes.push(silhouette);
+        }
+        self.music = Some(MusicRig {
+            head: None,
+            pieces: pieces.try_into().unwrap(),
+            silhouettes,
+            pivot: Point::new(pivot.0 * self.size.width, pivot.1 * self.size.height),
+        });
+        Ok(())
+    }
+
+    pub fn set_music_head(&mut self, pixels: RgbaImage, pivot: (f32, f32)) -> Result<(), String> {
+        let music = self
+            .music
+            .as_mut()
+            .ok_or("music head needs music artwork")?;
+        let (piece, pixels) = piece(&pixels).ok_or("music head must contain visible pixels")?;
+        let mut silhouette = Silhouette::new(self.size);
+        silhouette.stamp(&pixels, (piece.at, piece.size));
+        music.head = Some(MusicHead {
+            piece,
+            silhouette,
+            pivot: Point::new(pivot.0 * self.size.width, pivot.1 * self.size.height),
+        });
+        Ok(())
+    }
+
+    pub fn music_items(&self) -> u8 {
+        if self.music.is_some() { 3 } else { 0 }
+    }
+
+    fn music_pose(&self, pose: &Pose) -> Option<&MusicRig> {
+        ((pose.music_active || pose.music_mix.is_some_and(|mix| mix > 0.001))
+            && pose.carry.is_none()
+            && !matches!(
+                pose.expression,
+                Expression::Pressed | Expression::Dragging | Expression::Petted
+            ))
+        .then_some(self.music.as_ref())
+        .flatten()
     }
 
     /// The parts the animator moves, in the order of `Pose::angles`.
@@ -453,6 +551,25 @@ impl Rig {
         }
     }
 
+    pub fn visible_bounds(&self) -> Rectangle {
+        self.silhouettes
+            .iter()
+            .filter_map(|s| s.bounds)
+            .reduce(|a, b| a.union(&b))
+            .unwrap_or(Rectangle::new(Point::ORIGIN, self.size))
+    }
+    pub fn pet_region(&self, p: Point, pose: &Pose) -> bool {
+        let hit = self.hit(p, pose);
+        if let Some(music) = self.music_pose(pose) {
+            return hit.is_some() && p.y < music.pivot.y;
+        }
+        if let Kind::Layered { parts, .. } = &self.kind
+            && let Some(head) = parts.iter().position(|p| p.kind == PartType::Head) {
+                return matches!(hit,Some(Layer::Part(i)) if i==head || parts[i].parent==Some(head));
+            }
+        hit.is_some()
+    }
+
     /// The head's rotation in `pose`, which the gaze is counter-rotated by.
     pub fn head_angle(&self, pose: &Pose) -> f32 {
         let index = match &self.kind {
@@ -468,6 +585,35 @@ impl Rig {
     /// Draws one frame. Lean and squash are applied by the host around the
     /// feet; this draws the character itself in rig coordinates.
     pub fn draw_pose(&self, frame: &mut Frame, pose: &Pose) {
+        if let Some(music) = self.music_pose(pose) {
+            let opacity = pose.music_mix.unwrap_or(1.0).clamp(0.0, 1.0);
+            if opacity < 1.0 {
+                self.draw_rest_pose(frame, pose, 1.0 - opacity);
+            }
+            place_alpha(frame, &music.pieces[0], opacity);
+            if let Some(head) = &music.head {
+                frame.with_save(|f| {
+                    f.translate(Vector::new(0.0, self.head_drop(pose)));
+                    f.translate(Vector::new(head.pivot.x, head.pivot.y));
+                    f.rotate(self.head_angle(pose));
+                    f.translate(Vector::new(-head.pivot.x, -head.pivot.y));
+                    place_alpha(f, &head.piece, opacity);
+                });
+            }
+            let (arm, angle) = MusicRig::arm(pose);
+            frame.with_save(|f| {
+                f.translate(hand_offset(pose, self.size));
+                f.translate(Vector::new(music.pivot.x, music.pivot.y));
+                f.rotate(angle);
+                f.translate(Vector::new(-music.pivot.x, -music.pivot.y));
+                place_alpha(f, &music.pieces[arm], opacity);
+            });
+            return;
+        }
+        self.draw_rest_pose(frame, pose, 1.0);
+    }
+
+    fn draw_rest_pose(&self, frame: &mut Frame, pose: &Pose, opacity: f32) {
         let angle = |i: usize| pose.angles.get(i).copied().unwrap_or_default();
         match &self.kind {
             // One piece: a gentle sway around the feet stands in for the
@@ -479,6 +625,7 @@ impl Rig {
                 self.size,
                 self.anchor,
                 angle(0) * 0.5,
+                opacity,
             ),
             Kind::Layered { body, parts, eyes } => {
                 let ctx = Layered {
@@ -486,20 +633,70 @@ impl Rig {
                     eyes,
                     pose,
                     drop: self.head_drop(pose),
+                    size: self.size,
+                    opacity,
                 };
                 for (i, p) in parts.iter().enumerate() {
                     if p.parent.is_none() && p.behind {
                         ctx.part(frame, i);
                     }
                 }
-                place(frame, body);
-                for (i, p) in parts.iter().enumerate() {
-                    if p.parent.is_none() && !p.behind {
-                        ctx.part(frame, i);
-                    }
+                place_alpha(frame, body, opacity);
+                let mut front: Vec<_> = parts
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.parent.is_none() && !p.behind)
+                    .collect();
+                front.sort_by_key(|(_, p)| match p.kind {
+                    PartType::PhoneGlow | PartType::StickGlow => 1,
+                    PartType::Phone | PartType::GlowStick => 2,
+                    PartType::Grip => 3,
+                    _ => 0,
+                });
+                for (i, _) in front {
+                    ctx.part(frame, i);
                 }
             }
         }
+        if pose.light_lift > 0.0
+            && self.music.is_none()
+            && !self
+                .motion_parts()
+                .iter()
+                .any(|p| p.kind == PartType::HoldingArm)
+        {
+            self.draw_light_wave(frame, pose);
+        }
+    }
+
+    fn draw_light_wave(&self, frame: &mut Frame, pose: &Pose) {
+        use iced::{Color, widget::canvas::Path};
+        let h = self.visible_height();
+        let reach = h.min(self.size.width);
+        let lift = pose.light_lift;
+        frame.with_save(|f| {
+            f.translate(hand_offset(pose, self.size));
+            f.translate(Vector::new(
+                (self.anchor.x + reach * 0.19).min(self.size.width - reach * 0.25),
+                self.visible.0 + h * 0.58,
+            ));
+            f.scale(reach);
+            f.rotate(0.95 - lift * 0.62 + pose.light_swing * 0.45 + pose.hand_angle);
+            let fur = Color::from_rgba8(236, 204, 175, lift);
+            let glow = Color::from_rgba8(255, 190, 84, lift * 0.25);
+            let core = Color::from_rgba8(255, 241, 184, lift);
+            let circle = |x, y, r| Path::circle(Point::new(x, y), r);
+            f.fill_rectangle(Point::new(-0.022, -0.12), Size::new(0.044, 0.12), fur);
+            f.fill(&circle(0.0, 0.0, 0.022), fur);
+            f.fill(&circle(0.0, -0.23, 0.066), glow);
+            f.fill(&circle(0.0, -0.23, 0.042), glow);
+            f.fill_rectangle(Point::new(-0.012, -0.23), Size::new(0.024, 0.11), core);
+            f.fill(&circle(0.0, -0.23, 0.012), core);
+            f.fill(&circle(0.0, -0.12, 0.036), fur);
+            for x in [-0.023_f32, 0.0, 0.023] {
+                f.fill(&circle(x, -0.148 + x.abs() * 0.3, 0.014), fur);
+            }
+        });
     }
 
     /// How far the music head bob moves a head part down, in rig pixels.
@@ -527,6 +724,28 @@ impl Rig {
     /// part's rotation the way `draw_pose` applies it. The whole-character
     /// lean, squash and bounce are the host's (see `motion::unplaced`).
     pub fn hit(&self, p: Point, pose: &Pose) -> Option<Layer> {
+        if let Some(music) = self
+            .music_pose(pose)
+            .filter(|_| pose.music_mix.unwrap_or(1.0) >= 0.5)
+        {
+            let (arm, angle) = MusicRig::arm(pose);
+            let on_head = music.head.as_ref().is_some_and(|head| {
+                let local = unrotate(
+                    p - Vector::new(0.0, self.head_drop(pose)),
+                    head.pivot,
+                    self.head_angle(pose),
+                );
+                head.silhouette.contains(local)
+            });
+            return (on_head
+                || music.silhouettes[0].contains(p)
+                || music.silhouettes[arm].contains(unrotate(
+                    p - hand_offset(pose, self.size),
+                    music.pivot,
+                    angle,
+                )))
+            .then_some(Layer::Body);
+        }
         let angle = |i: usize| pose.angles.get(i).copied().unwrap_or_default();
         let opaque =
             |layer: usize, p: Point| self.silhouettes.get(layer).is_some_and(|s| s.contains(p));
@@ -545,10 +764,11 @@ impl Rig {
                 };
                 let drop = self.head_drop(pose);
                 roots(false)
-                    .find_map(|(i, _)| self.hit_part(parts, i, p, &angle, drop))
+                    .find_map(|(i, _)| self.hit_part(parts, i, p, &angle, drop, pose))
                     .or_else(|| opaque(0, p).then_some(Layer::Body))
                     .or_else(|| {
-                        roots(true).find_map(|(i, _)| self.hit_part(parts, i, p, &angle, drop))
+                        roots(true)
+                            .find_map(|(i, _)| self.hit_part(parts, i, p, &angle, drop, pose))
                     })
             }
         }
@@ -562,10 +782,19 @@ impl Rig {
         p: Point,
         angle: &dyn Fn(usize) -> f32,
         drop: f32,
+        pose: &Pose,
     ) -> Option<Layer> {
         let part = &parts[index];
+        if music_opacity(part.kind, pose) <= 0.01 {
+            return None;
+        }
+        let offset = if is_wave_part(part.kind) {
+            hand_offset(pose, self.size)
+        } else {
+            Vector::ZERO
+        };
         let local = unrotate(
-            p - Self::shift(parts, index, drop),
+            p - Self::shift(parts, index, drop) - offset,
             part.pivot,
             angle(index),
         );
@@ -577,14 +806,14 @@ impl Rig {
                 .filter(move |(_, c)| c.parent == Some(index) && c.behind == behind)
         };
         children(false)
-            .find_map(|(i, _)| self.hit_part(parts, i, local, angle, drop))
+            .find_map(|(i, _)| self.hit_part(parts, i, local, angle, drop, pose))
             .or_else(|| {
                 self.silhouettes[index + 1]
                     .contains(local)
                     .then_some(Layer::Part(index))
             })
             .or_else(|| {
-                children(true).find_map(|(i, _)| self.hit_part(parts, i, local, angle, drop))
+                children(true).find_map(|(i, _)| self.hit_part(parts, i, local, angle, drop, pose))
             })
     }
 
@@ -632,6 +861,7 @@ impl Rig {
 /// offset in canvas fractions.
 #[derive(Debug, Clone)]
 pub struct Picture {
+    pub preserve_aspect: bool,
     pub image: Handle,
     pub place: [f32; 3],
     /// Where a held pose hangs from, in the picture's pixels: the top
@@ -658,20 +888,67 @@ impl Picture {
         );
         Self {
             image: handle(pixels.clone()),
+            preserve_aspect: false,
             place,
             hold: hold_point(pixels),
             art,
         }
     }
 
+    pub fn size_in(&self, stage: Size) -> Size {
+        if self.preserve_aspect
+            && let Some((w, h)) = image_size(&self.image) {
+                let fit = (stage.width / w).min(stage.height / h);
+                return Size::new(w * fit, h * fit);
+            }
+        stage
+    }
+
+    pub fn source_fraction(&self, stage: Size, point: Point) -> Point {
+        let size = self.size_in(stage);
+        Point::new(
+            (point.x - self.place[0] * stage.width) / (size.width * self.place[2]),
+            (point.y - self.place[1] * stage.height) / (size.height * self.place[2]),
+        )
+    }
+
     /// `p`, in the picture's pixels, in the stage frame as placed.
     pub fn in_stage(&self, stage: Size, p: Point) -> Point {
         let [x, y, k] = self.place;
         let (pw, ph) = image_size(&self.image).unwrap_or((stage.width, stage.height));
+        let size = self.size_in(stage);
         Point::new(
-            x * stage.width + p.x * stage.width * k / pw,
-            y * stage.height + p.y * stage.height * k / ph,
+            x * stage.width + p.x * size.width * k / pw,
+            y * stage.height + p.y * size.height * k / ph,
         )
+    }
+
+    /// Alpha hit testing in the same stage coordinates used for drawing.
+    pub fn hit(&self, stage: Size, point: Point) -> bool {
+        let fraction = self.source_fraction(stage, point);
+        if let Handle::Rgba {
+            width,
+            height,
+            pixels,
+            ..
+        } = &self.image
+        {
+            let px = fraction.x * *width as f32;
+            let py = fraction.y * *height as f32;
+            if px >= 0.0 && py >= 0.0 && px < *width as f32 && py < *height as f32 {
+                return pixels[((py as u32 * width + px as u32) * 4 + 3) as usize] >= 32;
+            }
+        }
+        false
+    }
+
+    /// Resolve an authored grip against the untrimmed source image.
+    pub fn with_grip(mut self, grip: Option<[f32; 2]>) -> Self {
+        if let Some([x, y]) = grip
+            && let Some((width, height)) = image_size(&self.image) {
+                self.hold = Point::new(x * width, y * height);
+            }
+        self
     }
 
     /// The hold point in the stage frame, with the picture placed.
@@ -736,26 +1013,74 @@ impl Rig {
 
     /// Draws `picture` in place of the character, on the same stage.
     pub fn draw_picture(&self, frame: &mut Frame, picture: &Picture) {
+        self.draw_picture_alpha(frame, picture, 1.0);
+    }
+
+    pub fn draw_picture_alpha(&self, frame: &mut Frame, picture: &Picture, opacity: f32) {
         let [x, y, k] = picture.place;
+        let size = picture.size_in(self.size);
         frame.draw_image(
             Rectangle::new(
                 Point::new(x * self.size.width, y * self.size.height),
-                Size::new(self.size.width * k, self.size.height * k),
+                Size::new(size.width * k, size.height * k),
             ),
-            canvas::Image::new(picture.image.clone()),
+            canvas::Image::new(picture.image.clone()).opacity(opacity),
         );
     }
 }
 
-fn place(frame: &mut Frame, p: &Piece) {
+fn place_alpha(frame: &mut Frame, piece: &Piece, opacity: f32) {
     frame.draw_image(
-        Rectangle::new(p.at, p.size),
-        canvas::Image::new(p.image.clone()),
+        Rectangle::new(piece.at, piece.size),
+        canvas::Image::new(piece.image.clone()).opacity(opacity),
     );
+}
+
+fn hand_offset(pose: &Pose, size: Size) -> Vector {
+    Vector::new(
+        pose.hand_offset.x * size.width,
+        pose.hand_offset.y * size.height,
+    )
+}
+
+fn is_wave_part(kind: PartType) -> bool {
+    matches!(
+        kind,
+        PartType::HoldingArm
+            | PartType::Grip
+            | PartType::Phone
+            | PartType::GlowStick
+            | PartType::PhoneGlow
+            | PartType::StickGlow
+    )
+}
+
+fn music_opacity(kind: PartType, pose: &Pose) -> f32 {
+    match kind {
+        PartType::RightArm => 1.0 - pose.light_lift,
+        PartType::HoldingArm | PartType::Grip => pose.light_lift,
+        PartType::Phone | PartType::PhoneGlow => {
+            if pose.light_phone {
+                pose.light_lift
+            } else {
+                0.0
+            }
+        }
+        PartType::GlowStick | PartType::StickGlow => {
+            if pose.light_phone {
+                0.0
+            } else {
+                pose.light_lift
+            }
+        }
+        _ => 1.0,
+    }
 }
 
 /// Draws a layered character's parts with their parents' transforms.
 struct Layered<'a> {
+    opacity: f32,
+    size: Size,
     parts: &'a [Part],
     eyes: &'a [LayerEye],
     pose: &'a Pose,
@@ -766,8 +1091,15 @@ struct Layered<'a> {
 impl Layered<'_> {
     fn part(&self, frame: &mut Frame, index: usize) {
         let p = &self.parts[index];
+        let opacity = music_opacity(p.kind, self.pose) * self.opacity;
+        if opacity <= 0.001 {
+            return;
+        }
         let angle = self.pose.angles.get(index).copied().unwrap_or_default();
         frame.with_save(|f| {
+            if is_wave_part(p.kind) {
+                f.translate(hand_offset(self.pose, self.size));
+            }
             f.translate(Rig::shift(self.parts, index, self.drop));
             f.translate(Vector::new(p.pivot.x, p.pivot.y));
             f.rotate(angle);
@@ -785,21 +1117,27 @@ impl Layered<'_> {
                 Expression::Blink => p.faces[0].as_ref(),
                 Expression::Pressed => p.faces[1].as_ref(),
                 Expression::Dragging => p.faces[2].as_ref(),
+                Expression::Petted => p.faces[3].as_ref(),
                 Expression::Idle => None,
             };
-            place(f, face.unwrap_or(&p.piece));
+            let piece = face.unwrap_or(&p.piece);
+            f.draw_image(
+                Rectangle::new(piece.at, piece.size),
+                canvas::Image::new(piece.image.clone()).opacity(opacity),
+            );
             // Tracking eyes sit on the plain head and its blink face only;
             // a pressed or dragging face has its eyes painted in.
             let painted = face.is_some() && self.pose.expression != Expression::Blink;
             if !painted {
                 for e in self.eyes.iter().filter(|e| e.head == index) {
                     match (&e.closed, self.pose.expression) {
-                        (Some(closed), Expression::Blink) => place(f, closed),
+                        (Some(closed), Expression::Blink) => place_alpha(f, closed, self.opacity),
                         // A blink face already covers the eyes.
                         (None, Expression::Blink) if face.is_some() => {}
                         _ => f.draw_image(
                             Rectangle::new(e.at, e.size),
-                            canvas::Image::new(e.frames[gaze_index(self.pose.gaze)].clone()),
+                            canvas::Image::new(e.frames[gaze_index(self.pose.gaze)].clone())
+                                .opacity(self.opacity),
                         ),
                     }
                 }
@@ -809,12 +1147,23 @@ impl Layered<'_> {
     }
 }
 
-fn sprite(frame: &mut Frame, image: &Handle, at: Point, size: Size, pivot: Point, angle: f32) {
+fn sprite(
+    frame: &mut Frame,
+    image: &Handle,
+    at: Point,
+    size: Size,
+    pivot: Point,
+    angle: f32,
+    opacity: f32,
+) {
     frame.with_save(|f| {
         f.translate(Vector::new(pivot.x, pivot.y));
         f.rotate(angle);
         f.translate(Vector::new(-pivot.x, -pivot.y));
-        f.draw_image(Rectangle::new(at, size), canvas::Image::new(image.clone()));
+        f.draw_image(
+            Rectangle::new(at, size),
+            canvas::Image::new(image.clone()).opacity(opacity),
+        );
     });
 }
 
@@ -826,6 +1175,90 @@ pub fn gaze_index(gaze: Vector) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn standing_music_hit_tests_only_the_visible_arm_and_yields_to_interactions() {
+        let block = |x: u32, y: u32| {
+            RgbaImage::from_fn(100, 100, |px, py| {
+                if (x..x + 10).contains(&px) && (y..y + 10).contains(&py) {
+                    Rgba([100, 150, 240, 255])
+                } else {
+                    Rgba([0, 0, 0, 0])
+                }
+            })
+        };
+        let mut rig = Rig::sprite(block(10, 80), (0.5, 0.9));
+        rig.set_music_art(
+            block(40, 40),
+            block(70, 60),
+            block(80, 10),
+            block(10, 10),
+            (0.5, 0.5),
+        )
+        .unwrap();
+        let mut pose = Pose {
+            music_active: true,
+            light_lift: 1.0,
+            light_phone: true,
+            ..Pose::default()
+        };
+        assert!(rig.hit(Point::new(85.0, 15.0), &pose).is_some());
+        pose.hand_offset = Vector::new(-0.2, 0.0);
+        assert!(
+            rig.hit(Point::new(65.0, 15.0), &pose).is_some(),
+            "moved arm stays clickable"
+        );
+        assert!(
+            rig.hit(Point::new(85.0, 15.0), &pose).is_none(),
+            "old arm location is clear"
+        );
+        pose.hand_offset = Vector::ZERO;
+
+        assert!(
+            rig.hit(Point::new(15.0, 15.0), &pose).is_none(),
+            "hidden stick does not catch clicks"
+        );
+        pose.light_phone = false;
+        assert!(rig.hit(Point::new(15.0, 15.0), &pose).is_some());
+        pose.music_active = false;
+        assert!(rig.hit(Point::new(15.0, 85.0), &pose).is_some());
+        pose.music_active = true;
+        pose.expression = Expression::Dragging;
+        assert!(
+            rig.hit(Point::new(15.0, 85.0), &pose).is_some(),
+            "carrying restores base art"
+        );
+    }
+    #[test]
+    fn standing_head_hit_region_follows_the_nod() {
+        let block = |x: u32, y: u32| {
+            RgbaImage::from_fn(100, 100, |px, py| {
+                if (x..x + 10).contains(&px) && (y..y + 10).contains(&py) {
+                    Rgba([100, 150, 240, 255])
+                } else {
+                    Rgba([0, 0, 0, 0])
+                }
+            })
+        };
+        let mut rig = Rig::sprite(block(10, 80), (0.5, 0.9));
+        rig.set_music_art(
+            block(40, 70),
+            block(70, 60),
+            block(80, 60),
+            block(10, 60),
+            (0.5, 0.5),
+        )
+        .unwrap();
+        rig.set_music_head(block(20, 10), (0.25, 0.25)).unwrap();
+        let mut pose = Pose {
+            music_active: true,
+            ..Pose::default()
+        };
+        assert!(rig.hit(Point::new(25.0, 15.0), &pose).is_some());
+        pose.head_drop = 2.0;
+        assert!(rig.hit(Point::new(25.0, 35.0), &pose).is_some());
+        assert!(rig.hit(Point::new(25.0, 15.0), &pose).is_none());
+    }
+
     #[test]
     fn gaze_is_bounded_and_centre_is_stable() {
         assert_eq!(gaze_index(Vector::ZERO), 24);
@@ -869,7 +1302,12 @@ mod tests {
                 parent: None,
                 behind: false,
                 motion: MotionSpec::default_for(PartType::Head),
-                faces: [None, Some(block(20, 10, 80, 55, [250, 0, 0, 255])), None],
+                faces: [
+                    None,
+                    Some(block(20, 10, 80, 55, [250, 0, 0, 255])),
+                    None,
+                    None,
+                ],
             }],
             eyes: vec![EyeArt {
                 white: block(40, 25, 50, 35, [255, 255, 255, 255]),
@@ -903,6 +1341,31 @@ mod tests {
         // The head counts for clicks, the empty corners don't.
         assert!(rig.opaque(Point::new(50.0, 20.0)));
         assert!(!rig.opaque(Point::new(3.0, 3.0)));
+    }
+
+    #[test]
+    fn original_rectangular_art_keeps_aspect_and_inverse_mapping() {
+        let pixels = RgbaImage::from_pixel(120, 40, image::Rgba([255; 4]));
+        let mut picture = Picture::new(&pixels, [0.1, 0.2, 1.25]);
+        picture.preserve_aspect = true;
+        let stage = Size::new(200.0, 300.0);
+        let size = picture.size_in(stage);
+        assert!((size.width / size.height - 3.0).abs() < 0.001);
+        let at = picture.in_stage(stage, Point::new(30.0, 20.0));
+        let fraction = picture.source_fraction(stage, at);
+        assert!((fraction.x - 0.25).abs() < 0.001);
+        assert!((fraction.y - 0.5).abs() < 0.001);
+        assert!(picture.hit(stage, at));
+        assert!(!picture.hit(stage, Point::ORIGIN));
+    }
+
+    #[test]
+    fn authored_grip_uses_source_padding_and_placement() {
+        let pixels = RgbaImage::new(200, 100);
+        let picture = Picture::new(&pixels, [0.1, -0.2, 1.25]).with_grip(Some([0.3, 0.4]));
+        let grip = picture.hold_in(Size::new(400.0, 200.0));
+        assert!((grip.x - 190.0).abs() < 0.001);
+        assert!((grip.y - 60.0).abs() < 0.001);
     }
 
     #[test]
@@ -1028,5 +1491,21 @@ mod tests {
         assert!(!rig.opaque(Point::new(WIDTH - 2.0, 2.0)));
         assert!(!rig.opaque(Point::new(-5.0, 300.0)));
         assert!(rig.anchor().y > 700.0 && rig.anchor().y <= HEIGHT);
+    }
+}
+
+#[cfg(test)]
+mod reaction_hit_tests {
+    use super::*;
+    #[test]
+    fn replacement_art_hits_its_placed_alpha() {
+        let mut pixels = RgbaImage::new(100, 100);
+        pixels.put_pixel(30, 40, Rgba([255, 255, 255, 255]));
+        let picture = Picture::new(&pixels, [0.1, 0.2, 0.5]);
+        let stage = Size::new(200.0, 300.0);
+        let at = picture.in_stage(stage, Point::new(30.5, 40.5));
+        assert!(picture.hit(stage, at));
+        assert!(!picture.hit(stage, Point::ORIGIN));
+        assert!(!picture.hit(stage, picture.in_stage(stage, Point::new(31.5, 40.5))));
     }
 }

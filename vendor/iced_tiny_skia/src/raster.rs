@@ -57,7 +57,11 @@ impl Pipeline {
         let width_scale = bounds.width / image.width() as f32;
         let height_scale = bounds.height / image.height() as f32;
 
-        let transform = transform.pre_scale(width_scale, height_scale);
+        // Preserve placement in stage coordinates before scaling source pixels.
+        // Integer source offsets can paint outside the image's damage bounds.
+        let transform = transform
+            .pre_translate(bounds.x, bounds.y)
+            .pre_scale(width_scale, height_scale);
 
         let quality = match filter_method {
             raster::FilterMethod::Linear => tiny_skia::FilterQuality::Bilinear,
@@ -65,8 +69,8 @@ impl Pipeline {
         };
 
         pixels.draw_pixmap(
-            (bounds.x / width_scale) as i32,
-            (bounds.y / height_scale) as i32,
+            0,
+            0,
             image,
             &tiny_skia::PixmapPaint {
                 quality,

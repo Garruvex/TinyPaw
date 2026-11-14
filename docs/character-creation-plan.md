@@ -1,5 +1,9 @@
 # Character creation plan
 
+## Current character and editor roadmap
+
+The [character and editor improvement plan](character-editor-improvement-plan.md) and its [artwork rules](character-artwork-rules.md) consolidate shared parts, pose variants, editor organization and creation prompts as of 14 November 2026. They take precedence for those areas. The dated sections below retain earlier design decisions and implementation history.
+
 Proposed plan, 11 November 2026. It finishes the desktop character as a
 creator tool: import art, set how each part moves, give the character speech
 lines, and let it react to music. It builds on
@@ -309,7 +313,7 @@ Steps 3 and 4 depend only on step 2's reaction plumbing and can be built in eith
 1. **Left click — agreed 11 November 2026.** A left click reacts and speaks; a right click opens the menu (as in MateEngine), and the tray keeps the same entries. Escape or an outside click still closes the menu, and a drag never opens it. This replaces the next-phase plan's "keep left-click as the launcher gesture". Landed with step 2a.
 2. **Where behaviour lives — agreed.** Motion and lines live in the pack, so a shared character brings them; a user's edits are saved as overrides.
 3. **Audio dependency — agreed.** Add the `windows` crate with only its audio features, alongside `windows-sys`, for per-session peak meters that leave out TinyPaw's own sounds. Stage B's loopback analysis still uses `cpal`.
-4. **Petting — deferred.** Revisit once click and drag reactions feel right, with a rub gesture that can't fire during a drag.
+4. **Petting — scoped 12 November 2026.** The [headpat and sleeping implementation scope](character-headpat-sleep-plan.md) replaces the earlier deferral with button-free rubbing, optional happy artwork and shared gesture recognition that cannot fire during a drag. The same scope adds opt-in sleep after inactivity/quiet and configurable wake causes. Implemented in phases with automated coverage and a Windows preview smoke check. Hardware release checks are recorded in that scope.
 5. **Scope change — done.** [The character scope](mascot-feature.md) now includes speech lines and the right-click menu; reminders and alarms stay out.
 6. **New behaviors — agreed 11 November 2026.** From the [character behaviors plan](character-behaviors-plan.md): click and beat Compress, a held pose PNG while carried, one alternate PNG for a reaction, the Head bob beat style, and an opt-in straight fall to the screen edge after release are in scope. Head bob ships only once Follow beat is no longer a trial. PNG frame sequences, landing on window tops and restricted pickup areas are deferred.
 

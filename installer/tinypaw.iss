@@ -10,7 +10,7 @@
 ; %APPDATA%\TinyPaw unless the user chooses to delete it.
 
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "0.1.2"
 #endif
 #ifndef BinDir
   #define BinDir "..\target\release"

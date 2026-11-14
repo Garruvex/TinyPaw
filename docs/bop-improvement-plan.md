@@ -1,5 +1,9 @@
 # Making the mascot bop land on the beat
 
+## Character and editor integration
+
+The [character and editor improvement plan](character-editor-improvement-plan.md) defines reusable sitting and standing compositions, character-owned motion choices and shared preview behavior. The timing and listening comparisons below support that consolidation. Their starting-point descriptions record the earlier implementation baseline.
+
 The goal is for a viewer to hear a kick and see the character land its gesture at the same moment. Two things can go wrong independently. The tracker can choose the wrong pulse, or the character can follow the right pulse and reach its most noticeable pose late.
 
 ## Starting point

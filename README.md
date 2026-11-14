@@ -77,7 +77,7 @@ cargo build --release
 "$LOCALAPPDATA/Programs/Inno Setup 6/ISCC.exe" installer/tinypaw.iss
 ```
 
-This writes `target/installer/TinyPaw-0.1.0-setup.exe`. Pass `/DAppVersion=x.y.z` to ISCC to stamp another version, or `/DBinDir=<folder>` to package binaries from elsewhere.
+This writes `target/installer/TinyPaw-0.1.2-setup.exe`. Pass `/DAppVersion=x.y.z` to ISCC to stamp another version, or `/DBinDir=<folder>` to package binaries from elsewhere.
 
 The installer is per-user and needs no admin rights:
 
@@ -89,6 +89,8 @@ The installer is per-user and needs no admin rights:
 ## CLI
 
 ### Desktop character (Windows, experimental)
+
+The [Yohta mohawk chibi artwork guide](assets/mascot/yohta/yohta-chibi-sitting-mohawk-pet/README.md) lists character features and their artwork requirements, including layered Light wave music gestures, two sleep positions, and 74 dialogue lines.
 
 Turn on Yohta under **Settings → Character → On desktop**, with **Show character** in the tray menu, or with `tinypaw mascot` (`tinypaw mascot-hide` hides him). He sits on the desktop and his eyes follow the cursor. Right-click him for a menu with Annotation enabled, Character settings… and Hide character; eye tracking is in Character → On desktop and tap mute in Sound. Click him and he reacts; drag him and he leans with the motion while his tail trails. Settings → Character can add your own character from one PNG, or import a folder with separate moving parts. Blank pixels around him pass clicks through to the app underneath, and clicking him never takes keyboard focus. He stays while TinyPaw is Off and steps aside while the annotation surface owns input. Size, motion and position are saved.
 

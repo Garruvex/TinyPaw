@@ -563,12 +563,13 @@ impl Engine {
             #[cfg(feature = "image")]
             Image::Raster { image, bounds, .. } => {
                 let physical_bounds = *bounds * _transformation;
+                let painted_bounds = physical_bounds.rotate(image.rotation);
 
-                if !_clip_bounds.intersects(&physical_bounds) {
+                if !_clip_bounds.intersects(&painted_bounds) {
                     return;
                 }
 
-                let clip_mask = (!physical_bounds.is_within(&_clip_bounds))
+                let clip_mask = (!painted_bounds.is_within(&_clip_bounds))
                     .then_some(_clip_mask as &_);
 
                 let center = physical_bounds.center();
@@ -593,12 +594,13 @@ impl Engine {
             #[cfg(feature = "svg")]
             Image::Vector { svg, bounds, .. } => {
                 let physical_bounds = *bounds * _transformation;
+                let painted_bounds = physical_bounds.rotate(svg.rotation);
 
-                if !_clip_bounds.intersects(&physical_bounds) {
+                if !_clip_bounds.intersects(&painted_bounds) {
                     return;
                 }
 
-                let clip_mask = (!physical_bounds.is_within(&_clip_bounds))
+                let clip_mask = (!painted_bounds.is_within(&_clip_bounds))
                     .then_some(_clip_mask as &_);
 
                 let center = physical_bounds.center();

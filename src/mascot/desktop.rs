@@ -19,6 +19,7 @@ use iced::{
 };
 
 use super::Msg;
+use super::companionship::{self, Controller, State};
 use super::lines::{BubbleSide, Lines, MenuAlign, MenuSide, Picker, SoundRef, Speech, Trigger};
 use super::motion::{Animator, Expression, Inputs, PartMotion, Pose};
 use super::reactions::Event;
@@ -181,6 +182,11 @@ pub struct Pictures {
     /// Shown briefly after a click or a drop.
     pub click: Option<super::rig::Picture>,
     pub drop: Option<super::rig::Picture>,
+    pub headpat: Option<super::rig::Picture>,
+    pub sleep: Option<super::rig::Picture>,
+    pub sleep_poses: Vec<(super::rig::Picture, [f32; 2])>,
+    pub wake: Option<super::rig::Picture>,
+    pub settings: companionship::Settings,
 }
 
 /// Most a carried character leans, in radians, before the window cap.
@@ -270,6 +276,79 @@ pub fn layout(
 }
 
 impl Layout {
+    /// Reserve the exact rotation envelope of a held picture around its scruff.
+    /// Placement offsets cancel when the scruff is pinned to the carry pivot.
+    fn with_held_room(mut self, held: &super::rig::Picture, stage: Size, top: f32) -> Self {
+        let pivot = Point::new(stage.width * 0.5, top);
+        let grab = Point::new(
+            self.character.x + pivot.x * self.scale,
+            self.character.y + pivot.y * self.scale,
+        );
+        let hold = held.hold_in(stage);
+        let art = held.art;
+        let mut min = Point::ORIGIN;
+        let mut max = Point::new(self.window.width, self.window.height);
+        for corner in [
+            art.position(),
+            Point::new(art.x + art.width, art.y),
+            Point::new(art.x, art.y + art.height),
+            Point::new(art.x + art.width, art.y + art.height),
+        ] {
+            let v = (held.in_stage(stage, corner) - hold) * self.scale;
+            let x_extreme = (-v.y).atan2(v.x);
+            let y_extreme = v.x.atan2(v.y);
+            for angle in [
+                -HANG_SWING,
+                0.0,
+                HANG_SWING,
+                x_extreme,
+                x_extreme + std::f32::consts::PI,
+                y_extreme,
+                y_extreme + std::f32::consts::PI,
+            ] {
+                let angle = (angle + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+                    - std::f32::consts::PI;
+                if angle.abs() > HANG_SWING + 0.0001 {
+                    continue;
+                }
+                let (s, c) = angle.sin_cos();
+                let q = Point::new(grab.x + v.x * c - v.y * s, grab.y + v.x * s + v.y * c);
+                min.x = min.x.min(q.x);
+                min.y = min.y.min(q.y);
+                max.x = max.x.max(q.x);
+                max.y = max.y.max(q.y);
+            }
+        }
+        let left = if min.x < 0.0 {
+            (-min.x + 1.0).ceil()
+        } else {
+            0.0
+        };
+        let top = if min.y < 0.0 {
+            (-min.y + 1.0).ceil()
+        } else {
+            0.0
+        };
+        let right = if max.x > self.window.width {
+            (max.x - self.window.width + 1.0).ceil()
+        } else {
+            0.0
+        };
+        let bottom = if max.y > self.window.height {
+            (max.y - self.window.height + 1.0).ceil()
+        } else {
+            0.0
+        };
+        self.character.x += left;
+        self.character.y += top;
+        self.anchor.x += left;
+        self.anchor.y += top;
+        self.menu_y += top;
+        self.window.width += left + right;
+        self.window.height += top + bottom;
+        self
+    }
+
     /// Lines the menu up with the feet, the middle or the top of the
     /// visible art (`visible`: its top and bottom rows, in rig pixels),
     /// kept inside the window.
@@ -448,6 +527,9 @@ fn flight(
 /// Character choices that change behaviour, read from settings each update.
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
+    /// Unsaved style preview for the currently selected character.
+    pub bop: Option<super::motion::Bop>,
+    pub dance: super::motion::Dance,
     pub eyes: bool,
     pub idle: bool,
     pub reduced: bool,
@@ -459,6 +541,7 @@ pub struct Options {
     pub idle_every: (f32, f32),
     /// Playback loudness to move with, 0 when off or silent.
     pub music: f32,
+    pub energy: Option<f32>,
     /// The followed beat's phase, while Follow beat has one.
     pub beat: Option<f32>,
 }
@@ -561,6 +644,10 @@ pub struct Desktop {
     /// A click plays Compress.
     click_compress: bool,
     pictures: Pictures,
+    companion: Controller,
+    audio: companionship::Audio,
+    voice_busy: bool,
+    nearby: bool,
     /// A Click or Drop picture showing until this time.
     showing: Option<(f32, Event)>,
     /// After release, fall to the screen edge instead of staying.
@@ -659,6 +746,10 @@ impl Desktop {
             events: Vec::new(),
             click_compress: true,
             pictures: Pictures::default(),
+            companion: Controller::new(Instant::now().elapsed().as_nanos() as u64 + 1),
+            audio: companionship::Audio::Unknown,
+            voice_busy: false,
+            nearby: false,
             showing: None,
             fall_on_release: false,
             flight: None,
@@ -722,7 +813,12 @@ impl Desktop {
     /// Says a line for `t`, unless lines are off, Quiet holds back an
     /// unprompted one, or the character is hidden.
     pub fn say(&mut self, t: Trigger, o: &Options) {
-        if !o.lines || self.hidden || (t.unprompted() && o.quiet) {
+        if !o.lines
+            || self.hidden
+            || (t.unprompted() && o.quiet)
+            || (t != Trigger::Sleep
+                && matches!(self.companion.state, State::Asleep | State::Waking))
+        {
             return;
         }
         if let Some(line) = self.picker.pick(&self.lines, t)
@@ -761,18 +857,49 @@ impl Desktop {
 
     pub fn set_pictures(&mut self, pictures: Pictures) {
         self.pictures = pictures;
+        self.companion.reset();
+        self.companion
+            .set_sleep_pose_count(self.pictures.sleep_poses.len());
         self.showing = None;
+        self.relayout();
+        self.place();
     }
 
     /// The picture drawn instead of the character now, if any. Carrying
     /// shows the held pose; a recent click or drop shows its artwork.
+    fn sleep_art(&self) -> Option<&super::rig::Picture> {
+        self.pictures
+            .sleep_poses
+            .get(self.companion.sleep_pose)
+            .map(|p| &p.0)
+            .or(self.pictures.sleep.as_ref())
+    }
+    fn sleep_settings(&self) -> companionship::Settings {
+        let mut settings = self.pictures.settings.clone();
+        if let Some((_, mouth)) = self.pictures.sleep_poses.get(self.companion.sleep_pose) {
+            settings.mouth = *mouth;
+        }
+        settings
+    }
     fn picture(&self) -> Option<&super::rig::Picture> {
         if self.press.as_ref().is_some_and(|p| p.dragging) {
             return self.pictures.held.as_ref();
         }
+        match self.companion.state {
+            State::Asleep | State::Waking => {
+                return self
+                    .sleep_art()
+                    .filter(|_| self.companion.sleep_picture(self.now));
+            }
+            State::Petting => return self.pictures.headpat.as_ref(),
+            _ => {}
+        }
         match self.showing {
             Some((until, Event::Click)) if self.now < until => self.pictures.click.as_ref(),
             Some((until, Event::Drop)) if self.now < until => self.pictures.drop.as_ref(),
+            Some((until, Event::Wake)) if self.now < until && self.companion.sleep_pose == 0 => {
+                self.pictures.wake.as_ref()
+            }
             _ => None,
         }
     }
@@ -784,7 +911,22 @@ impl Desktop {
 
     /// Visible and not busy with a press or its menu: idle may react.
     pub fn idle_free(&self) -> bool {
-        !self.hidden && self.shown && self.press.is_none() && self.menu.is_none()
+        !self.hidden
+            && self.shown
+            && self.press.is_none()
+            && self.menu.is_none()
+            && matches!(self.companion.state, State::Awake)
+            && !self.companion.sleep_due
+    }
+
+    pub fn sleep_enabled(&self) -> bool {
+        self.pictures.settings.sleep
+    }
+    pub fn set_voice_busy(&mut self, busy: bool) {
+        self.voice_busy = busy;
+    }
+    pub fn set_audio(&mut self, audio: companionship::Audio) {
+        self.audio = audio;
     }
 
     pub fn is_hidden(&self) -> bool {
@@ -802,6 +944,7 @@ impl Desktop {
         self.parts = rig.motion_parts();
         self.animator = Animator::default();
         self.rig = rig;
+        self.companion.reset();
         self.menu = None;
         self.press = None;
         self.relayout();
@@ -819,6 +962,11 @@ impl Desktop {
             self.band(),
         )
         .align_menu(self.lines.menu.align, self.rig.visible_rows());
+        if let Some(held) = &self.pictures.held {
+            self.layout =
+                self.layout
+                    .with_held_room(held, self.rig.size(), self.rig.visible_rows().0);
+        }
     }
 
     /// The native window, once known; 0 before then.
@@ -926,6 +1074,11 @@ impl Desktop {
                         (cursor.1 - rect.1) as f32 / k,
                     );
                     let (pivot, protected) = self.grab_chain(grab);
+                    if self.companion.wake(self.now).is_some() {
+                        self.events.push(Event::Wake);
+                        self.say(Trigger::Wake, o);
+                        self.showing = Some((self.now + 0.7, Event::Wake));
+                    }
                     self.press = Some(Press {
                         cursor,
                         grab,
@@ -1063,6 +1216,71 @@ impl Desktop {
             let dt = (self.now - self.stepped).clamp(0.0, 0.1);
             self.gaze + (self.target - self.gaze) * (1.0 - 0.7f32.powf(dt / 0.033))
         };
+        let margin = (self.size * 0.25).max(24.0) + if self.nearby { 8.0 } else { 0.0 };
+        let bounds = if matches!(self.companion.state, State::Asleep | State::Waking) {
+            self.sleep_art()
+                .map(|p| {
+                    let a = p.in_stage(self.rig.size(), p.art.position());
+                    let b = p.in_stage(
+                        self.rig.size(),
+                        Point::new(p.art.x + p.art.width, p.art.y + p.art.height),
+                    );
+                    Rectangle::new(a, Size::new(b.x - a.x, b.y - a.y))
+                })
+                .unwrap_or_else(|| self.rig.visible_bounds())
+        } else {
+            self.rig.visible_bounds()
+        };
+        let bounds = Rectangle::new(
+            Point::new(
+                self.layout.character.x + bounds.x * self.layout.scale,
+                self.layout.character.y + bounds.y * self.layout.scale,
+            ),
+            Size::new(
+                bounds.width * self.layout.scale,
+                bounds.height * self.layout.scale,
+            ),
+        );
+        self.nearby = bounds.expand(margin).contains(local);
+        let touching = self.over_character(local);
+        let stage_cursor = Point::new(
+            (local.x - self.layout.character.x) / self.layout.scale,
+            (local.y - self.layout.character.y) / self.layout.scale,
+        );
+        let event = self.companion.step(
+            &self.pictures.settings,
+            companionship::Input {
+                now: self.now,
+                cursor: Some(stage_cursor),
+                nearby: self.nearby,
+                touching,
+                pet_region: touching && self.rig.pet_region(stage_cursor, &self.pose),
+                button: (left || right) && touching,
+                busy: self.menu.is_some() || self.press.is_some() || self.flight.is_some(),
+                response_busy: self.voice_busy
+                    || self.speech.is_some()
+                    || self.showing.is_some_and(|(until, _)| self.now < until),
+                audio: self.audio,
+                height: self.rig.visible_height(),
+            },
+        );
+        if let Some(event) = event {
+            let e = match event {
+                companionship::Event::Headpat => Event::Headpat,
+                companionship::Event::Sleep => Event::Sleep,
+                companionship::Event::Wake => Event::Wake,
+            };
+            self.events.push(e);
+            let trigger = match e {
+                Event::Headpat => Trigger::Headpat,
+                Event::Sleep => Trigger::Sleep,
+                _ => Trigger::Wake,
+            };
+            self.say(trigger, o);
+            if e == Event::Wake {
+                self.showing = Some((self.now + 0.7, e));
+            }
+        }
         self.step_motion(o, k);
         if picked_up {
             self.events.push(Event::Pickup);
@@ -1087,7 +1305,7 @@ impl Desktop {
         if self.now < self.next_idle {
             return;
         }
-        let free = self.press.is_none() && self.menu.is_none() && self.speech.is_none();
+        let free = self.idle_free() && self.speech.is_none();
         if free && !native::foreground_fullscreen() {
             self.say(Trigger::Idle, o);
         }
@@ -1126,7 +1344,8 @@ impl Desktop {
                         dt,
                         dragging: true,
                         velocity,
-                        bop: self.rig.bop(),
+                        bop: o.bop.unwrap_or_else(|| self.rig.bop()),
+                        dance: o.dance,
                         ..Inputs::default()
                     },
                 );
@@ -1196,20 +1415,24 @@ impl Desktop {
             self.pose = pose;
             return;
         }
+        let sleeping = self.companion.sleep_motion(self.now);
         let mut pose = self.animator.step(
             &self.parts,
             &Inputs {
                 now: self.now,
                 dt,
-                idle: o.idle && !o.reduced,
+                idle: o.idle && !o.reduced && !sleeping,
                 reduced: o.reduced,
                 pressed: false,
                 // Thrown, its parts trail the flight as they did the drag.
                 dragging: self.flight.is_some(),
                 velocity,
-                music: o.music,
-                beat: o.beat,
-                bop: self.rig.bop(),
+                music: if sleeping { 0.0 } else { o.music },
+                music_items: self.rig.music_items(),
+                energy: o.energy,
+                beat: if sleeping { None } else { o.beat },
+                bop: o.bop.unwrap_or_else(|| self.rig.bop()),
+                dance: o.dance,
             },
         );
         if let Some((at, held)) = &self.released {
@@ -1221,6 +1444,30 @@ impl Desktop {
             }
         }
         pose.gaze = self.head_gaze(&pose);
+        if sleeping {
+            pose.expression = Expression::Blink;
+            pose.gaze = Vector::ZERO;
+            if self.pictures.settings.breathing && !o.reduced {
+                pose.squash = (self.now * 1.6).sin() * 0.05;
+            }
+        }
+        if self.companion.state == State::Petting {
+            pose.expression = Expression::Petted;
+        }
+        self.companion.apply_affection(
+            &self.rig,
+            &mut pose,
+            self.now,
+            o.reduced,
+            self.picture().is_some(),
+        );
+        self.companion.apply_sleep(
+            &self.rig,
+            &mut pose,
+            self.now,
+            o.reduced,
+            self.picture().is_some(),
+        );
         self.pose = pose;
     }
 
@@ -1482,6 +1729,7 @@ impl Desktop {
             return Task::none();
         }
         self.hidden = hidden;
+        self.companion.reset();
         if hidden {
             self.flight = None;
             // A cancelled gesture: no Drop is invented.
@@ -1524,7 +1772,13 @@ impl Desktop {
                 || self.showing.is_some_and(|(until, _)| self.now < until)
         };
         Some(Duration::from_millis(
-            if self.press.is_some() || self.flight.is_some() || self.animating() {
+            if self.press.is_some()
+                || self.flight.is_some()
+                || self.animating()
+                || (self.pictures.settings.zzz
+                    && matches!(self.companion.state, State::Asleep | State::Waking)
+                    && !o.reduced)
+            {
                 16
             } else if self.menu.is_some() || (o.idle && !o.reduced) || settling || o.music > 0.001 {
                 33
@@ -1537,13 +1791,26 @@ impl Desktop {
 
     /// Whether a window-space point lies on visible artwork as drawn now.
     fn over_character(&self, p: Point) -> bool {
+        if let Some(picture) = self.picture() {
+            let l = &self.layout;
+            let q = Point::new(
+                (p.x - l.character.x) / l.scale,
+                (p.y - l.character.y) / l.scale,
+            );
+            let q =
+                super::motion::unplaced(&self.pose, self.rig.anchor(), self.rig.size().height, q);
+            return picture.hit(self.rig.size(), q);
+        }
         over(&self.layout, &self.rig, &self.pose, p)
     }
 
     pub fn view<'a>(&'a self, items: Vec<Item>, o: &Options) -> Element<'a, Message> {
         let l = &self.layout;
         let slot = |side: Side, items: &mut Option<Vec<Item>>| -> Element<'a, Message> {
-            let width = MENU_W + GAP;
+            let width = match side {
+                Side::Left => l.character.x,
+                Side::Right => l.window.width - l.character.x - l.character.width,
+            };
             match (self.menu == Some(side), items.take()) {
                 (true, Some(items)) => {
                     let r = l.menu(side);
@@ -2041,7 +2308,34 @@ impl canvas::Program<Message> for Stage<'_> {
                 None => d.rig.draw_pose(&mut frame, pose),
             }
         }
-        let mut geometry = vec![frame.into_geometry()];
+        let mut sleep_overlay = Frame::new(renderer, bounds.size());
+        sleep_overlay.translate(Vector::new(l.character.x, l.character.y));
+        sleep_overlay.scale(l.scale);
+        super::motion::place(
+            &mut sleep_overlay,
+            pose,
+            d.rig.anchor(),
+            d.rig.size().height,
+        );
+        companionship::draw_zzz(
+            &mut sleep_overlay,
+            d.rig.size(),
+            &d.sleep_settings(),
+            d.companion.state,
+            d.companion.stirring,
+            d.now,
+            d.reduced,
+        );
+        if d.press.is_none() && d.flight.is_none() && d.menu.is_none() {
+            d.companion.draw_affection(
+                &mut sleep_overlay,
+                d.rig.size(),
+                d.rig.visible_bounds(),
+                d.now,
+                d.reduced,
+            );
+        }
+        let mut geometry = vec![frame.into_geometry(), sleep_overlay.into_geometry()];
         if let Some((side, scale, alpha)) = d.menu_look() {
             let mut ui = Frame::new(renderer, bounds.size());
             draw_menu(&mut ui, l.menu(side), side, scale, alpha);

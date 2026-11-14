@@ -1,5 +1,6 @@
 {
   "author": "TinyPaw",
+  "reactions": { "companionship": { "mouth": [0.29, 0.54] } },
   "canvas": [
     620,
     860

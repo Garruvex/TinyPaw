@@ -99,6 +99,7 @@ pub(super) fn behavior_section<'a>(
     let muted = s.bool(crate::features::sound::MUTE_ALL);
     column![
         character_sounds(m, muted),
+        companionship_section(m, muted),
         section(vec![
             h2("When touched"),
             event_row(m, Trigger::Click),
@@ -257,6 +258,10 @@ pub(super) fn visual_row<'a>(
             hint(match visual {
                 Visual::Compress =>
                     "Briefly shortens and widens the picture after a click, then restores it.",
+                Visual::Artwork if e == Event::Sleep =>
+                    "Keeps the selected sleeping position throughout the nap.",
+                Visual::None if e == Event::Sleep =>
+                    "Dozes using existing blink artwork; no extra PNG needed.",
                 Visual::Artwork =>
                     "Shows another whole-character PNG for a moment, then the normal one.",
                 Visual::None => "The picture stays as it is.",
@@ -268,6 +273,30 @@ pub(super) fn visual_row<'a>(
     .spacing(6);
     if let Some(art) = m.art(e) {
         block = block.push(picture_controls(e, false, art.place));
+    }
+    if e == Event::Sleep {
+        let poses = m.sleep_poses();
+        block = block.push(hint("No extra art is needed for dozing with a blink layer. Optional sleep PNGs add curled-up or lying-down positions. One pose is chosen per nap; wake artwork is optional."));
+        if poses.len() < 8 {
+            block =
+                block.push(button("Add sleep pose…").on_press(Message::Ui(UiMsg::SleepPoseAdd)));
+        }
+        for (index, _) in poses.iter().enumerate() {
+            block = block.push(
+                row![
+                    text(format!(
+                        "Sleep pose {}{}",
+                        index + 1,
+                        if index == 0 { " (editing)" } else { "" }
+                    ))
+                    .size(12),
+                    button("Edit placement & mouth")
+                        .on_press(Message::Ui(UiMsg::SleepPoseEdit(index, false))),
+                    button("Remove").on_press(Message::Ui(UiMsg::SleepPoseEdit(index, true))),
+                ]
+                .spacing(6),
+            );
+        }
     }
     block.into()
 }
@@ -299,6 +328,11 @@ pub(super) fn held_row<'a>(m: &'a crate::mascot::preview::MotionPreview) -> Elem
             .spacing(8)
             .align_y(Alignment::Center),
             picture_controls(Event::Pickup, true, art.place),
+            row![
+                small(if m.placing_grip { "Cancel grip" } else { "Set grip on preview" }, Message::Ui(UiMsg::GripEdit)),
+                small("Automatic grip", Message::Ui(UiMsg::GripSet(None))),
+            ].spacing(6),
+            hint("Choose Set grip, then click the pickup point on the preview. The circle marks where the character hangs."),
             hint("Line the held pose up so the part people grab sits where it does in the normal pose; the preview shows it while carried."),
         ]
         .spacing(6)
@@ -329,9 +363,17 @@ pub(super) fn picture_controls<'a>(e: Event, held: bool, place: [f32; 3]) -> Ele
             .align_y(Alignment::Center)
         };
     column![
-        slider_row("Left/right", 0, -0.5..=0.5, 0.005),
-        slider_row("Up/down", 1, -0.5..=0.5, 0.005),
-        slider_row("Size", 2, 0.25..=2.0, 0.01),
+        button("Align poses…").on_press(Message::Ui(UiMsg::Align(
+            crate::mascot::alignment::Action::Open(e)
+        ))),
+        row![
+            button("Preview pose").on_press(Message::Ui(UiMsg::PlacementPreview(Some(e)))),
+            button("Finish preview").on_press(Message::Ui(UiMsg::PlacementPreview(None))),
+        ]
+        .spacing(6),
+        slider_row("Left/right", 0, -1.0..=1.0, 0.005),
+        slider_row("Up/down", 1, -1.0..=1.0, 0.005),
+        slider_row("Size", 2, 0.1..=4.0, 0.01),
     ]
     .spacing(4)
     .into()
@@ -856,7 +898,68 @@ pub(super) fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         .spacing(10)
         .align_y(Alignment::Center)
         .into(),
-        hint("Nod is relaxed. Groove dips on the beat and leans side to side. Rubber hose hops every beat, squashing and stretching like an old cartoon. Compress briefly squashes the whole picture on each beat, so it suits a single PNG. Saved with the character's Save, and carried when you export it."),
+        row![
+            text("Music pose").size(12).color(theme::MUTED).width(110),
+            pick_list(["Automatic", "Sitting", "Standing"],
+                Some(match s.choice(mascot::MUSIC_POSE) { "sit" => "Sitting", "stand" => "Standing", _ => "Automatic" }),
+                |x| Message::Set(mascot::MUSIC_POSE, Value::Choice(match x { "Sitting" => "sit", "Standing" => "stand", _ => "auto" })))
+                .text_size(13).padding([6, 10]).style(theme::select),
+        ].spacing(10).align_y(Alignment::Center).into(),
+        row![
+            text("Stand at energy").size(12).color(theme::MUTED).width(110),
+            slider(30.0..=90.0, s.float(mascot::EXCITEMENT), |x| Message::Set(mascot::EXCITEMENT, Value::Float(x)))
+                .step(1.0).style(theme::range),
+            text(format!("{:.0}%", s.float(mascot::EXCITEMENT))).size(12).width(48),
+        ].spacing(8).align_y(Alignment::Center).into(),
+        hint("Automatic keeps gentle bops seated, stands after sustained high activity, and sits again when the music calms. A higher threshold keeps it seated more often. Standing artwork is required. Choose Standing to adjust the waving hand."),
+        row![
+            text("Change every").size(12).color(theme::MUTED).width(110),
+            pick_list(["8", "16", "32"], Some(s.choice(mascot::DANCE_EVERY)), |x| Message::Set(mascot::DANCE_EVERY, Value::Choice(x)))
+                .text_size(13).padding([6, 10]).style(theme::select),
+            text("beats in Random").size(12).color(theme::MUTED),
+        ].spacing(10).align_y(Alignment::Center).into(),
+        row![
+            text("Light-wave item").size(12).color(theme::MUTED).width(110),
+            pick_list(["Glow stick", "Phone", "Random"], Some(match s.choice(mascot::DANCE_ITEM) { "phone" => "Phone", "glow_stick" => "Glow stick", _ => "Random" }),
+                |x| Message::Set(mascot::DANCE_ITEM, Value::Choice(match x { "Phone" => "phone", "Glow stick" => "glow_stick", _ => "random" })))
+                .text_size(13).padding([6, 10]).style(theme::select),
+        ].spacing(10).align_y(Alignment::Center).into(),
+        row![
+            text("Hand horizontal").size(12).color(theme::MUTED).width(110),
+            slider(-15.0..=15.0, s.float(mascot::WAVE_X), |x| Message::Set(mascot::WAVE_X, Value::Float(x)))
+                .step(1.0).style(theme::range),
+            text(format!("{:.0}%", s.float(mascot::WAVE_X))).size(12).width(48),
+            button("Reset").style(theme::secondary).on_press(Message::Set(mascot::WAVE_X, Value::Float(0.0))),
+        ].spacing(8).align_y(Alignment::Center).into(),
+        row![
+            text("Hand vertical").size(12).color(theme::MUTED).width(110),
+            slider(-15.0..=15.0, s.float(mascot::WAVE_Y), |x| Message::Set(mascot::WAVE_Y, Value::Float(x)))
+                .step(1.0).style(theme::range),
+            text(format!("{:.0}%", s.float(mascot::WAVE_Y))).size(12).width(48),
+            button("Reset").style(theme::secondary).on_press(Message::Set(mascot::WAVE_Y, Value::Float(0.0))),
+        ].spacing(8).align_y(Alignment::Center).into(),
+        row![
+            text("Hand angle").size(12).color(theme::MUTED).width(110),
+            slider(-45.0..=45.0, s.float(mascot::WAVE_ANGLE), |x| Message::Set(mascot::WAVE_ANGLE, Value::Float(x)))
+                .step(1.0).style(theme::range),
+            text(format!("{:.0}°", s.float(mascot::WAVE_ANGLE))).size(12).width(48),
+            button("Reset").style(theme::secondary).on_press(Message::Set(mascot::WAVE_ANGLE, Value::Float(0.0))),
+        ].spacing(8).align_y(Alignment::Center).into(),
+        row![
+            text("Wave range").size(12).color(theme::MUTED).width(110),
+            slider(0.0..=200.0, s.float(mascot::WAVE_RANGE), |x| Message::Set(mascot::WAVE_RANGE, Value::Float(x)))
+                .step(1.0).style(theme::range),
+            text(format!("{:.0}%", s.float(mascot::WAVE_RANGE))).size(12).width(48),
+            button("Reset").style(theme::secondary).on_press(Message::Set(mascot::WAVE_RANGE, Value::Float(100.0))),
+        ].spacing(8).align_y(Alignment::Center).into(),
+        hint("Hand position moves the waving arm and item together. Positive horizontal moves right; positive vertical moves down. These adjustments apply across characters and save immediately."),
+        hint("Random uses the checked styles and changes on a beat boundary. Light wave joins Random when the character has a holding arm and an item. An empty selection uses Nod. Items use the available artwork; characters without gesture artwork use the built-in glow stick. Interval, included styles and item apply to all characters."),
+        check("Random · Nod", s.bool(mascot::DANCE_STYLES[0]), mascot::DANCE_STYLES[0]),
+        check("Random · Groove", s.bool(mascot::DANCE_STYLES[1]), mascot::DANCE_STYLES[1]),
+        check("Random · Rubber hose", s.bool(mascot::DANCE_STYLES[2]), mascot::DANCE_STYLES[2]),
+        check("Random · Compress", s.bool(mascot::DANCE_STYLES[3]), mascot::DANCE_STYLES[3]),
+        check("Random · Light wave", s.bool(mascot::DANCE_STYLES[4]), mascot::DANCE_STYLES[4]),
+        hint("Nod dips its head and shoulders on each beat, recovering smoothly and rocking across two beats. Groove dips on the beat and leans side to side. Rubber hose hops every beat, squashing and stretching like an old cartoon. Compress briefly squashes the whole picture on each beat, so it suits a single PNG. Light wave raises its right hand and sweeps the selected item across two beats. Add Music gestures artwork through Create from reference for a matching hand and interchangeable items. The selected style previews on the desktop immediately. Save keeps it with this character; Discard restores the saved style. It is carried when you export it."),
         check("Follow beat (trial)", follow, mascot::BEAT),
         hint("Nods land on the beat instead of a steady bob. It listens to what's playing (TinyPaw's own sounds are held off while they play) and keeps nothing."),
     ]);
@@ -1005,9 +1108,8 @@ pub(super) fn motion_preview<'a>(
         h2("Preview"),
         mode_label("Test character", "Reactions and gaze as on the desktop."),
         container(bubble).width(Length::Fill).center_x(Length::Fill),
-        canvas(MotionStage { preview: m })
-            .width(Length::Fill)
-            .height(300),
+        container(canvas(MotionStage { preview: m }).width(Length::Fill).height(if m.alignment.is_some() { 220 } else { 300 })).clip(true),
+        alignment_controls(m),
         row![
             test("Click", Test::Click),
             test("Drag ←", Test::DragLeft),
@@ -1025,6 +1127,62 @@ pub(super) fn motion_preview<'a>(
     .into()
 }
 
+fn alignment_controls(m: &crate::mascot::preview::MotionPreview) -> Element<'_, Message> {
+    use crate::mascot::alignment::Action;
+    let Some(a) = &m.alignment else {
+        return if m.held().is_some() {
+            button("Align held pose")
+                .on_press(Message::Ui(UiMsg::Align(Action::Open(Event::Pickup))))
+                .into()
+        } else {
+            space().height(0).into()
+        };
+    };
+    let message = |action| Message::Ui(UiMsg::Align(action));
+    let number = |label: &'static str, index: usize| {
+        column![
+            text(label).size(11),
+            iced::widget::text_input("0", &a.numbers[index])
+                .on_input(move |value| Message::Ui(UiMsg::Align(Action::Number(index, value))))
+                .size(12),
+        ]
+    };
+    let mut controls = column![
+        text("Align poses").size(15),
+        text("Drag the pose to move it. Arrow keys nudge. Size changes the pose. Zoom changes this preview.").size(12),
+        button(if a.side_by_side { "Use overlay" } else { "Show side by side" })
+            .on_press(message(Action::Compare(!a.side_by_side))),
+        text("Overlay opacity").size(12),
+        slider(0.0..=1.0, a.opacity, move |value| message(Action::Opacity(value)))
+            .step(0.01_f32),
+        text(format!("Zoom {:.0}%", a.zoom * 100.0)).size(12),
+        slider(0.1..=2.0, a.zoom, move |value| message(Action::Zoom(value)))
+            .step(0.05_f32),
+        row![number("Left/right %", 0), number("Up/down %", 1), number("Size %", 2)]
+            .spacing(5),
+        button("Match head size").on_press(message(Action::Match)),
+        row![
+            button("Reset").on_press(message(Action::Reset)),
+            button("Cancel").on_press(message(Action::Finish(false))),
+            button("Apply").on_press_maybe(a.error.is_none().then(|| message(Action::Finish(true)))),
+        ].spacing(5),
+    ].spacing(6);
+    if a.matching {
+        controls = controls.push(text(a.instruction()).size(13));
+    }
+    if let Some(error) = &a.error {
+        controls = controls.push(text(error).size(12));
+    }
+    controls.into()
+}
+
+#[derive(Default)]
+pub(super) struct PoseDrag {
+    start: Option<(iced::Point, [f32; 3])>,
+    focused: bool,
+    gripping: bool,
+}
+
 pub(super) struct MotionStage<'a> {
     preview: &'a crate::mascot::preview::MotionPreview,
 }
@@ -1035,11 +1193,22 @@ impl MotionStage<'_> {
         let rig = self.preview.rig();
         let canvas_size = rig.size();
         let pad = 18.0;
-        let k = ((size.width - pad * 2.0) / canvas_size.width)
-            .min((size.height - pad * 2.0) / canvas_size.height);
+        let side = self
+            .preview
+            .alignment
+            .as_ref()
+            .is_some_and(|a| a.side_by_side);
+        let available_width = if side { size.width / 2.0 } else { size.width };
+        let k = ((available_width - pad * 2.0) / canvas_size.width)
+            .min((size.height - pad * 2.0) / canvas_size.height)
+            * self.preview.alignment.as_ref().map_or(1.0, |a| a.zoom);
         let feet = rig.anchor();
         let origin = iced::Vector::new(
-            size.width / 2.0 - feet.x * k,
+            (if side {
+                size.width * 0.75
+            } else {
+                size.width / 2.0
+            }) - feet.x * k,
             size.height - pad - feet.y * k,
         );
         (k, origin)
@@ -1047,19 +1216,29 @@ impl MotionStage<'_> {
 }
 
 impl canvas::Program<Message> for MotionStage<'_> {
-    type State = ();
+    type State = PoseDrag;
 
     /// Drives the animation: each redraw advances the preview and asks for
     /// the next one, so only this canvas repaints per frame. While picking
     /// the bubble's anchor, a click on the stage sets it.
     fn update(
         &self,
-        _state: &mut (),
+        state: &mut PoseDrag,
         event: &canvas::Event,
         bounds: iced::Rectangle,
         cursor: iced::mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
         use iced::mouse::{Button, Event};
+        let (k, origin) = self.fit(bounds.size());
+        let point = cursor
+            .position_in(bounds)
+            .map(|p| iced::Point::new((p.x - origin.x) / k, (p.y - origin.y) / k));
+        let button = match event {
+            canvas::Event::Mouse(Event::ButtonPressed(_)) => Some(true),
+            canvas::Event::Mouse(Event::ButtonReleased(_)) => Some(false),
+            _ => None,
+        };
+        self.preview.companion_pointer(point, button);
         if let canvas::Event::Window(iced::window::Event::RedrawRequested(now)) = event {
             // The page shows the speech bubble, so it needs rebuilding when
             // the bubble appears or goes.
@@ -1075,6 +1254,108 @@ impl canvas::Program<Message> for MotionStage<'_> {
                 .unwrap_or(std::time::Duration::from_millis(7));
             return Some(canvas::Action::request_redraw_at(*now + wait));
         }
+        if let Some(a) = &self.preview.alignment {
+            use crate::mascot::alignment::Action;
+            let publish =
+                |action| canvas::Action::publish(Message::Ui(UiMsg::Align(action))).and_capture();
+            if let canvas::Event::Mouse(Event::CursorMoved { .. }) = event
+                && state.gripping
+                    && let (Some(point), Some(picture)) = (point, self.preview.placement_picture())
+                    {
+                        let grip = picture.source_fraction(self.preview.rig().size(), point);
+                        return Some(
+                            canvas::Action::publish(Message::Ui(UiMsg::GripSet(Some([
+                                grip.x.clamp(0.0, 1.0),
+                                grip.y.clamp(0.0, 1.0),
+                            ]))))
+                            .and_capture(),
+                        );
+                    }
+            if let canvas::Event::Mouse(Event::ButtonPressed(Button::Left)) = event {
+                state.focused = point.is_some();
+                if let Some(point) = point {
+                    if a.matching {
+                        let mut point = point;
+                        if a.side_by_side && a.points.len() < 2 {
+                            point.x += bounds.width / (2.0 * k);
+                        }
+                        return Some(publish(Action::Point(point)));
+                    }
+                    if a.event == crate::mascot::reactions::Event::Pickup
+                        && let Some(picture) = self.preview.placement_picture()
+                            && point.distance(picture.hold_in(self.preview.rig().size())) < 9.0 / k
+                            {
+                                state.gripping = true;
+                                return Some(canvas::Action::capture());
+                            }
+                    if !self.preview.placing_grip {
+                        state.start = Some((point, a.art.place));
+                        return Some(canvas::Action::capture());
+                    }
+                }
+            }
+            if let canvas::Event::Mouse(Event::ButtonReleased(Button::Left)) = event {
+                state.start = None;
+                state.gripping = false;
+            }
+            if let canvas::Event::Mouse(Event::CursorMoved { .. }) = event
+                && let (Some((start, original)), Some(point)) = (state.start, point) {
+                    let stage = self.preview.rig().size();
+                    return Some(publish(Action::Place([
+                        (original[0] + (point.x - start.x) / stage.width).clamp(-1.0, 1.0),
+                        (original[1] + (point.y - start.y) / stage.height).clamp(-1.0, 1.0),
+                        original[2],
+                    ])));
+                }
+            if state.focused
+                && let canvas::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key: iced::keyboard::Key::Named(key),
+                    ..
+                }) = event
+                {
+                    use iced::keyboard::key::Named;
+                    let mut place = a.art.place;
+                    let size = self.preview.rig().size();
+                    match key {
+                        Named::ArrowLeft => place[0] -= 1.0 / size.width,
+                        Named::ArrowRight => place[0] += 1.0 / size.width,
+                        Named::ArrowUp => place[1] -= 1.0 / size.height,
+                        Named::ArrowDown => place[1] += 1.0 / size.height,
+                        _ => return None,
+                    }
+                    place[0] = place[0].clamp(-1.0, 1.0);
+                    place[1] = place[1].clamp(-1.0, 1.0);
+                    return Some(publish(Action::Place(place)));
+                }
+        }
+        if self.preview.placing_grip {
+            if let canvas::Event::Mouse(Event::ButtonPressed(Button::Left)) = event
+                && let (Some(point), Some(picture)) = (point, self.preview.placement_picture()) {
+                    let size = self.preview.rig().size();
+                    let fraction = picture.source_fraction(size, point);
+                    let grip = [fraction.x, fraction.y];
+                    if grip.iter().all(|v| (0.0..=1.0).contains(v)) {
+                        return Some(
+                            canvas::Action::publish(Message::Ui(UiMsg::GripSet(Some(grip))))
+                                .and_capture(),
+                        );
+                    }
+                }
+            return None;
+        }
+        if self.preview.placing_mouth
+            && let canvas::Event::Mouse(Event::ButtonPressed(Button::Left)) = event
+                && let Some(p) = point {
+                    let size = self.preview.rig().size();
+                    let mut s = self.preview.companionship();
+                    s.mouth = [
+                        (p.x / size.width).clamp(0.0, 1.0),
+                        (p.y / size.height).clamp(0.0, 1.0),
+                    ];
+                    return Some(
+                        canvas::Action::publish(Message::Ui(UiMsg::Companionship(s))).and_capture(),
+                    );
+                }
         if !self.preview.placing_bubble {
             return None;
         }
@@ -1095,11 +1376,13 @@ impl canvas::Program<Message> for MotionStage<'_> {
 
     fn mouse_interaction(
         &self,
-        _state: &(),
+        _state: &PoseDrag,
         bounds: iced::Rectangle,
         cursor: iced::mouse::Cursor,
     ) -> iced::mouse::Interaction {
-        if self.preview.placing_bubble && cursor.is_over(bounds) {
+        if (self.preview.placing_bubble || self.preview.placing_mouth || self.preview.placing_grip)
+            && cursor.is_over(bounds)
+        {
             iced::mouse::Interaction::Crosshair
         } else {
             iced::mouse::Interaction::default()
@@ -1108,7 +1391,7 @@ impl canvas::Program<Message> for MotionStage<'_> {
 
     fn draw(
         &self,
-        _state: &(),
+        _state: &PoseDrag,
         renderer: &iced::Renderer,
         _theme: &Theme,
         bounds: iced::Rectangle,
@@ -1138,9 +1421,23 @@ impl canvas::Program<Message> for MotionStage<'_> {
                 origin.y + y * canvas_size.height * k,
             )
         });
+        let marker = if self.preview.placing_mouth {
+            let m = self.preview.companionship().mouth;
+            Some(iced::Point::new(
+                origin.x + m[0] * canvas_size.width * k,
+                origin.y + m[1] * canvas_size.height * k,
+            ))
+        } else {
+            marker
+        };
         // A live cursor test: tracking eyes follow the pointer over the
         // preview, counter-rotated into the head like on the desktop.
-        if let (Some(eye), Some(at)) = (rig.eye_point(), cursor.position_in(bounds)) {
+        if !matches!(
+            self.preview.companion_state(),
+            crate::mascot::companionship::State::Asleep
+                | crate::mascot::companionship::State::Waking
+        ) && let (Some(eye), Some(at)) = (rig.eye_point(), cursor.position_in(bounds))
+        {
             let eyes = iced::Point::new(origin.x + eye.x * k, origin.y + eye.y * k);
             let g = crate::mascot::desktop::gaze_toward(at, eyes, 0.49 * canvas_size.height * k);
             let (sn, cs) = (-rig.head_angle(&pose)).sin_cos();
@@ -1148,6 +1445,50 @@ impl canvas::Program<Message> for MotionStage<'_> {
         }
         frame.translate(origin);
         frame.scale(k);
+        if let Some(picture) = self.preview.placement_picture() {
+            if let Some(a) = &self.preview.alignment {
+                if !a.matching || a.points.len() < 2 {
+                    frame.with_save(|frame| {
+                        if a.side_by_side {
+                            frame.translate(iced::Vector::new(-size.width / (2.0 * k), 0.0));
+                        }
+                        rig.draw_pose(frame, &crate::mascot::motion::Pose::default());
+                    });
+                }
+                if !a.matching || a.points.len() >= 2 {
+                    rig.draw_picture_alpha(
+                        &mut frame,
+                        &picture,
+                        if a.matching || a.side_by_side {
+                            1.0
+                        } else {
+                            a.opacity
+                        },
+                    );
+                }
+                let feet = rig.anchor();
+                frame.stroke(
+                    &canvas::Path::line(
+                        iced::Point::new(0.0, feet.y),
+                        iced::Point::new(canvas_size.width, feet.y),
+                    ),
+                    canvas::Stroke::default()
+                        .with_color(iced::Color::from_rgb(0.4, 0.7, 0.5))
+                        .with_width(1.0 / k),
+                );
+            } else {
+                rig.draw_picture(&mut frame, &picture);
+            }
+            if self.preview.placement_preview == Some(Event::Pickup) {
+                frame.stroke(
+                    &canvas::Path::circle(picture.hold_in(canvas_size), 6.0 / k),
+                    canvas::Stroke::default()
+                        .with_color(iced::Color::from_rgb(1.0, 0.3, 0.4))
+                        .with_width(2.0 / k),
+                );
+            }
+            return vec![frame.into_geometry()];
+        }
         if let Some((held, grip, angle)) = self.preview.hanging() {
             rig.draw_hanging(&mut frame, &held, grip, angle);
             return vec![frame.into_geometry()];
@@ -1157,7 +1498,21 @@ impl canvas::Program<Message> for MotionStage<'_> {
             Some(picture) => rig.draw_picture(&mut frame, &picture),
             None => rig.draw_pose(&mut frame, &pose),
         }
-        let mut out = vec![frame.into_geometry()];
+        let mut sleep_overlay = Frame::new(renderer, size);
+        sleep_overlay.translate(origin);
+        sleep_overlay.scale(k);
+        crate::mascot::motion::place(&mut sleep_overlay, &pose, feet, canvas_size.height);
+        crate::mascot::companionship::draw_zzz(
+            &mut sleep_overlay,
+            canvas_size,
+            &self.preview.companionship(),
+            self.preview.companion_state(),
+            self.preview.stirring(),
+            self.preview.time(),
+            self.preview.control().reduced,
+        );
+        self.preview.draw_affection(&mut sleep_overlay);
+        let mut out = vec![frame.into_geometry(), sleep_overlay.into_geometry()];
         if let Some(at) = marker {
             let mut ui = Frame::new(renderer, size);
             let ring = Path::circle(at, 7.0);
@@ -1172,4 +1527,148 @@ impl canvas::Program<Message> for MotionStage<'_> {
         }
         out
     }
+}
+
+fn companionship_section<'a>(
+    m: &'a crate::mascot::preview::MotionPreview,
+    muted: bool,
+) -> Element<'a, Message> {
+    use crate::mascot::companionship::State;
+    let s = m.companionship();
+    let toggle = |label: &'static str, value: bool, key: usize| {
+        let settings = s.clone();
+        checkbox(value)
+            .label(label)
+            .text_size(13)
+            .on_toggle(move |on| {
+                let mut settings = settings.clone();
+                match key {
+                    0 => settings.petting = on,
+                    1 => settings.sleep = on,
+                    2 => settings.touch_wake = on,
+                    3 => settings.audio_wake = on,
+                    4 => settings.random_wake = on,
+                    5 => settings.zzz = on,
+                    _ => settings.breathing = on,
+                }
+                Message::Ui(UiMsg::Companionship(settings))
+            })
+    };
+    let mut timing = column![].spacing(6);
+    for (key, values, label) in [
+        (0, s.touch_seconds, "Gentle wake, seconds"),
+        (1, s.random_seconds, "Random wake, minutes"),
+    ] {
+        let factor = if key == 0 { 1.0 } else { 60.0 };
+        timing = timing.push(
+            text(format!(
+                "{label}: {:.1}–{:.1}",
+                values[0] / factor,
+                values[1] / factor
+            ))
+            .size(12),
+        );
+        for index in 0..2 {
+            let current = s.clone();
+            let range = if key == 0 { 0.2..=10.0 } else { 1.0..=120.0 };
+            timing = timing.push(
+                slider(range, values[index] / factor, move |value| {
+                    let mut s = current.clone();
+                    let range = if key == 0 {
+                        &mut s.touch_seconds
+                    } else {
+                        &mut s.random_seconds
+                    };
+                    range[index] = value * factor;
+                    if index == 0 {
+                        range[1] = range[1].max(range[0]);
+                    } else {
+                        range[0] = range[0].min(range[1]);
+                    }
+                    Message::Ui(UiMsg::Companionship(s))
+                })
+                .step(if key == 0 { 0.1_f32 } else { 1.0_f32 })
+                .style(theme::range),
+            );
+        }
+    }
+    let delay = s.clone();
+    let mouth_x = s.clone();
+    let mouth_y = s.clone();
+    section(vec![
+        h2("Headpat"),
+        toggle("Enable headpat", s.petting, 0).into(),
+        hint(
+            "Rub back and forth without holding a button. The head sways with your strokes and hearts float up. Gentle touch gives a smaller lean.",
+        ),
+        button("Try headpat")
+            .style(theme::secondary)
+            .on_press(Message::Ui(UiMsg::CompanionTest(State::Petting)))
+            .into(),
+        event_row(m, crate::mascot::lines::Trigger::Headpat),
+        visual_row(m, Event::Headpat),
+        sound_row(m, Event::Headpat, muted),
+        h2("Sleep & wake"),
+        toggle("Sleep when quiet and the mouse stays away", s.sleep, 1).into(),
+        text(format!("Sleep after {:.0} minutes", s.delay / 60.0))
+            .size(13)
+            .into(),
+        slider(60.0..=3600.0, s.delay, move |v| {
+            let mut s = delay.clone();
+            s.delay = v;
+            Message::Ui(UiMsg::Companionship(s))
+        })
+        .step(60.0_f32)
+        .style(theme::range)
+        .into(),
+        hint(
+            "Typing and mouse movement elsewhere let it sleep. Audio monitoring runs while sleep is enabled. Gentle touch wakes it gradually; clicks and pickup wake immediately.",
+        ),
+        toggle("Wake from gentle touch", s.touch_wake, 2).into(),
+        toggle("Wake when audio starts", s.audio_wake, 3).into(),
+        toggle("Wake randomly after sleeping", s.random_wake, 4).into(),
+        toggle("Show Zzz from the mouth", s.zzz, 5).into(),
+        toggle("Gentle breathing while asleep", s.breathing, 6).into(),
+        timing.into(),
+        button("Place mouth in preview…")
+            .style(theme::secondary)
+            .on_press(Message::Ui(UiMsg::CompanionMouth))
+            .into(),
+        hint("Mouth position on the shared canvas (left/right, then up/down)."),
+        slider(0.0..=1.0, s.mouth[0], move |v| {
+            let mut s = mouth_x.clone();
+            s.mouth[0] = v;
+            Message::Ui(UiMsg::Companionship(s))
+        })
+        .step(0.01_f32)
+        .style(theme::range)
+        .into(),
+        slider(0.0..=1.0, s.mouth[1], move |v| {
+            let mut s = mouth_y.clone();
+            s.mouth[1] = v;
+            Message::Ui(UiMsg::Companionship(s))
+        })
+        .step(0.01_f32)
+        .style(theme::range)
+        .into(),
+        row![
+            button("Sleep now")
+                .style(theme::secondary)
+                .on_press(Message::Ui(UiMsg::CompanionTest(State::Asleep))),
+            button("Try wake")
+                .style(theme::secondary)
+                .on_press(Message::Ui(UiMsg::CompanionTest(State::Awake)))
+        ]
+        .spacing(8)
+        .into(),
+        hint(
+            "Preview sleep and wake are simulated. A sleeping pose is optional; add artwork for a curled-up character.",
+        ),
+        event_row(m, crate::mascot::lines::Trigger::Sleep),
+        visual_row(m, Event::Sleep),
+        sound_row(m, Event::Sleep, muted),
+        event_row(m, crate::mascot::lines::Trigger::Wake),
+        visual_row(m, Event::Wake),
+        sound_row(m, Event::Wake, muted),
+    ])
 }
