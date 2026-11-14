@@ -174,7 +174,7 @@ Each instance has its own shown flag, changed from its menu or its row in Settin
 |---|---|---|
 | 0 | Slint prototype: Characters page and the studio preview pane with one draggable layer, software renderer | Drag feel, window open time, memory and overlay alignment under zoom are recorded, and the framework is chosen. Done: Slint chosen; drag feel confirmed by hand |
 | 1 | Foundations: tokens, kit, templates, `docs/ui-guide.md`, the guard, and the typed boundary between core and UI | A sample page built only from the kit passes the guard. Done except the snapshot type: the licence, `ui/` kit, templates, gallery, `docs/ui-guide.md` and the guard test landed; `Set` and `Command` already exist in `src/registry`, and the read-only snapshot type is defined with the first page in step 4 |
-| 2 | Shared character renderer: the rig draws to a pixel buffer without Iced | The current desktop character and preview render from it with pixel checks unchanged |
+| 2 | Shared character renderer: the rig draws to a pixel buffer without Iced | The current desktop character and preview render from it with pixel checks unchanged. Done as a renderer with pixel parity tests; the live desktop and the studio switch to it in steps 3 and 5 (see [Step 2 results](#step-2-results)) |
 | 3 | Stage engine with one character | Same behaviour as today; no character traffic in the dispatcher; idle footprint within budget |
 | 4 | Settings in the new framework: registry, then Sound, Display & motion, Shortcuts, Ink & text, Spotlight & lens, Pointer, Music response; first-run window | The Iced settings views are deleted; every control saves at once |
 | 5 | Character studio window | Artwork, Reactions, Speech, Motion and Advanced work on one draft; Settings never shows the leave prompt |
@@ -223,6 +223,24 @@ Findings for the design system:
 - **Custom kit components were quick to write.** Button, navigation item, tab, page title and hint came to about 90 lines, and the pages are written only from them and the tokens.
 - **`SLINT_SCALE_FACTOR` was ignored by this backend.** Scale is changed by a window event in the test.
 - **Slint's licence.** The crate is `GPL-3.0-only OR` a royalty-free licence `OR` a commercial one. Our code can still be GPL-3.0-or-later, but a built binary that includes Slint is effectively GPL-3.0-only.
+
+## Step 2 results
+
+The rig now draws through a small `Surface` trait (`src/mascot/surface.rs`) instead of an Iced canvas frame. There are two backends: the Iced frame, which the desktop and preview still use, and `Raster`, a tiny-skia pixel buffer. `render_character` (`src/mascot/render.rs`) draws one frame into a `Raster`: the rig in its pose, a reaction picture, or a held picture hanging from the cursor. `Raster` places images the way Iced's canvas does, so a pose looks the same on either.
+
+Pixel checks compare the two paths (`src/mascot/render_tests.rs`). Both draw the same pose and the pixels are compared:
+
+| Case | Result |
+|---|---|
+| Bundled Yohta at rest, at 1.0, 0.8 and 0.5 scale, with turned parts and gaze | Identical |
+| Leaning and squashed, with bounce | Identical |
+| Blink face | Identical |
+| Reaction picture and held picture hanging at an angle | Identical |
+| Raised light wave (circles and bars) | Same except 0.2% of pixels on circle edges, up to 117 levels off, because the two rasterizers build circles differently |
+
+Render cost for Yohta into a buffer (release build, median): 0.37 ms at 155×215, 1.4 ms at 310×430, 2.2 ms at 620×860.
+
+Not done in this step, on purpose: the desktop window and the studio still draw through the Iced frame. The stage engine (step 3) is the first user of `Raster` for the desktop character, and the studio preview (step 5) the second. The rig's art is still held as Iced image handles; `Raster` reads their pixels. Replacing the handle type is only needed if Iced is removed from the character code, which is not planned.
 
 ## Working rules for implementers
 

@@ -3,8 +3,8 @@
 //! is an ordinary layered pack (see `yohta_pack`).
 use super::motion::{Bop, Expression, MotionSpec, PartMotion, PartType, Pose, Preset};
 use iced::advanced::image::Handle;
-use iced::widget::canvas::{self, Frame};
-use iced::{Point, Rectangle, Size, Vector};
+use super::surface::Surface;
+use iced::{Color, Point, Rectangle, Size, Vector};
 use image::{Rgba, RgbaImage};
 
 /// Yohta's rig canvas.
@@ -584,7 +584,7 @@ impl Rig {
 
     /// Draws one frame. Lean and squash are applied by the host around the
     /// feet; this draws the character itself in rig coordinates.
-    pub fn draw_pose(&self, frame: &mut Frame, pose: &Pose) {
+    pub fn draw_pose<S: Surface>(&self, frame: &mut S, pose: &Pose) {
         if let Some(music) = self.music_pose(pose) {
             let opacity = pose.music_mix.unwrap_or(1.0).clamp(0.0, 1.0);
             if opacity < 1.0 {
@@ -613,7 +613,7 @@ impl Rig {
         self.draw_rest_pose(frame, pose, 1.0);
     }
 
-    fn draw_rest_pose(&self, frame: &mut Frame, pose: &Pose, opacity: f32) {
+    fn draw_rest_pose<S: Surface>(&self, frame: &mut S, pose: &Pose, opacity: f32) {
         let angle = |i: usize| pose.angles.get(i).copied().unwrap_or_default();
         match &self.kind {
             // One piece: a gentle sway around the feet stands in for the
@@ -669,8 +669,7 @@ impl Rig {
         }
     }
 
-    fn draw_light_wave(&self, frame: &mut Frame, pose: &Pose) {
-        use iced::{Color, widget::canvas::Path};
+    fn draw_light_wave<S: Surface>(&self, frame: &mut S, pose: &Pose) {
         let h = self.visible_height();
         let reach = h.min(self.size.width);
         let lift = pose.light_lift;
@@ -685,16 +684,16 @@ impl Rig {
             let fur = Color::from_rgba8(236, 204, 175, lift);
             let glow = Color::from_rgba8(255, 190, 84, lift * 0.25);
             let core = Color::from_rgba8(255, 241, 184, lift);
-            let circle = |x, y, r| Path::circle(Point::new(x, y), r);
+            let circle = |f: &mut S, x, y, r, color| f.fill_circle(Point::new(x, y), r, color);
             f.fill_rectangle(Point::new(-0.022, -0.12), Size::new(0.044, 0.12), fur);
-            f.fill(&circle(0.0, 0.0, 0.022), fur);
-            f.fill(&circle(0.0, -0.23, 0.066), glow);
-            f.fill(&circle(0.0, -0.23, 0.042), glow);
+            circle(f, 0.0, 0.0, 0.022, fur);
+            circle(f, 0.0, -0.23, 0.066, glow);
+            circle(f, 0.0, -0.23, 0.042, glow);
             f.fill_rectangle(Point::new(-0.012, -0.23), Size::new(0.024, 0.11), core);
-            f.fill(&circle(0.0, -0.23, 0.012), core);
-            f.fill(&circle(0.0, -0.12, 0.036), fur);
+            circle(f, 0.0, -0.23, 0.012, core);
+            circle(f, 0.0, -0.12, 0.036, fur);
             for x in [-0.023_f32, 0.0, 0.023] {
-                f.fill(&circle(x, -0.148 + x.abs() * 0.3, 0.014), fur);
+                circle(f, x, -0.148 + x.abs() * 0.3, 0.014, fur);
             }
         });
     }
@@ -990,7 +989,13 @@ impl Rig {
     /// Draws a held pose hanging from `pivot` (the grabbed point, in the
     /// stage frame), turned `angle` around it. Whatever was grabbed, the
     /// character hangs from its scruff under the cursor.
-    pub fn draw_hanging(&self, frame: &mut Frame, picture: &Picture, pivot: Point, angle: f32) {
+    pub fn draw_hanging<S: Surface>(
+        &self,
+        frame: &mut S,
+        picture: &Picture,
+        pivot: Point,
+        angle: f32,
+    ) {
         let hold = picture.hold_in(self.size);
         frame.with_save(|f| {
             f.translate(Vector::new(pivot.x, pivot.y));
@@ -1012,11 +1017,11 @@ impl Rig {
     }
 
     /// Draws `picture` in place of the character, on the same stage.
-    pub fn draw_picture(&self, frame: &mut Frame, picture: &Picture) {
+    pub fn draw_picture<S: Surface>(&self, frame: &mut S, picture: &Picture) {
         self.draw_picture_alpha(frame, picture, 1.0);
     }
 
-    pub fn draw_picture_alpha(&self, frame: &mut Frame, picture: &Picture, opacity: f32) {
+    pub fn draw_picture_alpha<S: Surface>(&self, frame: &mut S, picture: &Picture, opacity: f32) {
         let [x, y, k] = picture.place;
         let size = picture.size_in(self.size);
         frame.draw_image(
@@ -1024,16 +1029,14 @@ impl Rig {
                 Point::new(x * self.size.width, y * self.size.height),
                 Size::new(size.width * k, size.height * k),
             ),
-            canvas::Image::new(picture.image.clone()).opacity(opacity),
+            &picture.image,
+            opacity,
         );
     }
 }
 
-fn place_alpha(frame: &mut Frame, piece: &Piece, opacity: f32) {
-    frame.draw_image(
-        Rectangle::new(piece.at, piece.size),
-        canvas::Image::new(piece.image.clone()).opacity(opacity),
-    );
+fn place_alpha<S: Surface>(frame: &mut S, piece: &Piece, opacity: f32) {
+    frame.draw_image(Rectangle::new(piece.at, piece.size), &piece.image, opacity);
 }
 
 fn hand_offset(pose: &Pose, size: Size) -> Vector {
@@ -1089,7 +1092,7 @@ struct Layered<'a> {
 }
 
 impl Layered<'_> {
-    fn part(&self, frame: &mut Frame, index: usize) {
+    fn part<S: Surface>(&self, frame: &mut S, index: usize) {
         let p = &self.parts[index];
         let opacity = music_opacity(p.kind, self.pose) * self.opacity;
         if opacity <= 0.001 {
@@ -1104,7 +1107,7 @@ impl Layered<'_> {
             f.translate(Vector::new(p.pivot.x, p.pivot.y));
             f.rotate(angle);
             f.translate(Vector::new(-p.pivot.x, -p.pivot.y));
-            let children = |f: &mut Frame, behind: bool| {
+            let children = |f: &mut S, behind: bool| {
                 for (i, c) in self.parts.iter().enumerate() {
                     if c.parent == Some(index) && c.behind == behind {
                         self.part(f, i);
@@ -1121,10 +1124,7 @@ impl Layered<'_> {
                 Expression::Idle => None,
             };
             let piece = face.unwrap_or(&p.piece);
-            f.draw_image(
-                Rectangle::new(piece.at, piece.size),
-                canvas::Image::new(piece.image.clone()).opacity(opacity),
-            );
+            f.draw_image(Rectangle::new(piece.at, piece.size), &piece.image, opacity);
             // Tracking eyes sit on the plain head and its blink face only;
             // a pressed or dragging face has its eyes painted in.
             let painted = face.is_some() && self.pose.expression != Expression::Blink;
@@ -1136,8 +1136,8 @@ impl Layered<'_> {
                         (None, Expression::Blink) if face.is_some() => {}
                         _ => f.draw_image(
                             Rectangle::new(e.at, e.size),
-                            canvas::Image::new(e.frames[gaze_index(self.pose.gaze)].clone())
-                                .opacity(self.opacity),
+                            &e.frames[gaze_index(self.pose.gaze)],
+                            self.opacity,
                         ),
                     }
                 }
@@ -1147,8 +1147,8 @@ impl Layered<'_> {
     }
 }
 
-fn sprite(
-    frame: &mut Frame,
+fn sprite<S: Surface>(
+    frame: &mut S,
     image: &Handle,
     at: Point,
     size: Size,
@@ -1160,10 +1160,7 @@ fn sprite(
         f.translate(Vector::new(pivot.x, pivot.y));
         f.rotate(angle);
         f.translate(Vector::new(-pivot.x, -pivot.y));
-        f.draw_image(
-            Rectangle::new(at, size),
-            canvas::Image::new(image.clone()).opacity(opacity),
-        );
+        f.draw_image(Rectangle::new(at, size), image, opacity);
     });
 }
 

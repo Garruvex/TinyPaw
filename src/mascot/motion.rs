@@ -972,7 +972,12 @@ const COMPRESS_TIME: f32 = 0.28;
 /// Places the character for `pose`: the music bounce lifts it, and lean and
 /// squash turn and scale it around its feet so they stay on the ground.
 /// Shared by the desktop and the Settings preview.
-pub fn place(frame: &mut iced::widget::canvas::Frame, pose: &Pose, feet: iced::Point, height: f32) {
+pub fn place<S: super::surface::Surface>(
+    frame: &mut S,
+    pose: &Pose,
+    feet: iced::Point,
+    height: f32,
+) {
     if let Some((at, angle)) = pose.carry
         && angle.abs() > 0.0005
     {

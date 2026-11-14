@@ -14,6 +14,9 @@ interprocess = "2.4.8"
 rodio = { version = "0.23", default-features = false, features = ["playback", "wav"] }
 serde_json = "1.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
+# The character renderer draws to a pixel buffer with the same rasterizer the
+# overlays use (see src/mascot/surface.rs).
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
 
 [features]
 # Opt-in GPU renderer for comparisons. tiny-skia measured faster to activate
@@ -21,7 +24,6 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 gpu = ["iced/wgpu"]
 
 [dev-dependencies]
-tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
 iced_tiny_skia = { version = "0.14.1", default-features = false }
 
 [profile.release]
