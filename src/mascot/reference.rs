@@ -617,8 +617,8 @@ impl Request {
             return Err("character.json must include the selected head bop in music.bop.".into());
         }
         for role in &self.extras {
-            if let Some(event) = role.reaction() {
-                if manifest
+            if let Some(event) = role.reaction()
+                && manifest
                     .reactions
                     .entry(event)
                     .and_then(|e| e.art.as_ref())
@@ -631,7 +631,6 @@ impl Request {
                         event.key()
                     ));
                 }
-            }
         }
         manifest.validate_files(folder)
     }
@@ -718,18 +717,15 @@ impl Request {
     /// A prompt for one file, for tools that return one image at a time.
     pub fn prompt(&self, role: Role) -> String {
         format!(
-            "Create one image for a desktop character, named {}. Attach the approved body.png and head.png (when present) as alignment references alongside the character reference. Retain the full shared canvas. Never trim or centre individual layers.\n\n{}\n\nIt shows {}.",
+            "Create one image for a desktop character, named {}. Attach the approved body.png and head.png (when present) as alignment references alongside the character reference. Retain the full shared canvas. Never trim or centre individual layers.\n\n{}\n\nIt shows {}{}.",
             role.file(),
             self.rules(),
-            format!(
-                "{}{}",
-                self.describe(role),
-                if self.dance {
-                    " Music gesture layers share full-canvas alignment. Holding arm, grip fingers, both items and both halos all use the same viewer-right shoulder pivot and remain independent root layers. Attach the approved holding_arm.png as a grip alignment reference. Keep padding for the raised arm and both swing extremes."
-                } else {
-                    ""
-                }
-            )
+            self.describe(role),
+            if self.dance {
+                " Music gesture layers share full-canvas alignment. Holding arm, grip fingers, both items and both halos all use the same viewer-right shoulder pivot and remain independent root layers. Attach the approved holding_arm.png as a grip alignment reference. Keep padding for the raised arm and both swing extremes."
+            } else {
+                ""
+            }
         )
     }
 

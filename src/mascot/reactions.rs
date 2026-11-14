@@ -928,6 +928,17 @@ impl Voice {
     }
 }
 
+/// Local sleep activation requires an explicit user override.
+pub fn companionship(pack: &Config, user: &Config) -> super::companionship::Settings {
+    if let Some(s) = &user.companionship {
+        return s.clone();
+    }
+    let mut s = pack.companionship.clone().unwrap_or_default();
+    s.sleep = false;
+    s.random_wake = false;
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1214,15 +1225,4 @@ mod tests {
             assert_eq!(Event::parse(e.key()), Some(e));
         }
     }
-}
-
-/// Local sleep activation requires an explicit user override.
-pub fn companionship(pack: &Config, user: &Config) -> super::companionship::Settings {
-    if let Some(s) = &user.companionship {
-        return s.clone();
-    }
-    let mut s = pack.companionship.clone().unwrap_or_default();
-    s.sleep = false;
-    s.random_wake = false;
-    s
 }

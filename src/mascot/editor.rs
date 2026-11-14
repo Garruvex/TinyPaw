@@ -698,11 +698,10 @@ impl Editor {
     ) -> Result<(), String> {
         let held = self.held.take();
         let result = self.set_image(Target::Held, path);
-        if result.is_ok() {
-            if let Some(layer) = self.held.take() {
+        if result.is_ok()
+            && let Some(layer) = self.held.take() {
                 self.reference_art.push((event, layer));
             }
-        }
         self.held = held;
         result
     }

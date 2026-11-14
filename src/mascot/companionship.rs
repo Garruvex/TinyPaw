@@ -197,8 +197,8 @@ impl Controller {
         }
         let sway = (now * 5.0 + self.affection.phase).sin();
         let tilt = amount * (0.08 * sway + 0.09 * self.affection.direction);
-        if !whole_picture {
-            if let Some(index) = rig
+        if !whole_picture
+            && let Some(index) = rig
                 .motion_parts()
                 .iter()
                 .position(|p| p.kind == super::motion::PartType::Head)
@@ -209,7 +209,6 @@ impl Controller {
                 pose.head_drop += amount * (0.008 + 0.006 * (now * 7.0).sin());
                 return;
             }
-        }
         pose.lean += tilt * 0.35;
         pose.squash += amount * (0.08 + 0.06 * (now * 6.0).sin());
     }
@@ -446,11 +445,10 @@ impl Controller {
                     self.touch_since = Some(i.now);
                 }
                 self.stirring = self.touch_since.is_some();
-                if let Some(at) = self.touch_since {
-                    if stroke || i.now - at >= self.touch_delay {
+                if let Some(at) = self.touch_since
+                    && (stroke || i.now - at >= self.touch_delay) {
                         return self.wake(i.now);
                     }
-                }
             } else {
                 let left = *self.touch_left.get_or_insert(i.now);
                 if i.now - left > 0.3 {
@@ -815,9 +813,9 @@ fn zzz_images() -> &'static Vec<iced::advanced::image::Handle> {
                 let mut pixels = vec![0u8; 32 * 32 * 4];
                 for y in 0..32usize {
                     for x in 0..32usize {
-                        let ink = (y >= 2 && y <= 5 && x >= 2 && x <= 29)
-                            || (y >= 26 && y <= 29 && x >= 2 && x <= 29)
-                            || (y >= 4 && y <= 27 && (x as i32 + y as i32 - 31).abs() <= 2);
+                        let ink = ((2..=5).contains(&y) && (2..=29).contains(&x))
+                            || ((26..=29).contains(&y) && (2..=29).contains(&x))
+                            || ((4..=27).contains(&y) && (x as i32 + y as i32 - 31).abs() <= 2);
                         if ink {
                             let i = (y * 32 + x) * 4;
                             pixels[i..i + 4].copy_from_slice(&[
@@ -898,7 +896,7 @@ impl Affection {
                     origin: i
                         .cursor
                         .unwrap_or(Point::new(i.height * 0.5, i.height * 0.25)),
-                    side: if self.serial % 2 == 0 { -1.0 } else { 1.0 },
+                    side: if self.serial.is_multiple_of(2) { -1.0 } else { 1.0 },
                 });
             }
             self.next_heart = i.now + 0.45;

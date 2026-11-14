@@ -218,13 +218,11 @@ impl MotionPreview {
     }
     pub fn companionship(&self) -> super::companionship::Settings {
         let mut settings = super::reactions::companionship(&self.reactions_pack, &self.reactions);
-        if let Ok(live) = self.live.try_borrow() {
-            if live.companion.sleep_motion(live.now) {
-                if let Some(pose) = self.sleep_poses().get(live.companion.sleep_pose) {
+        if let Ok(live) = self.live.try_borrow()
+            && live.companion.sleep_motion(live.now)
+                && let Some(pose) = self.sleep_poses().get(live.companion.sleep_pose) {
                     settings.mouth = pose.mouth;
                 }
-            }
-        }
         settings
     }
     pub fn companion_test(&self, state: super::companionship::State) {
@@ -462,15 +460,14 @@ impl MotionPreview {
                 if apply && self.alignment.as_ref().is_some_and(|a| a.error.is_some()) {
                     return;
                 }
-                if let Some(a) = self.alignment.take() {
-                    if apply {
+                if let Some(a) = self.alignment.take()
+                    && apply {
                         if a.event == Event::Pickup {
                             self.set_held(Some(a.art));
                         } else {
                             self.set_art(a.event, Some(a.art));
                         }
                     }
-                }
                 self.placement_preview = None;
                 self.placing_grip = false;
             }
@@ -536,20 +533,18 @@ impl MotionPreview {
     }
 
     pub fn held(&self) -> Option<super::reactions::Art> {
-        if let Some(a) = &self.alignment {
-            if a.event == Event::Pickup {
+        if let Some(a) = &self.alignment
+            && a.event == Event::Pickup {
                 return Some(a.art.clone());
             }
-        }
         super::reactions::held(&self.reactions_pack, &self.reactions)
     }
 
     pub fn art(&self, e: Event) -> Option<super::reactions::Art> {
-        if let Some(a) = &self.alignment {
-            if a.event == e {
+        if let Some(a) = &self.alignment
+            && a.event == e {
                 return Some(a.art.clone());
             }
-        }
         super::reactions::art(&self.reactions_pack, &self.reactions, e)
     }
 
@@ -837,11 +832,10 @@ impl MotionPreview {
         live.companion
             .set_sleep_pose_count(self.sleep_poses().len());
         let touching = live.pointer.is_some_and(|p| {
-            if live.companion.sleep_picture(live.now) {
-                if let Some(picture) = self.picture_for(self.sleep_art(live.companion.sleep_pose)) {
+            if live.companion.sleep_picture(live.now)
+                && let Some(picture) = self.picture_for(self.sleep_art(live.companion.sleep_pose)) {
                     return picture.hit(self.rig.size(), p);
                 }
-            }
             self.rig.hit(p, &live.pose).is_some()
         });
         if let Some(event) = live.companion.step(

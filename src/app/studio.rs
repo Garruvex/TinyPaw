@@ -638,18 +638,16 @@ impl App {
                         ..Default::default()
                     };
                     for e in events {
-                        if let Ok(play) = self.voice.accept(e, &sounds, quiet, now) {
-                            if let Some(seconds) = self.play_reaction(&play) {
+                        if let Ok(play) = self.voice.accept(e, &sounds, quiet, now)
+                            && let Some(seconds) = self.play_reaction(&play) {
                                 self.voice.started(now, seconds);
                                 reacted = true;
                             }
-                        }
                     }
-                    if !reacted {
-                        if let Some(sound) = line_sound {
+                    if !reacted
+                        && let Some(sound) = line_sound {
                             self.play_line_sound(&sound);
                         }
-                    }
                 }
                 let o = self.motion_options();
                 let beat = self.beat_phase();

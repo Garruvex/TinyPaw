@@ -563,11 +563,10 @@ impl Rig {
         if let Some(music) = self.music_pose(pose) {
             return hit.is_some() && p.y < music.pivot.y;
         }
-        if let Kind::Layered { parts, .. } = &self.kind {
-            if let Some(head) = parts.iter().position(|p| p.kind == PartType::Head) {
+        if let Kind::Layered { parts, .. } = &self.kind
+            && let Some(head) = parts.iter().position(|p| p.kind == PartType::Head) {
                 return matches!(hit,Some(Layer::Part(i)) if i==head || parts[i].parent==Some(head));
             }
-        }
         hit.is_some()
     }
 
@@ -897,12 +896,11 @@ impl Picture {
     }
 
     pub fn size_in(&self, stage: Size) -> Size {
-        if self.preserve_aspect {
-            if let Some((w, h)) = image_size(&self.image) {
+        if self.preserve_aspect
+            && let Some((w, h)) = image_size(&self.image) {
                 let fit = (stage.width / w).min(stage.height / h);
                 return Size::new(w * fit, h * fit);
             }
-        }
         stage
     }
 
@@ -946,11 +944,10 @@ impl Picture {
 
     /// Resolve an authored grip against the untrimmed source image.
     pub fn with_grip(mut self, grip: Option<[f32; 2]>) -> Self {
-        if let Some([x, y]) = grip {
-            if let Some((width, height)) = image_size(&self.image) {
+        if let Some([x, y]) = grip
+            && let Some((width, height)) = image_size(&self.image) {
                 self.hold = Point::new(x * width, y * height);
             }
-        }
         self
     }
 
