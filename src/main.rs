@@ -16,6 +16,7 @@ mod platform;
 mod preferences;
 mod registry;
 mod session;
+mod stage;
 mod view;
 
 use std::process::ExitCode;
@@ -37,6 +38,11 @@ fn usage(registry: &Registry) -> String {
 }
 
 fn main() -> ExitCode {
+    #[cfg(windows)]
+    if std::env::args().nth(1).as_deref() == Some("--stage-probe") {
+        stage::probe();
+        return ExitCode::SUCCESS;
+    }
     if std::env::args().nth(1).as_deref() == Some("--mascot-preview") {
         return match mascot::run() {
             Ok(()) => ExitCode::SUCCESS,

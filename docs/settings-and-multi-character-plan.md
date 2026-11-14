@@ -175,7 +175,7 @@ Each instance has its own shown flag, changed from its menu or its row in Settin
 | 0 | Slint prototype: Characters page and the studio preview pane with one draggable layer, software renderer | Drag feel, window open time, memory and overlay alignment under zoom are recorded, and the framework is chosen. Done: Slint chosen; drag feel confirmed by hand |
 | 1 | Foundations: tokens, kit, templates, `docs/ui-guide.md`, the guard, and the typed boundary between core and UI | A sample page built only from the kit passes the guard. Done except the snapshot type: the licence, `ui/` kit, templates, gallery, `docs/ui-guide.md` and the guard test landed; `Set` and `Command` already exist in `src/registry`, and the read-only snapshot type is defined with the first page in step 4 |
 | 2 | Shared character renderer: the rig draws to a pixel buffer without Iced | The current desktop character and preview render from it with pixel checks unchanged. Done as a renderer with pixel parity tests; the live desktop and the studio switch to it in steps 3 and 5 (see [Step 2 results](#step-2-results)) |
-| 3 | Stage engine with one character | Same behaviour as today; no character traffic in the dispatcher; idle footprint within budget |
+| 3 | Stage engine with one character | Same behaviour as today; no character traffic in the dispatcher; idle footprint within budget. In progress: slice 3a landed (see [Step 3 progress](#step-3-progress)) |
 | 4 | Settings in the new framework: registry, then Sound, Display & motion, Shortcuts, Ink & text, Spotlight & lens, Pointer, Music response; first-run window | The Iced settings views are deleted; every control saves at once |
 | 5 | Character studio window | Artwork, Reactions, Speech, Motion and Advanced work on one draft; Settings never shows the leave prompt |
 | 6 | Multi-character: scopes, instance store and migration, Characters page, several instances, coordinator tiers one to three | An existing installation opens unchanged; two instances of one character move and size independently; 1, 10 and 20 instances are measured |
@@ -241,6 +241,26 @@ Pixel checks compare the two paths (`src/mascot/render_tests.rs`). Both draw the
 Render cost for Yohta into a buffer (release build, median): 0.37 ms at 155×215, 1.4 ms at 310×430, 2.2 ms at 620×860.
 
 Not done in this step, on purpose: the desktop window and the studio still draw through the Iced frame. The stage engine (step 3) is the first user of `Raster` for the desktop character, and the studio preview (step 5) the second. The rig's art is still held as Iced image handles; `Raster` reads their pixels. Replacing the handle type is only needed if Iced is removed from the character code, which is not planned.
+
+## Step 3 progress
+
+The Iced desktop character is a 2,400-line state machine (`mascot/desktop.rs`) tied to an Iced window, canvas, menu and speech widgets. Step 3 moves it in slices so the app keeps working between them. The Iced character stays in use until slice 3d.
+
+| Slice | Scope | State |
+|---|---|---|
+| 3a | `src/stage`: a stage thread with a native layered window, drawn from the shared renderer, click-through outside the artwork, carried with the mouse, intents in and events out | Done; reachable with `tinypaw --stage-probe [animate]` |
+| 3b | Move the motion and gesture state machine (`Desktop` poll, press, flight, music, sleep, gaze) onto the stage thread, free of Iced tasks and window ids | Not started |
+| 3c | Speech bubble and right-click menu drawn by the stage; text drawn with cosmic-text, which Iced already depends on | Not started |
+| 3d | Cut the dispatcher over: settings changes become intents, gestures become events, the Iced desktop view and its 15–60 Hz polling are deleted | Not started |
+
+Slice 3a results (release build, Windows 11, Yohta at 300 px tall, a 237×329 window):
+
+- **Idle cost:** 0 ms of CPU over 5 s, 19.9 MiB working set and 10 MiB private. The thread sleeps in a message wait and draws only on change.
+- **Animating at 60 fps:** about 7.5% of one core and 32 MiB, redrawing and presenting the whole window every frame. Damage-limited presenting is a later optimisation, if the budget needs it.
+- **Hit testing:** points on the artwork go to the window and points on transparent pixels pass through to the app below (alpha under 32 is click-through, as today). Checked by sending hit tests to the window.
+- **Click and carry:** a press and release without movement raises `Clicked`; moving past 4 px carries the window with the cursor and raises `Dropped` with its position. Checked with posted mouse messages while the real cursor was also being moved, so the carry's feel is not yet judged.
+- **Never activates:** the window is `WS_EX_NOACTIVATE`, so the app the user is in keeps keyboard focus.
+- **Pixel path:** premultiplied RGBA from `Raster` is copied into a BGRA DIB and presented with `UpdateLayeredWindow`; the first picture shown on the desktop looks the same as the preview.
 
 ## Working rules for implementers
 
