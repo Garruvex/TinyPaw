@@ -306,11 +306,30 @@ pub(super) fn eyes_section<'a>(
                     .push(space().width(Length::Fill))
                     .push(small("Remove".into(), Message::Ui(UiMsg::ArtRemoveEye(i))));
                 let mut block = column![images.wrap()].spacing(6);
-                if let Some(pupil) = &eye.pupil {
+                if let Some(white) = &eye.white {
                     block = block.push(
                         row![
-                            text(format!("Iris / pupil size {:.0}%", pupil.placement.scale * 100.0)).size(12),
-                            slider(0.01..=8.0, pupil.placement.scale, move |scale| Message::Ui(UiMsg::ArtPupilSize(i, scale)))
+                            text(format!("Whole eye size {:.0}%", white.placement.scale * 100.0)).size(12),
+                            slider(0.01..=8.0, white.placement.scale, move |scale| Message::Ui(UiMsg::ArtEyeSize(i, scale)))
+                                .step(0.01_f32)
+                                .style(theme::range),
+                        ]
+                        .spacing(10)
+                        .align_y(Alignment::Center),
+                    );
+                }
+                for (label, slot, layer) in [
+                    ("Iris / pupil", EyeSlot::Pupil, &eye.pupil),
+                    ("Background", EyeSlot::White, &eye.white),
+                    ("Pupil area", EyeSlot::Mask, &eye.mask),
+                    ("Blink", EyeSlot::Blink, &eye.blink),
+                ] {
+                    let Some(layer) = layer else { continue };
+                    let scale = layer.placement.scale;
+                    block = block.push(
+                        row![
+                            text(format!("{label} size {:.0}%", scale * 100.0)).size(12),
+                            slider(0.01..=8.0, scale, move |scale| Message::Ui(UiMsg::ArtEyeLayerSize(i, slot, scale)))
                                 .step(0.01_f32)
                                 .style(theme::range),
                         ]
@@ -463,12 +482,25 @@ pub(super) fn placement_controls<'a>(e: &'a crate::mascot::editor::Editor) -> El
     if e.mode != crate::mascot::editor::Mode::Arrange || e.selected_layer().is_none() {
         return hint("Choose a layer and Arrange artwork to move, scale or rotate it.");
     }
+    let p = e.selected_layer().unwrap().placement;
+    let limits = [2.0 * e.canvas.0 as f32, 2.0 * e.canvas.1 as f32];
+    let sliders = [
+        (-limits[0]..=limits[0], p.x),
+        (-limits[1]..=limits[1], p.y),
+        (1.0..=800.0, p.scale * 100.0),
+        (-180.0..=180.0, p.angle),
+    ];
     let fields = row(["X (px)", "Y (px)", "Scale (%)", "Angle (°)"]
         .into_iter()
         .enumerate()
         .map(|(i, label)| {
             column![
                 hint(label),
+                iced::widget::slider(sliders[i].0.clone(), sliders[i].1, move |value| {
+                    Message::Ui(UiMsg::ArtField(i, format!("{value:.0}")))
+                })
+                .step(1.0_f32)
+                .style(theme::range),
                 iced::widget::text_input("0", &e.fields[i])
                     .on_input(move |s| Message::Ui(UiMsg::ArtField(i, s)))
                     .padding(6)

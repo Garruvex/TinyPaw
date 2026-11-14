@@ -191,16 +191,25 @@ impl BeatClock {
     /// (0 on the beat) and tempo, or `None` for the steady pace. Returns the
     /// phase to animate with.
     pub fn step(&mut self, dt: f32, target: Option<(f32, f32)>) -> f32 {
-        let dt = dt.clamp(0.0, 0.1);
+        let dt = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
         let goal = target.map_or(STEADY_BPM, |(_, bpm)| bpm.clamp(40.0, 220.0));
-        self.bpm += (goal - self.bpm) * (1.0 - (-dt * TEMPO_EASE).exp());
-        self.phase += dt * self.bpm / 60.0;
-        if let Some((p, _)) = target {
-            // The shortest way round to the followed phase.
-            let error = (p - self.phase + 0.5).rem_euclid(1.0) - 0.5;
-            self.phase += error * (1.0 - (-dt * PHASE_PULL).exp());
-        }
-        self.phase = self.phase.rem_euclid(1.0);
+        // The target is sampled at the end of this frame. Steer the speed
+        // using the shortest phase error, keeping the clock moving forward.
+        let predicted = self.phase + dt * self.bpm / 60.0;
+        let correction = target.map_or(0.0, |(p, _)| {
+            let error = (p - predicted + 0.5).rem_euclid(1.0) - 0.5;
+            (error * PHASE_PULL * 60.0).clamp(-goal * 0.5, goal * 0.5)
+        });
+        let previous = self.bpm;
+        let desired = goal + correction;
+        let ease = 1.0 - (-dt * TEMPO_EASE).exp();
+        self.bpm += (desired - previous) * ease;
+        // Integrate the eased speed over the entire elapsed interval. A slow
+        // UI frame must not discard time from the audio clock.
+        let beats = (desired as f64 * dt as f64
+            + (previous - desired) as f64 * ease as f64 / TEMPO_EASE as f64)
+            / 60.0;
+        self.phase = (self.phase as f64 + beats).rem_euclid(1.0) as f32;
         self.phase
     }
 
@@ -244,6 +253,41 @@ mod tests {
             (c.bpm() - STEADY_BPM).abs() < 1.0,
             "back to the steady pace"
         );
+    }
+
+    #[test]
+    fn larger_phase_gaps_accelerate_without_skipping_a_pose() {
+        let dt = 1.0 / 60.0;
+        let steady_step = dt * STEADY_BPM / 60.0;
+        let advance = |gap| {
+            let mut clock = BeatClock::default();
+            clock.step(dt, Some((steady_step + gap, STEADY_BPM)))
+        };
+        assert!(advance(-0.4) > 0.0 && advance(-0.4) < steady_step);
+        assert!(advance(0.4) > advance(0.05) && advance(0.05) > steady_step);
+        assert!(advance(0.4) - steady_step < 0.001);
+    }
+
+    #[test]
+    fn delayed_frames_keep_the_audio_phase() {
+        for bpm in [75.0_f32, 120.0, 170.0] {
+            let mut clock = BeatClock {
+                bpm,
+                ..BeatClock::default()
+            };
+            let mut elapsed = 0.0_f64;
+            for frame in 0..240 {
+                let dt = if frame % 30 == 29 { 0.28 } else { 1.0 / 60.0 };
+                elapsed += dt as f64;
+                let target = (elapsed * bpm as f64 / 60.0).rem_euclid(1.0) as f32;
+                let phase = clock.step(dt, Some((target, bpm)));
+                let error = (phase - target + 0.5).rem_euclid(1.0) - 0.5;
+                assert!(
+                    error.abs() < 0.002,
+                    "{bpm} BPM, frame {frame}, phase error {error}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -57,9 +57,11 @@ struct Live {
 /// Idle, reduced motion, music and the frame pace, as of the last refresh.
 #[derive(Clone, Copy, Default)]
 pub struct Control {
+    pub dance: super::motion::Dance,
     pub idle: bool,
     pub reduced: bool,
     pub music: f32,
+    pub energy: Option<f32>,
     pub beat: Option<f32>,
     /// How fast the beat phase advances (cycles per second) and when it was
     /// sampled, so frames between samples carry it forward smoothly.
@@ -106,6 +108,7 @@ pub struct MotionPreview {
     pub placing_bubble: bool,
     /// A still pose pinned on the shared stage while positioning its artwork.
     pub placement_preview: Option<Event>,
+    pub adding_sleep_pose: bool,
     pub placing_mouth: bool,
 }
 
@@ -136,6 +139,7 @@ impl MotionPreview {
             lines,
             lines_defaults: pack_lines,
             placing_bubble: false,
+            adding_sleep_pose: false,
             placing_mouth: false,
             placing_grip: false,
             alignment: None,
@@ -165,18 +169,77 @@ impl MotionPreview {
         }
     }
 
+    pub fn sleep_poses(&self) -> Vec<super::reactions::SleepPose> {
+        super::reactions::sleep_poses(&self.reactions_pack, &self.reactions)
+    }
+    fn sleep_art(&self, index: usize) -> Option<super::reactions::Art> {
+        self.sleep_poses().get(index).map(|p| p.art.clone())
+    }
+    pub fn edit_sleep_pose(&mut self, index: usize, remove: bool) {
+        let mut poses = self.sleep_poses();
+        if index >= poses.len() {
+            return;
+        }
+        if remove {
+            poses.remove(index);
+        } else {
+            poses.swap(0, index);
+        }
+        let base = if poses.is_empty() {
+            None
+        } else {
+            Some(poses.remove(0))
+        };
+        if let Some(base) = base {
+            let mut settings =
+                super::reactions::companionship(&self.reactions_pack, &self.reactions);
+            settings.mouth = base.mouth;
+            self.reactions.companionship = Some(settings);
+            self.set_art(Event::Sleep, Some(base.art));
+        } else {
+            self.set_art(Event::Sleep, None);
+        }
+        self.entry_mut(Event::Sleep).sleep_poses = poses;
+        self.live.get_mut().companion.reset();
+        self.placement_preview = (!remove).then_some(Event::Sleep);
+    }
+    pub fn add_sleep_pose(&mut self, art: super::reactions::Art) {
+        let mut poses = self.sleep_poses();
+        if poses.len() >= 8 {
+            return;
+        }
+        let mouth = self.companionship().mouth;
+        if poses.is_empty() {
+            self.set_art(Event::Sleep, Some(art));
+        } else {
+            poses.push(super::reactions::SleepPose { art, mouth });
+            self.entry_mut(Event::Sleep).sleep_poses = poses.into_iter().skip(1).collect();
+        }
+    }
     pub fn companionship(&self) -> super::companionship::Settings {
-        super::reactions::companionship(&self.reactions_pack, &self.reactions)
+        let mut settings = super::reactions::companionship(&self.reactions_pack, &self.reactions);
+        if let Ok(live) = self.live.try_borrow() {
+            if live.companion.sleep_motion(live.now) {
+                if let Some(pose) = self.sleep_poses().get(live.companion.sleep_pose) {
+                    settings.mouth = pose.mouth;
+                }
+            }
+        }
+        settings
     }
     pub fn companion_test(&self, state: super::companionship::State) {
         let settings = self.companionship();
         let mut live = self.live.borrow_mut();
         let now = live.now;
+        live.companion
+            .set_sleep_pose_count(self.sleep_poses().len());
         match state {
             super::companionship::State::Asleep => live.companion.sleep_now(now, &settings),
             super::companionship::State::Petting => live.companion.pet_now(now),
             _ => {
                 live.companion.wake(now);
+                live.test = None;
+                live.showing = Some((now + 0.7, Event::Wake));
             }
         }
     }
@@ -396,7 +459,9 @@ impl MotionPreview {
                 }
             }
             Action::Finish(apply) => {
-                if apply && self.alignment.as_ref().is_some_and(|a| a.error.is_some()) { return; }
+                if apply && self.alignment.as_ref().is_some_and(|a| a.error.is_some()) {
+                    return;
+                }
                 if let Some(a) = self.alignment.take() {
                     if apply {
                         if a.event == Event::Pickup {
@@ -443,8 +508,14 @@ impl MotionPreview {
     }
 
     pub fn placement_picture(&self) -> Option<super::rig::Picture> {
-        if self.live.borrow().test.is_some() { return None; }
-        let event = self.alignment.as_ref().map(|a| a.event).or(self.placement_preview)?;
+        if self.live.borrow().test.is_some() {
+            return None;
+        }
+        let event = self
+            .alignment
+            .as_ref()
+            .map(|a| a.event)
+            .or(self.placement_preview)?;
         self.picture_for(if event == Event::Pickup {
             self.held()
         } else {
@@ -557,7 +628,11 @@ impl MotionPreview {
         }
         match live.companion.state {
             super::companionship::State::Asleep | super::companionship::State::Waking => {
-                return self.picture_for(self.art(Event::Sleep));
+                return if live.companion.sleep_picture(live.now) {
+                    self.picture_for(self.sleep_art(live.companion.sleep_pose))
+                } else {
+                    None
+                };
             }
             super::companionship::State::Petting => {
                 return self.picture_for(self.art(Event::Headpat));
@@ -565,6 +640,7 @@ impl MotionPreview {
             _ => {}
         }
         match live.showing {
+            Some((_, Event::Wake)) if live.companion.sleep_pose != 0 => None,
             Some((until, e)) if live.now < until => self.picture_for(self.art(e)),
             _ => None,
         }
@@ -758,12 +834,11 @@ impl MotionPreview {
         let mut settings = self.companionship();
         settings.sleep = true;
         settings.petting = true;
+        live.companion
+            .set_sleep_pose_count(self.sleep_poses().len());
         let touching = live.pointer.is_some_and(|p| {
-            if matches!(
-                live.companion.state,
-                super::companionship::State::Asleep | super::companionship::State::Waking
-            ) {
-                if let Some(picture) = self.picture_for(self.art(Event::Sleep)) {
+            if live.companion.sleep_picture(live.now) {
+                if let Some(picture) = self.picture_for(self.sleep_art(live.companion.sleep_pose)) {
                     return picture.hit(self.rig.size(), p);
                 }
             }
@@ -819,7 +894,15 @@ impl MotionPreview {
             music,
             beat,
             bop: self.rig.bop(),
+            music_items: self.rig.music_items(),
+            energy: self.control.get().energy,
+            dance: self.control.get().dance,
             ..Inputs::default()
+        };
+        let music_duration = if self.rig.bop() == Bop::Random {
+            self.control.get().dance.every as f32 + 2.0
+        } else {
+            MUSIC
         };
         if let Some((test, started)) = live.test {
             let t = live.now - started;
@@ -843,10 +926,13 @@ impl MotionPreview {
                     inputs.dragging = true;
                     inputs.velocity = Vector::new(sign * speed, 0.0);
                 }
-                Test::Music if t < MUSIC => {
+                Test::Music if t < music_duration => {
                     // Rises and falls like a short phrase.
-                    inputs.music = inputs.music.max((t / MUSIC * std::f32::consts::PI).sin());
+                    inputs.music = inputs
+                        .music
+                        .max((t / music_duration * std::f32::consts::PI).sin());
                     inputs.beat = Some((t * 2.0).fract());
+                    inputs.energy = Some(inputs.music.clamp(0.0, 1.0));
                 }
                 Test::DragLeft | Test::DragRight => {
                     // Dropped: the drop's artwork shows briefly.
@@ -858,10 +944,7 @@ impl MotionPreview {
                 Test::Speak | Test::Music | Test::Say(_) => live.test = None,
             }
         }
-        let sleeping = matches!(
-            live.companion.state,
-            super::companionship::State::Asleep | super::companionship::State::Waking
-        );
+        let sleeping = live.companion.sleep_motion(live.now);
         if sleeping {
             inputs.idle = false;
             inputs.music = 0.0;
@@ -882,6 +965,13 @@ impl MotionPreview {
             live.pose.expression = super::motion::Expression::Blink;
             live.pose.gaze = Vector::ZERO;
         }
+        let whole_picture = live.companion.sleep_picture(live.now)
+            && self.art(Event::Sleep).is_some()
+            || live
+                .showing
+                .is_some_and(|(until, e)| live.now < until && self.art(e).is_some());
+        live.companion
+            .apply_sleep(&self.rig, &mut live.pose, live.now, reduced, whole_picture);
         // A test drag carries like the desktop: held near the top of the
         // head, leaning around that point rather than around the feet.
         if inputs.dragging {
@@ -916,6 +1006,57 @@ mod tests {
         )
     }
 
+    #[test]
+    fn wake_test_shows_the_wake_art_from_sleep_and_while_awake() {
+        let mut p = yohta();
+        let file = super::super::lines::SoundRef::User("wake.png".into());
+        p.add_picture(
+            file.clone(),
+            &image::RgbaImage::from_pixel(1, 1, image::Rgba([240, 100, 10, 255])),
+        );
+        p.set_art(Event::Wake, Some(super::super::reactions::Art::new(file)));
+        p.companion_test(super::super::companionship::State::Asleep);
+        p.companion_test(super::super::companionship::State::Awake);
+        assert!(p.picture().is_some());
+        for _ in 0..20 {
+            p.tick(0.05, false, false, 0.0, None);
+        }
+        assert!(p.picture().is_none());
+        p.companion_test(super::super::companionship::State::Awake);
+        assert!(p.picture().is_some());
+        p.test(Test::DragRight);
+        p.companion_test(super::super::companionship::State::Awake);
+        assert!(p.picture().is_some(), "wake preview replaces the drag test");
+    }
+
+    #[test]
+    fn optional_sleep_poses_preserve_placement_mouth_and_draft() {
+        use super::super::lines::SoundRef;
+        use super::super::reactions::Art;
+        let mut p = yohta();
+        let mut first = Art::new(SoundRef::Pack("sleep.png".into()));
+        first.place = [0.1, 0.0, 0.9];
+        p.add_sleep_pose(first.clone());
+        let mut settings = p.companionship();
+        settings.mouth = [0.2, 0.3];
+        p.reactions.companionship = Some(settings);
+        let second = Art::new(SoundRef::Pack("curled.png".into()));
+        p.add_sleep_pose(second.clone());
+        assert_eq!(p.sleep_poses().len(), 2);
+        p.edit_sleep_pose(1, false);
+        assert_eq!(p.art(Event::Sleep), Some(second));
+        assert_eq!(p.sleep_poses()[1].art, first);
+        assert_eq!(p.sleep_poses()[1].mouth, [0.2, 0.3]);
+        let saved = p.overrides(Default::default()).reactions.unwrap();
+        assert_eq!(
+            super::super::reactions::Config::parse(&saved.to_json(), true).unwrap(),
+            saved
+        );
+        p.edit_sleep_pose(0, true);
+        assert_eq!(p.art(Event::Sleep), Some(first));
+        p.edit_sleep_pose(0, true);
+        assert!(p.sleep_poses().is_empty());
+    }
     #[test]
     fn editing_marks_changes_and_reset_returns_to_the_pack() {
         let mut p = yohta();

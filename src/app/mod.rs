@@ -1409,10 +1409,14 @@ impl App {
             return (format!("ok: {}", self.status()), None);
         }
         if name == "set" {
-            let mut parts = line.split_whitespace().skip(1);
-            let (Some(id), Some(text)) = (parts.next(), parts.next()) else {
+            let rest = line.trim_start().strip_prefix("set").unwrap_or("").trim_start();
+            let Some((id, text)) = rest.split_once(char::is_whitespace) else {
                 return ("error: usage: tinypaw set <setting> <value>".into(), None);
             };
+            let text = text.trim();
+            if text.is_empty() {
+                return ("error: usage: tinypaw set <setting> <value>".into(), None);
+            }
             let Some(def) = self.registry.setting(id) else {
                 return (format!("error: unknown setting `{id}`"), None);
             };
@@ -1856,6 +1860,7 @@ fn character_pictures(c: &Character) -> crate::mascot::desktop::Pictures {
         click: picture(reactions::art(&pack, &user, Event::Click)),
         drop: picture(reactions::art(&pack, &user, Event::Drop)),
         headpat: picture(reactions::art(&pack, &user, Event::Headpat)),
+        sleep_poses: reactions::sleep_poses(&pack, &user).into_iter().filter_map(|p| Some((picture(Some(p.art))?, p.mouth))).collect(),
         sleep: picture(reactions::art(&pack, &user, Event::Sleep)),
         wake: picture(reactions::art(&pack, &user, Event::Wake)),
         settings: reactions::companionship(&pack, &user),

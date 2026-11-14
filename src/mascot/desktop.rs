@@ -184,6 +184,7 @@ pub struct Pictures {
     pub drop: Option<super::rig::Picture>,
     pub headpat: Option<super::rig::Picture>,
     pub sleep: Option<super::rig::Picture>,
+    pub sleep_poses: Vec<(super::rig::Picture, [f32; 2])>,
     pub wake: Option<super::rig::Picture>,
     pub settings: companionship::Settings,
 }
@@ -526,6 +527,9 @@ fn flight(
 /// Character choices that change behaviour, read from settings each update.
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
+    /// Unsaved style preview for the currently selected character.
+    pub bop: Option<super::motion::Bop>,
+    pub dance: super::motion::Dance,
     pub eyes: bool,
     pub idle: bool,
     pub reduced: bool,
@@ -537,6 +541,7 @@ pub struct Options {
     pub idle_every: (f32, f32),
     /// Playback loudness to move with, 0 when off or silent.
     pub music: f32,
+    pub energy: Option<f32>,
     /// The followed beat's phase, while Follow beat has one.
     pub beat: Option<f32>,
 }
@@ -853,6 +858,8 @@ impl Desktop {
     pub fn set_pictures(&mut self, pictures: Pictures) {
         self.pictures = pictures;
         self.companion.reset();
+        self.companion
+            .set_sleep_pose_count(self.pictures.sleep_poses.len());
         self.showing = None;
         self.relayout();
         self.place();
@@ -860,19 +867,39 @@ impl Desktop {
 
     /// The picture drawn instead of the character now, if any. Carrying
     /// shows the held pose; a recent click or drop shows its artwork.
+    fn sleep_art(&self) -> Option<&super::rig::Picture> {
+        self.pictures
+            .sleep_poses
+            .get(self.companion.sleep_pose)
+            .map(|p| &p.0)
+            .or(self.pictures.sleep.as_ref())
+    }
+    fn sleep_settings(&self) -> companionship::Settings {
+        let mut settings = self.pictures.settings.clone();
+        if let Some((_, mouth)) = self.pictures.sleep_poses.get(self.companion.sleep_pose) {
+            settings.mouth = *mouth;
+        }
+        settings
+    }
     fn picture(&self) -> Option<&super::rig::Picture> {
         if self.press.as_ref().is_some_and(|p| p.dragging) {
             return self.pictures.held.as_ref();
         }
         match self.companion.state {
-            State::Asleep | State::Waking => return self.pictures.sleep.as_ref(),
+            State::Asleep | State::Waking => {
+                return self
+                    .sleep_art()
+                    .filter(|_| self.companion.sleep_picture(self.now));
+            }
             State::Petting => return self.pictures.headpat.as_ref(),
             _ => {}
         }
         match self.showing {
             Some((until, Event::Click)) if self.now < until => self.pictures.click.as_ref(),
             Some((until, Event::Drop)) if self.now < until => self.pictures.drop.as_ref(),
-            Some((until, Event::Wake)) if self.now < until => self.pictures.wake.as_ref(),
+            Some((until, Event::Wake)) if self.now < until && self.companion.sleep_pose == 0 => {
+                self.pictures.wake.as_ref()
+            }
             _ => None,
         }
     }
@@ -1191,9 +1218,7 @@ impl Desktop {
         };
         let margin = (self.size * 0.25).max(24.0) + if self.nearby { 8.0 } else { 0.0 };
         let bounds = if matches!(self.companion.state, State::Asleep | State::Waking) {
-            self.pictures
-                .sleep
-                .as_ref()
+            self.sleep_art()
                 .map(|p| {
                     let a = p.in_stage(self.rig.size(), p.art.position());
                     let b = p.in_stage(
@@ -1319,7 +1344,8 @@ impl Desktop {
                         dt,
                         dragging: true,
                         velocity,
-                        bop: self.rig.bop(),
+                        bop: o.bop.unwrap_or_else(|| self.rig.bop()),
+                        dance: o.dance,
                         ..Inputs::default()
                     },
                 );
@@ -1389,7 +1415,7 @@ impl Desktop {
             self.pose = pose;
             return;
         }
-        let sleeping = matches!(self.companion.state, State::Asleep | State::Waking);
+        let sleeping = self.companion.sleep_motion(self.now);
         let mut pose = self.animator.step(
             &self.parts,
             &Inputs {
@@ -1402,8 +1428,11 @@ impl Desktop {
                 dragging: self.flight.is_some(),
                 velocity,
                 music: if sleeping { 0.0 } else { o.music },
+                music_items: self.rig.music_items(),
+                energy: o.energy,
                 beat: if sleeping { None } else { o.beat },
-                bop: self.rig.bop(),
+                bop: o.bop.unwrap_or_else(|| self.rig.bop()),
+                dance: o.dance,
             },
         );
         if let Some((at, held)) = &self.released {
@@ -1426,6 +1455,13 @@ impl Desktop {
             pose.expression = Expression::Petted;
         }
         self.companion.apply_affection(
+            &self.rig,
+            &mut pose,
+            self.now,
+            o.reduced,
+            self.picture().is_some(),
+        );
+        self.companion.apply_sleep(
             &self.rig,
             &mut pose,
             self.now,
@@ -2284,7 +2320,7 @@ impl canvas::Program<Message> for Stage<'_> {
         companionship::draw_zzz(
             &mut sleep_overlay,
             d.rig.size(),
-            &d.pictures.settings,
+            &d.sleep_settings(),
             d.companion.state,
             d.companion.stirring,
             d.now,

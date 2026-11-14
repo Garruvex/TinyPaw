@@ -1,6 +1,31 @@
 use super::*;
 
 impl App {
+    pub(super) fn dance_options(&self) -> crate::mascot::motion::Dance {
+        let s = self.session.settings();
+        crate::mascot::motion::Dance {
+            pose: match s.choice(character::MUSIC_POSE) {
+                "sit" => 1,
+                "stand" => 2,
+                _ => 0,
+            },
+            stand_threshold: s.float(character::EXCITEMENT) as f32 / 100.0,
+            hand_offset: iced::Vector::new(
+                s.float(character::WAVE_X) as f32 / 100.0,
+                s.float(character::WAVE_Y) as f32 / 100.0,
+            ),
+            hand_angle: (s.float(character::WAVE_ANGLE) as f32).to_radians(),
+            wave_range: s.float(character::WAVE_RANGE) as f32 / 100.0,
+            every: s.choice(character::DANCE_EVERY).parse().unwrap_or(16),
+            included: character::DANCE_STYLES.map(|id| s.bool(id)),
+            item: match s.choice(character::DANCE_ITEM) {
+                "glow_stick" => 0,
+                "phone" => 1,
+                _ => 2,
+            },
+        }
+    }
+
     #[cfg(windows)]
     /// Playback loudness scaled by Music strength, 0 when off or silent.
     pub(super) fn music_level(&self) -> f32 {
@@ -13,6 +38,18 @@ impl App {
             return m.level() * strength;
         }
         0.0
+    }
+
+    pub(super) fn music_energy(&self) -> Option<f32> {
+        #[cfg(windows)]
+        if let Some(m) = &self.music {
+            return Some(if self.session.settings().bool(character::MUSIC) {
+                m.level()
+            } else {
+                0.0
+            });
+        }
+        Some(0.0)
     }
 
     pub(super) fn beat_sensitivity(&self) -> crate::mascot::beat::Sensitivity {

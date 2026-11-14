@@ -156,6 +156,27 @@ enum Capture {
     Process(ProcessLoopback),
 }
 
+/// Callback arrival time anchors the end of a packet before worker delays.
+struct AudioChunk {
+    samples: Vec<f32>,
+    captured: Instant,
+    end_sample: u64,
+}
+
+fn enqueue(tx: &SyncSender<AudioChunk>, samples: Vec<f32>, position: &mut u64) {
+    *position += samples.len() as u64;
+    let _ = tx.try_send(AudioChunk {
+        samples,
+        captured: Instant::now(),
+        end_sample: *position,
+    });
+}
+
+fn beat_instant(captured: Instant, end_sample: u64, rate: u32, beat: f64) -> Option<Instant> {
+    let age = (end_sample as f64 / rate as f64 - beat).max(0.0);
+    captured.checked_sub(Duration::from_secs_f64(age))
+}
+
 fn run(shared: &Shared, stop: &AtomicBool, target: &Target, engine: Engine) {
     while !stop.load(Ordering::Relaxed) {
         let (tx, rx) = sync_channel(64);
@@ -180,17 +201,25 @@ fn run(shared: &Shared, stop: &AtomicBool, target: &Target, engine: Engine) {
             }
         }
         shared.period.store(0, Ordering::Relaxed);
+        *shared.last_beat.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 
 /// Analyses chunks until stopped or the audio stalls.
-fn follow(shared: &Shared, stop: &AtomicBool, rx: &Receiver<Vec<f32>>, rate: u32, engine: Engine) {
+fn follow(
+    shared: &Shared,
+    stop: &AtomicBool,
+    rx: &Receiver<AudioChunk>,
+    rate: u32,
+    engine: Engine,
+) {
     let mut tracker = Tracker::new(
         rate,
         decode(shared.sensitivity.load(Ordering::Relaxed)),
         engine,
     );
     let mut heard = Instant::now();
+    let mut processed_samples = 0_u64;
     while !stop.load(Ordering::Relaxed) {
         let chunk = match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(chunk) => chunk,
@@ -207,9 +236,15 @@ fn follow(shared: &Shared, stop: &AtomicBool, rx: &Receiver<Vec<f32>>, rate: u32
                 tracker.hold_off(left);
             }
         }
-        tracker.push(&chunk);
-        if !tracker.take_beats().is_empty() {
-            *shared.last_beat.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+        processed_samples += chunk.samples.len() as u64;
+        if processed_samples != chunk.end_sample {
+            // Dropped audio breaks the sample timeline. Start a fresh capture.
+            return;
+        }
+        tracker.push(&chunk.samples);
+        if let Some(beat) = tracker.take_beats().last().copied() {
+            *shared.last_beat.lock().unwrap_or_else(|e| e.into_inner()) =
+                beat_instant(chunk.captured, chunk.end_sample, rate, beat);
         }
         let period = tracker.bpm().map_or(0.0, |bpm| 60.0 / bpm);
         shared.period.store(period.to_bits(), Ordering::Relaxed);
@@ -264,14 +299,15 @@ fn build_mono(
 
 /// Hands chunks to the analysis thread; if it falls behind, the chunk is
 /// dropped rather than blocking the audio thread.
-fn to_channel(tx: SyncSender<Vec<f32>>) -> impl FnMut(&[f32]) + Send + 'static {
+fn to_channel(tx: SyncSender<AudioChunk>) -> impl FnMut(&[f32]) + Send + 'static {
+    let mut position = 0;
     move |chunk| {
-        let _ = tx.try_send(chunk.to_vec());
+        enqueue(&tx, chunk.to_vec(), &mut position);
     }
 }
 
 /// A loopback capture of the default output, started.
-fn open_loopback(tx: SyncSender<Vec<f32>>) -> Option<(cpal::Stream, u32)> {
+fn open_loopback(tx: SyncSender<AudioChunk>) -> Option<(cpal::Stream, u32)> {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     let device = cpal::default_host().default_output_device()?;
     let supported = device.default_output_config().ok()?;
@@ -302,7 +338,7 @@ pub(super) fn open_input(
     build_mono(&device, supported, sink)
 }
 
-fn open_input_chunks(name: &str, tx: SyncSender<Vec<f32>>) -> Option<(cpal::Stream, u32)> {
+fn open_input_chunks(name: &str, tx: SyncSender<AudioChunk>) -> Option<(cpal::Stream, u32)> {
     use cpal::traits::{DeviceTrait, StreamTrait};
     let rate = input_device(name)?
         .default_input_config()
@@ -328,7 +364,7 @@ struct ProcessLoopback {
 impl ProcessLoopback {
     /// Starts capturing `pid`'s audio, or `None` if Windows can't (older
     /// than Windows 10 2004, or the process is gone).
-    fn start(pid: u32, tx: SyncSender<Vec<f32>>) -> Option<Self> {
+    fn start(pid: u32, tx: SyncSender<AudioChunk>) -> Option<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let (ready_tx, ready_rx) = sync_channel(1);
         let thread = {
@@ -388,7 +424,7 @@ mod handler {
 
 fn process_capture(
     pid: u32,
-    tx: &SyncSender<Vec<f32>>,
+    tx: &SyncSender<AudioChunk>,
     stop: &AtomicBool,
     ready: &SyncSender<bool>,
 ) {
@@ -507,12 +543,13 @@ fn start_client(
 /// arrives as packets, so a quiet app doesn't look like a stall.
 fn capture_loop(
     capture: &::windows::Win32::Media::Audio::IAudioCaptureClient,
-    tx: &SyncSender<Vec<f32>>,
+    tx: &SyncSender<AudioChunk>,
     stop: &AtomicBool,
 ) {
     use ::windows::Win32::Media::Audio::AUDCLNT_BUFFERFLAGS_SILENT;
     let channels = usize::from(PROCESS_CHANNELS);
     let mut last_packet = Instant::now();
+    let mut position = 0;
     while !stop.load(Ordering::Relaxed) {
         std::thread::sleep(Duration::from_millis(10));
         let mut mono = Vec::new();
@@ -556,19 +593,48 @@ fn capture_loop(
             let quiet = last_packet.elapsed();
             if quiet >= Duration::from_millis(50) {
                 let n = (quiet.as_secs_f64() * f64::from(PROCESS_RATE)) as usize;
-                let _ = tx.try_send(vec![0.0; n]);
+                enqueue(tx, vec![0.0; n], &mut position);
                 last_packet = Instant::now();
             }
             continue;
         }
         last_packet = Instant::now();
-        let _ = tx.try_send(mono);
+        enqueue(tx, mono, &mut position);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn beat_timestamps_are_independent_of_packet_size_and_worker_delay() {
+        let base = Instant::now();
+        let expected = base + Duration::from_secs(4);
+        for rate in [44_100_u32, 48_000] {
+            for milliseconds in [10_u64, 20, 50] {
+                let end = base + Duration::from_secs(4) + Duration::from_millis(milliseconds);
+                let samples = 4 * rate as u64 + rate as u64 * milliseconds / 1000;
+                let actual = beat_instant(end, samples, rate, 4.0).unwrap();
+                assert!(
+                    actual
+                        .saturating_duration_since(expected)
+                        .max(expected.saturating_duration_since(actual))
+                        < Duration::from_micros(1)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn capture_drops_preserve_sample_positions() {
+        let (tx, rx) = sync_channel(1);
+        let mut position = 0;
+        enqueue(&tx, vec![0.0; 100], &mut position);
+        enqueue(&tx, vec![0.0; 100], &mut position); // full queue drops this packet
+        assert_eq!(rx.recv().unwrap().end_sample, 100);
+        enqueue(&tx, vec![0.0; 100], &mut position);
+        assert_eq!(rx.recv().unwrap().end_sample, 300);
+    }
 
     /// Opens a real loopback stream on this PC's default output.
     #[test]
@@ -589,6 +655,6 @@ mod tests {
         let p = ProcessLoopback::start(std::process::id(), tx);
         assert!(p.is_some(), "process loopback opened");
         let chunk = rx.recv_timeout(Duration::from_secs(2));
-        println!("first chunk {:?} samples", chunk.map(|c| c.len()));
+        println!("first chunk {:?} samples", chunk.map(|c| c.samples.len()));
     }
 }

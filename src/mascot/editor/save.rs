@@ -161,6 +161,7 @@ impl Editor {
             author: self.author.clone(),
             lines: self.lines.clone(),
             bop: self.bop,
+            music_art: self.music_art.clone(),
             reactions,
             canvas: self.canvas,
             default_pose: self.pose.clone(),
@@ -202,6 +203,9 @@ impl Editor {
             })
             .collect();
         kept.extend(self.other_sources.iter().map(|r| r.source.clone()));
+        if let Some(art) = &self.music_art {
+            kept.extend(art.assets().into_iter().map(str::to_owned));
+        }
         let write = |stage: &Path| {
             for (file, image) in &files {
                 let to = stage.join(file);

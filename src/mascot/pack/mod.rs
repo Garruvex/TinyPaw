@@ -282,6 +282,18 @@ fn build_rig(m: &Manifest, png: impl Fn(&str) -> Result<RgbaImage, String>) -> R
             rig.set_motion(&[w]);
         }
         rig.set_bop(m.bop.unwrap_or_default());
+        if let Some(art) = &m.music_art {
+            rig.set_music_art(
+                png(&art.body)?,
+                png(&art.relaxed_arm)?,
+                png(&art.phone_arm)?,
+                png(&art.stick_arm)?,
+                art.pivot,
+            )?;
+            if let (Some(head), Some(pivot)) = (&art.head, art.head_pivot) {
+                rig.set_music_head(png(head)?, pivot)?;
+            }
+        }
         return Ok(rig);
     }
     let mut parts = Vec::new();
@@ -319,6 +331,18 @@ fn build_rig(m: &Manifest, png: impl Fn(&str) -> Result<RgbaImage, String>) -> R
         eyes,
     });
     rig.set_bop(m.bop.unwrap_or_default());
+    if let Some(art) = &m.music_art {
+        rig.set_music_art(
+            png(&art.body)?,
+            png(&art.relaxed_arm)?,
+            png(&art.phone_arm)?,
+            png(&art.stick_arm)?,
+            art.pivot,
+        )?;
+        if let (Some(head), Some(pivot)) = (&art.head, art.head_pivot) {
+            rig.set_music_head(png(head)?, pivot)?;
+        }
+    }
     Ok(rig)
 }
 
@@ -615,6 +639,7 @@ fn install_into_guarded(
         rest: super::rest::RestMode::Auto,
         lines: Lines::default(),
         bop: None,
+        music_art: None,
         reactions: super::reactions::new_character(),
     };
     let art = draft.art.clone();

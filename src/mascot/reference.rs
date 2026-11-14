@@ -45,6 +45,14 @@ pub enum Role {
     Drop,
     /// The whole character in a carried pose, for Pick up's held pose.
     Held,
+    LeftArm,
+    RightArm,
+    HoldingArm,
+    Grip,
+    Phone,
+    GlowStick,
+    PhoneGlow,
+    StickGlow,
 }
 
 impl Role {
@@ -86,6 +94,14 @@ impl Role {
             Role::Click => "click.png",
             Role::Drop => "drop.png",
             Role::Held => "held.png",
+            Role::LeftArm => "left_arm.png",
+            Role::RightArm => "right_arm.png",
+            Role::HoldingArm => "holding_arm.png",
+            Role::Grip => "grip.png",
+            Role::Phone => "phone.png",
+            Role::GlowStick => "glow_stick.png",
+            Role::PhoneGlow => "phone_glow.png",
+            Role::StickGlow => "stick_glow.png",
         }
     }
 
@@ -127,6 +143,14 @@ impl Role {
             Role::Click => "Click pose",
             Role::Drop => "Drop pose",
             Role::Held => "Held pose",
+            Role::LeftArm => "Left arm",
+            Role::RightArm => "Right arm",
+            Role::HoldingArm => "Holding arm",
+            Role::Grip => "Grip fingers",
+            Role::Phone => "Phone",
+            Role::GlowStick => "Glow stick",
+            Role::PhoneGlow => "Phone glow",
+            Role::StickGlow => "Stick glow",
         }
     }
 
@@ -143,6 +167,14 @@ impl Role {
     pub fn guess(path: &Path) -> Option<Role> {
         let name = path.file_stem()?.to_str()?.to_lowercase();
         for role in [
+            Role::LeftArm,
+            Role::RightArm,
+            Role::HoldingArm,
+            Role::Grip,
+            Role::Phone,
+            Role::GlowStick,
+            Role::PhoneGlow,
+            Role::StickGlow,
             Role::HeadPetted,
             Role::Petted,
             Role::Sleep,
@@ -228,6 +260,7 @@ pub struct Request {
     /// Optional moving parts and poses, beyond the base picture.
     pub head: bool,
     pub tail: bool,
+    pub dance: bool,
     /// Separate eye and eyebrow images instead of painted-in ones.
     pub eyes: bool,
     pub tracking: bool,
@@ -250,6 +283,7 @@ impl Request {
             canvas: DEFAULT_CANVAS,
             head: false,
             tail: false,
+            dance: false,
             eyes: false,
             tracking: false,
             brows: false,
@@ -296,6 +330,18 @@ impl Request {
                 }
             }
         }
+        if self.dance {
+            out.extend([
+                Role::LeftArm,
+                Role::RightArm,
+                Role::HoldingArm,
+                Role::Grip,
+                Role::Phone,
+                Role::GlowStick,
+                Role::PhoneGlow,
+                Role::StickGlow,
+            ]);
+        }
         out.extend(self.extras.iter().copied());
         out
     }
@@ -308,6 +354,7 @@ impl Request {
 
     fn needs_head(&self) -> bool {
         self.head
+            || self.dance
             || self.tracking
             || self.blink
             || self.faces
@@ -349,6 +396,9 @@ impl Request {
                 "the head (keep the neck, with a little painted overlap where the head joins)",
             );
         }
+        if self.dance {
+            removed.push("both arms, with clean painted overlap at the shoulders");
+        }
         if self.tail {
             removed.push("the tail (keep a little painted overlap where it joins)");
         }
@@ -370,6 +420,14 @@ impl Request {
             Role::Head => format!(
                 "only the head, at the exact position it has on the body, {face}, with a little extra painted at the neck so it overlaps the body"
             ),
+            Role::LeftArm => "only the relaxed left arm as seen by the viewer, from shoulder to fingertips; match the full shared canvas, and keep all other pixels transparent".into(),
+            Role::RightArm => "only the relaxed right arm as seen by the viewer, from shoulder to fingertips; match the full shared canvas, and keep all other pixels transparent".into(),
+            Role::HoldingArm => "only the viewer-right arm in its lowered resting position, elbow slightly bent and hand shaped to hold an upright item; omit the front grip fingers, supplied separately; match the full shared canvas, and keep all other pixels transparent".into(),
+            Role::Grip => "only the fingers overlapping the front of the held item on holding_arm.png; match the full shared canvas, and keep all other pixels transparent".into(),
+            Role::Phone => "only an upright phone with a lit screen facing the viewer, positioned in the lowered holding hand; match the full shared canvas, and keep all other pixels transparent".into(),
+            Role::GlowStick => "only an upright warm yellow glow stick positioned in the same lowered holding hand as the phone; match the full shared canvas, and keep all other pixels transparent".into(),
+            Role::PhoneGlow => "only a soft transparent light halo aligned to phone.png; match the full shared canvas, and keep all other pixels transparent".into(),
+            Role::StickGlow => "only a soft transparent light halo aligned to glow_stick.png; match the full shared canvas, and keep all other pixels transparent".into(),
             Role::Tail => "only the tail, in the exact position where it attaches to the body file, with a little extra painted overlap at its base".into(),
             Role::LeftEye => facial("eye", "left"),
             Role::RightEye => facial("eye", "right"),
@@ -387,8 +445,8 @@ impl Request {
             }
             Role::HeadPetted => format!("only the head, identical to head.png in position, scale and outline, with a happy relaxed headpat expression and eyes painted in; leave hearts and motion trails out because TinyPaw animates those; {}", if self.brows { "leave eyebrows out because the separate eyebrow layers stay visible" } else { "keep eyebrows painted in" }),
             Role::Petted => "the complete character enjoying a headpat, happy relaxed expression, all eyes and eyebrows painted in, matching the resting pose's scale and resting anchor; leave hearts and motion trails out because TinyPaw animates those".into(),
-            Role::Sleep => "the complete character sleeping comfortably, eyes closed, all face details painted in, matching the resting anchor and scale; leave Zzz letters out because TinyPaw draws them; measure the mouth position as canvas fractions for reactions.companionship.mouth".into(),
-            Role::Wake => "the complete character waking drowsily, all face details painted in, matching the resting anchor and scale".into(),
+            Role::Sleep => "one optional complete character curled up comfortably asleep, eyes closed and all face details painted in. Keep the reference camera angle, head size, full shared canvas and floor baseline; the silhouette may change naturally for this sleeping position. Create only this single still PNG, no animation frames, breathing marks, shadows, Zzz or motion trails: TinyPaw handles breathing and Zzz. Measure the mouth position as canvas fractions for reactions.companionship.mouth. This extra image is only needed for a different sleeping position; ordinary seated dozing reuses the existing closed-eye or blink artwork. Do not generate a wake image unless separately requested".into(),
+            Role::Wake => "one optional complete character waking drowsily, all face details painted in, matching the resting camera angle, character scale and floor baseline. Attach the approved sleep.png as an additional reference and use a natural intermediate position between that sleep pose and the normal resting pose. Create a single still PNG, no animation frames or effects. Wake artwork is optional; TinyPaw can return to the normal character and animate the head lift and blink without it".into(),
             Role::Click => "the complete character reacting happily to a poke, all face details painted in, matching the resting anchor and scale".into(),
             Role::Drop => "the complete character reacting to being put down, all face details painted in, matching the resting anchor and scale".into(),
             Role::HeadBlink => "only the head, identical to head.png in position, size and outline, with the eyes gently closed as in a blink; leave eyebrows out if separate eyebrow files were requested".into(),
@@ -401,7 +459,7 @@ impl Request {
     /// The shared rules every file follows, so the results line up.
     fn rules(&self) -> String {
         format!(
-            "Use the attached picture as the character reference. Style: {}. Every file is a {c}×{c} PNG with a fully transparent background, the same camera angle, scale and position, so the files line up when stacked; keep markings, colours and proportions consistent with the reference. Leave transparent space around the character and don't crop it.",
+            "Use the attached picture as the character reference. Style: {}. Every file is a {c}×{c} PNG with a fully transparent background, the same camera angle, scale and position, so the files line up when stacked; keep markings, colours and proportions consistent with the reference. Leave transparent space around the character and don't crop it. The shared position rule applies to resting layers; a complete sleeping or waking pose may change silhouette while preserving the character scale and floor baseline.",
             self.style(),
             c = self.canvas,
         )
@@ -418,6 +476,15 @@ impl Request {
             let kind = match role {
                 Role::Head => PartType::Head,
                 Role::Tail => PartType::Tail,
+                Role::LeftArm => PartType::LeftArm,
+                Role::RightArm => PartType::RightArm,
+                Role::HoldingArm => PartType::HoldingArm,
+                Role::Grip => PartType::Grip,
+                Role::Phone => PartType::Phone,
+                Role::GlowStick => PartType::GlowStick,
+                Role::PhoneGlow => PartType::PhoneGlow,
+                Role::StickGlow => PartType::StickGlow,
+
                 role if role.is_face() => PartType::Other,
                 _ => continue,
             };
@@ -594,12 +661,18 @@ impl Request {
             self.features().join(", ")
         ));
         out.push_str("\nDeliver an actual character.json file inside the downloadable folder. Measure placement from the finished artwork and write the final numeric coordinates yourself. Each PNG must retain the full shared canvas, so its x/y placement is already encoded by transparent padding. Never trim or centre individual layers. Measure ground_anchor at the feet, each head pivot at the neck joint, each tail pivot at its attachment, and eye max_offset from the safe pupil travel inside its mask. Coordinates [x, y] are canvas fractions from the top left: divide pixel x by canvas width and pixel y by canvas height. For held_pose, include a measured grip: [x_fraction, y_fraction] on the intended pickup point in held.png, and include place: [0, 0, 1] for shared-canvas alignment, or measured [x_offset, y_offset, scale] if needed. Replace the example anchor, pivot and eye travel numbers below with measured values. Keep every selected feature and all filename mappings. Stack the resting layers to verify alignment, confirm eyes have a background/pupil/alpha mask each, and confirm each expression and held pose is mapped. Deliver every required file together.\n\n");
+        if self.dance {
+            out.push_str("Music artwork alignment: left_arm and right_arm are relaxed arms. holding_arm replaces right_arm during Light wave. Place both interchangeable items in its grip, and draw grip fingers in front of the item. For holding_arm, grip, phone, glow_stick and both glow layers, set the SAME pivot at the viewer-right SHOULDER, with parent omitted. The runtime rotates these aligned layers together. Give left_arm its own shoulder pivot. Keep the halo separate from the item. Leave enough canvas padding for the raised arm and both swing extremes. Stack and rotate the layers together to verify the grip.\n\n");
+        }
         out.push_str(&serde_json::to_string_pretty(&self.manifest()).unwrap());
         out
     }
 
     pub fn features(&self) -> Vec<&'static str> {
         let mut features = vec!["resting character"];
+        if self.dance {
+            features.push("music gestures with separate arms, grip fingers, phone, glow stick and light halos");
+        }
         for (enabled, label) in [
             (
                 self.tracking,
@@ -648,7 +721,15 @@ impl Request {
             "Create one image for a desktop character, named {}. Attach the approved body.png and head.png (when present) as alignment references alongside the character reference. Retain the full shared canvas. Never trim or centre individual layers.\n\n{}\n\nIt shows {}.",
             role.file(),
             self.rules(),
-            self.describe(role)
+            format!(
+                "{}{}",
+                self.describe(role),
+                if self.dance {
+                    " Music gesture layers share full-canvas alignment. Holding arm, grip fingers, both items and both halos all use the same viewer-right shoulder pivot and remain independent root layers. Attach the approved holding_arm.png as a grip alignment reference. Keep padding for the raised arm and both swing extremes."
+                } else {
+                    ""
+                }
+            )
         )
     }
 

@@ -293,10 +293,17 @@ fn parse_art(v: &Json, user: bool) -> Result<Art, String> {
     })
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SleepPose {
+    pub art: Art,
+    pub mouth: [f32; 2],
+}
+
 /// One event's entry in a `reactions` object: its sound and visual, plus
 /// keys this version doesn't edit, kept as they were.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Entry {
+    pub sleep_poses: Vec<SleepPose>,
     pub sound: TriggerSound,
     /// `None` when this layer doesn't set it.
     pub visual: Option<Visual>,
@@ -384,17 +391,23 @@ impl Config {
     }
 
     pub fn artwork(&self) -> impl Iterator<Item = &Art> {
-        self.events
-            .iter()
-            .flatten()
-            .flat_map(|entry| [&entry.art, &entry.held].into_iter().flatten())
+        self.events.iter().flatten().flat_map(|entry| {
+            [&entry.art, &entry.held]
+                .into_iter()
+                .flatten()
+                .chain(entry.sleep_poses.iter().map(|p| &p.art))
+        })
     }
 
     /// Every reaction picture this layer names.
     pub fn images(&self) -> Vec<&SoundRef> {
         let mut out: Vec<&SoundRef> = Vec::new();
         for entry in self.events.iter().flatten() {
-            for art in [&entry.art, &entry.held].into_iter().flatten() {
+            for art in [&entry.art, &entry.held]
+                .into_iter()
+                .flatten()
+                .chain(entry.sleep_poses.iter().map(|p| &p.art))
+            {
                 if !out.contains(&&art.image) {
                     out.push(&art.image);
                 }
@@ -406,7 +419,11 @@ impl Config {
     /// Rewrites every picture reference, for export.
     pub fn map_images(&mut self, mut f: impl FnMut(&SoundRef) -> SoundRef) {
         for entry in self.events.iter_mut().flatten() {
-            for art in [&mut entry.art, &mut entry.held].into_iter().flatten() {
+            for art in [&mut entry.art, &mut entry.held]
+                .into_iter()
+                .flatten()
+                .chain(entry.sleep_poses.iter_mut().map(|p| &mut p.art))
+            {
                 art.image = f(&art.image);
             }
         }
@@ -468,6 +485,18 @@ impl Config {
         for e in Event::ALL {
             if let Some(entry) = &self.events[e.index()] {
                 let mut v = entry.other.clone();
+                if !entry.sleep_poses.is_empty() {
+                    v.insert(
+                        "sleep_poses".into(),
+                        Json::Array(
+                            entry
+                                .sleep_poses
+                                .iter()
+                                .map(|p| json!({"art": p.art.to_json(), "mouth": p.mouth}))
+                                .collect(),
+                        ),
+                    );
+                }
                 match (entry.visual, &entry.art) {
                     (Some(Visual::Artwork), Some(art)) => {
                         v.insert("visual".into(), art.to_json());
@@ -589,6 +618,21 @@ fn parse_entry(v: &Json, user: bool) -> Result<Entry, String> {
         o @ Json::Object(_) => (Some(Visual::Artwork), Some(parse_art(o, user)?)),
         _ => return Err("a reaction's visual must be a name or a picture".into()),
     };
+    let sleep_poses = match &v["sleep_poses"] {
+        Json::Null => Vec::new(),
+        Json::Array(poses) if poses.len() <= 7 => poses
+            .iter()
+            .map(|p| {
+                let settings =
+                    super::companionship::Settings::parse(&json!({"mouth": p["mouth"]}))?;
+                Ok(SleepPose {
+                    art: parse_art(&p["art"], user)?,
+                    mouth: settings.mouth,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?,
+        _ => return Err("sleep_poses must contain at most seven extra poses".into()),
+    };
     let held = match &v["held_pose"] {
         Json::Null => None,
         o => Some(parse_art(o, user)?),
@@ -607,11 +651,13 @@ fn parse_entry(v: &Json, user: bool) -> Result<Entry, String> {
         "cooldown_ms",
         "visual",
         "held_pose",
+        "sleep_poses",
         "after_release",
     ] {
         other.remove(key);
     }
     Ok(Entry {
+        sleep_poses,
         visual,
         art,
         held,
@@ -671,6 +717,21 @@ pub fn art(pack: &Config, user: &Config, e: Event) -> Option<Art> {
             .and_then(|x| x.art.clone())
     };
     set(user).or_else(|| set(pack))
+}
+
+/// The base sleep image remains optional and old packs need no migration.
+pub fn sleep_poses(pack: &Config, user: &Config) -> Vec<SleepPose> {
+    let Some(base) = art(pack, user, Event::Sleep) else {
+        return Vec::new();
+    };
+    let mut poses = vec![SleepPose {
+        art: base,
+        mouth: companionship(pack, user).mouth,
+    }];
+    if let Some(entry) = user.entry(Event::Sleep).or(pack.entry(Event::Sleep)) {
+        poses.extend(entry.sleep_poses.clone());
+    }
+    poses
 }
 
 /// Whether a released character falls to the screen edge. Off unless set.
@@ -1088,6 +1149,32 @@ mod tests {
         assert!(Config::parse(&json!({ "click": { "visual": "wobble" } }), true).is_err());
     }
 
+    #[test]
+    fn sleep_variants_round_trip_and_export_every_image() {
+        let value = json!({"sleep": {
+            "visual": {"image": "sleep.png"},
+            "sleep_poses": [{"art": {"image": "curled.png", "place": [0.1, 0.2, 0.8]}, "mouth": [0.3, 0.7]}]
+        }});
+        let mut config = Config::parse(&value, false).unwrap();
+        assert_eq!(config.images().len(), 2);
+        assert_eq!(config.artwork().count(), 2);
+        assert_eq!(Config::parse(&config.to_json(), false).unwrap(), config);
+        let poses = sleep_poses(&config, &Config::default());
+        assert_eq!(poses.len(), 2);
+        assert_eq!(poses[1].mouth, [0.3, 0.7]);
+        assert_eq!(poses[1].art.place, [0.1, 0.2, 0.8]);
+        config.map_images(|r| match r {
+            SoundRef::Pack(p) => SoundRef::Pack(format!("export/{p}")),
+            _ => r.clone(),
+        });
+        assert!(
+            config
+                .images()
+                .iter()
+                .all(|r| matches!(r, SoundRef::Pack(p) if p.starts_with("export/")))
+        );
+        assert!(Config::parse(&json!({"sleep": {"sleep_poses": [{"art": {"image": "../bad.png"}, "mouth": [0.3, 0.7]}]}}), false).is_err());
+    }
     #[test]
     fn held_poses_and_artwork_round_trip() {
         let v = json!({

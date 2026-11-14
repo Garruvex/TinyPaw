@@ -258,6 +258,10 @@ pub(super) fn visual_row<'a>(
             hint(match visual {
                 Visual::Compress =>
                     "Briefly shortens and widens the picture after a click, then restores it.",
+                Visual::Artwork if e == Event::Sleep =>
+                    "Keeps the selected sleeping position throughout the nap.",
+                Visual::None if e == Event::Sleep =>
+                    "Dozes using existing blink artwork; no extra PNG needed.",
                 Visual::Artwork =>
                     "Shows another whole-character PNG for a moment, then the normal one.",
                 Visual::None => "The picture stays as it is.",
@@ -269,6 +273,30 @@ pub(super) fn visual_row<'a>(
     .spacing(6);
     if let Some(art) = m.art(e) {
         block = block.push(picture_controls(e, false, art.place));
+    }
+    if e == Event::Sleep {
+        let poses = m.sleep_poses();
+        block = block.push(hint("No extra art is needed for dozing with a blink layer. Optional sleep PNGs add curled-up or lying-down positions. One pose is chosen per nap; wake artwork is optional."));
+        if poses.len() < 8 {
+            block =
+                block.push(button("Add sleep pose…").on_press(Message::Ui(UiMsg::SleepPoseAdd)));
+        }
+        for (index, _) in poses.iter().enumerate() {
+            block = block.push(
+                row![
+                    text(format!(
+                        "Sleep pose {}{}",
+                        index + 1,
+                        if index == 0 { " (editing)" } else { "" }
+                    ))
+                    .size(12),
+                    button("Edit placement & mouth")
+                        .on_press(Message::Ui(UiMsg::SleepPoseEdit(index, false))),
+                    button("Remove").on_press(Message::Ui(UiMsg::SleepPoseEdit(index, true))),
+                ]
+                .spacing(6),
+            );
+        }
     }
     block.into()
 }
@@ -870,7 +898,68 @@ pub(super) fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         .spacing(10)
         .align_y(Alignment::Center)
         .into(),
-        hint("Nod is relaxed. Groove dips on the beat and leans side to side. Rubber hose hops every beat, squashing and stretching like an old cartoon. Compress briefly squashes the whole picture on each beat, so it suits a single PNG. Saved with the character's Save, and carried when you export it."),
+        row![
+            text("Music pose").size(12).color(theme::MUTED).width(110),
+            pick_list(["Automatic", "Sitting", "Standing"],
+                Some(match s.choice(mascot::MUSIC_POSE) { "sit" => "Sitting", "stand" => "Standing", _ => "Automatic" }),
+                |x| Message::Set(mascot::MUSIC_POSE, Value::Choice(match x { "Sitting" => "sit", "Standing" => "stand", _ => "auto" })))
+                .text_size(13).padding([6, 10]).style(theme::select),
+        ].spacing(10).align_y(Alignment::Center).into(),
+        row![
+            text("Stand at energy").size(12).color(theme::MUTED).width(110),
+            slider(30.0..=90.0, s.float(mascot::EXCITEMENT), |x| Message::Set(mascot::EXCITEMENT, Value::Float(x)))
+                .step(1.0).style(theme::range),
+            text(format!("{:.0}%", s.float(mascot::EXCITEMENT))).size(12).width(48),
+        ].spacing(8).align_y(Alignment::Center).into(),
+        hint("Automatic keeps gentle bops seated, stands after sustained high activity, and sits again when the music calms. A higher threshold keeps it seated more often. Standing artwork is required. Choose Standing to adjust the waving hand."),
+        row![
+            text("Change every").size(12).color(theme::MUTED).width(110),
+            pick_list(["8", "16", "32"], Some(s.choice(mascot::DANCE_EVERY)), |x| Message::Set(mascot::DANCE_EVERY, Value::Choice(x)))
+                .text_size(13).padding([6, 10]).style(theme::select),
+            text("beats in Random").size(12).color(theme::MUTED),
+        ].spacing(10).align_y(Alignment::Center).into(),
+        row![
+            text("Light-wave item").size(12).color(theme::MUTED).width(110),
+            pick_list(["Glow stick", "Phone", "Random"], Some(match s.choice(mascot::DANCE_ITEM) { "phone" => "Phone", "glow_stick" => "Glow stick", _ => "Random" }),
+                |x| Message::Set(mascot::DANCE_ITEM, Value::Choice(match x { "Phone" => "phone", "Glow stick" => "glow_stick", _ => "random" })))
+                .text_size(13).padding([6, 10]).style(theme::select),
+        ].spacing(10).align_y(Alignment::Center).into(),
+        row![
+            text("Hand horizontal").size(12).color(theme::MUTED).width(110),
+            slider(-15.0..=15.0, s.float(mascot::WAVE_X), |x| Message::Set(mascot::WAVE_X, Value::Float(x)))
+                .step(1.0).style(theme::range),
+            text(format!("{:.0}%", s.float(mascot::WAVE_X))).size(12).width(48),
+            button("Reset").style(theme::secondary).on_press(Message::Set(mascot::WAVE_X, Value::Float(0.0))),
+        ].spacing(8).align_y(Alignment::Center).into(),
+        row![
+            text("Hand vertical").size(12).color(theme::MUTED).width(110),
+            slider(-15.0..=15.0, s.float(mascot::WAVE_Y), |x| Message::Set(mascot::WAVE_Y, Value::Float(x)))
+                .step(1.0).style(theme::range),
+            text(format!("{:.0}%", s.float(mascot::WAVE_Y))).size(12).width(48),
+            button("Reset").style(theme::secondary).on_press(Message::Set(mascot::WAVE_Y, Value::Float(0.0))),
+        ].spacing(8).align_y(Alignment::Center).into(),
+        row![
+            text("Hand angle").size(12).color(theme::MUTED).width(110),
+            slider(-45.0..=45.0, s.float(mascot::WAVE_ANGLE), |x| Message::Set(mascot::WAVE_ANGLE, Value::Float(x)))
+                .step(1.0).style(theme::range),
+            text(format!("{:.0}°", s.float(mascot::WAVE_ANGLE))).size(12).width(48),
+            button("Reset").style(theme::secondary).on_press(Message::Set(mascot::WAVE_ANGLE, Value::Float(0.0))),
+        ].spacing(8).align_y(Alignment::Center).into(),
+        row![
+            text("Wave range").size(12).color(theme::MUTED).width(110),
+            slider(0.0..=200.0, s.float(mascot::WAVE_RANGE), |x| Message::Set(mascot::WAVE_RANGE, Value::Float(x)))
+                .step(1.0).style(theme::range),
+            text(format!("{:.0}%", s.float(mascot::WAVE_RANGE))).size(12).width(48),
+            button("Reset").style(theme::secondary).on_press(Message::Set(mascot::WAVE_RANGE, Value::Float(100.0))),
+        ].spacing(8).align_y(Alignment::Center).into(),
+        hint("Hand position moves the waving arm and item together. Positive horizontal moves right; positive vertical moves down. These adjustments apply across characters and save immediately."),
+        hint("Random uses the checked styles and changes on a beat boundary. Light wave joins Random when the character has a holding arm and an item. An empty selection uses Nod. Items use the available artwork; characters without gesture artwork use the built-in glow stick. Interval, included styles and item apply to all characters."),
+        check("Random · Nod", s.bool(mascot::DANCE_STYLES[0]), mascot::DANCE_STYLES[0]),
+        check("Random · Groove", s.bool(mascot::DANCE_STYLES[1]), mascot::DANCE_STYLES[1]),
+        check("Random · Rubber hose", s.bool(mascot::DANCE_STYLES[2]), mascot::DANCE_STYLES[2]),
+        check("Random · Compress", s.bool(mascot::DANCE_STYLES[3]), mascot::DANCE_STYLES[3]),
+        check("Random · Light wave", s.bool(mascot::DANCE_STYLES[4]), mascot::DANCE_STYLES[4]),
+        hint("Nod dips its head and shoulders on each beat, recovering smoothly and rocking across two beats. Groove dips on the beat and leans side to side. Rubber hose hops every beat, squashing and stretching like an old cartoon. Compress briefly squashes the whole picture on each beat, so it suits a single PNG. Light wave raises its right hand and sweeps the selected item across two beats. Add Music gestures artwork through Create from reference for a matching hand and interchangeable items. The selected style previews on the desktop immediately. Save keeps it with this character; Discard restores the saved style. It is carried when you export it."),
         check("Follow beat (trial)", follow, mascot::BEAT),
         hint("Nods land on the beat instead of a steady bob. It listens to what's playing (TinyPaw's own sounds are held off while they play) and keeps nothing."),
     ]);

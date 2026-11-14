@@ -140,6 +140,11 @@ pub struct Controller {
     pub state: State,
     pub stirring: bool,
     pub sleep_due: bool,
+    sleep_pose_count: usize,
+    pub sleep_pose: usize,
+    previous_sleep_pose: Option<usize>,
+    sleep_started: Option<f32>,
+    wake_started: Option<f32>,
     quiet_since: Option<f32>,
     touch_since: Option<f32>,
     touch_left: Option<f32>,
@@ -254,11 +259,79 @@ impl Controller {
             );
         }
     }
+    /// Shared visual timing for the desktop and settings preview.
+    pub fn sleep_picture(&self, now: f32) -> bool {
+        matches!(self.state, State::Asleep | State::Waking)
+            && self.sleep_started.is_some_and(|at| now - at >= 2.6)
+            && self.wake_started.is_none()
+    }
+    pub fn sleep_motion(&self, now: f32) -> bool {
+        matches!(self.state, State::Asleep | State::Waking)
+            || self.wake_started.is_some_and(|at| now - at < 1.4)
+    }
+    pub fn apply_sleep(
+        &self,
+        rig: &super::rig::Rig,
+        pose: &mut super::motion::Pose,
+        now: f32,
+        reduced: bool,
+        whole_picture: bool,
+    ) {
+        if !self.sleep_motion(now) {
+            return;
+        }
+        pose.music_active = false;
+        let ease = |t: f32| {
+            let t = t.clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        };
+        let elapsed = self.sleep_started.map_or(2.6, |at| (now - at).max(0.0));
+        let (amount, closed) = if let Some(at) = self.wake_started {
+            let t = (now - at).max(0.0);
+            (1.0 - ease(t / 1.4), t < 0.35 || (0.75..0.95).contains(&t))
+        } else {
+            (
+                ease(elapsed / 2.6),
+                (0.65..1.05).contains(&elapsed) || elapsed >= 1.65,
+            )
+        };
+        pose.gaze = iced::Vector::ZERO;
+        let closed = if reduced {
+            matches!(self.state, State::Asleep | State::Waking)
+        } else {
+            closed
+        };
+        pose.expression = if closed {
+            super::motion::Expression::Blink
+        } else {
+            super::motion::Expression::Idle
+        };
+        if reduced {
+            return;
+        }
+        if !whole_picture
+            && rig
+                .motion_parts()
+                .iter()
+                .any(|p| p.kind == super::motion::PartType::Head)
+        {
+            pose.head_drop += 0.025 * amount;
+        } else {
+            pose.squash += 0.035 * amount;
+        }
+    }
     pub fn reset(&mut self) {
+        let count = self.sleep_pose_count;
+        let previous = self.previous_sleep_pose;
         *self = Self::new(self.seed);
+        self.sleep_pose_count = count;
+        self.previous_sleep_pose = previous;
     }
     pub fn wake(&mut self, now: f32) -> Option<Event> {
         let was_sleeping = matches!(self.state, State::Asleep | State::Waking);
+        if was_sleeping && self.wake_started.is_none() {
+            self.wake_started = Some(now);
+        }
         self.state = State::Awake;
         self.quiet_since = Some(now);
         self.sleep_due = false;
@@ -271,8 +344,27 @@ impl Controller {
         self.clear_strokes();
         was_sleeping.then_some(Event::Wake)
     }
+    pub fn set_sleep_pose_count(&mut self, count: usize) {
+        self.sleep_pose_count = count;
+        if self.sleep_pose >= count {
+            self.sleep_pose = 0;
+        }
+    }
     pub fn sleep_now(&mut self, now: f32, s: &Settings) {
+        let count = self.sleep_pose_count;
+        self.sleep_pose = if count > 1 {
+            let previous = self.previous_sleep_pose.filter(|p| *p < count);
+            let options = count - usize::from(previous.is_some());
+            let pick = ((self.random() * options as f32) as usize).min(options - 1);
+            pick + usize::from(previous.is_some_and(|p| pick >= p))
+        } else {
+            0
+        };
+        self.previous_sleep_pose = Some(self.sleep_pose);
         self.state = State::Asleep;
+        self.sleep_started = Some(now);
+        self.wake_started = None;
+        self.touch_left = None;
         self.touch_delay =
             s.touch_seconds[0] + (s.touch_seconds[1] - s.touch_seconds[0]) * self.random();
         self.random_at = s.random_wake.then(|| {
@@ -340,6 +432,7 @@ impl Controller {
         let stroke = self.stroke(i);
         if i.button || i.busy {
             let event = self.wake(i.now);
+            self.wake_started = None;
             self.quiet_since = None;
             return event;
         }
@@ -369,6 +462,7 @@ impl Controller {
                 let at = *self.audio_since.get_or_insert(i.now);
                 if i.now - at >= 0.5 && self.wake_at.is_none() {
                     self.state = State::Waking;
+                    self.wake_started = Some(i.now);
                     self.wake_at = Some(i.now + 0.5 + self.random());
                 }
             } else {
@@ -419,6 +513,64 @@ mod tests {
             audio: Audio::Quiet,
             height: 146.0,
         }
+    }
+    #[test]
+    fn sleep_pose_is_stable_per_nap_and_does_not_repeat() {
+        let mut c = Controller::new(13);
+        let settings = Settings {
+            sleep: true,
+            ..Default::default()
+        };
+        c.set_sleep_pose_count(3);
+        let mut previous = None;
+        for n in 0..30 {
+            let now = n as f32 * 10.0;
+            c.sleep_now(now, &settings);
+            let selected = c.sleep_pose;
+            assert!(selected < 3);
+            assert_ne!(previous, Some(selected));
+            c.step(&settings, input(now + 1.0));
+            assert_eq!(c.sleep_pose, selected);
+            c.wake(now + 5.0);
+            previous = Some(selected);
+        }
+        c.set_sleep_pose_count(1);
+        c.sleep_now(400.0, &settings);
+        assert_eq!(c.sleep_pose, 0);
+    }
+    #[test]
+    fn sleep_and_wake_visuals_share_timing_and_input_interrupts() {
+        use super::super::motion::{Expression, Pose};
+        let settings = Settings {
+            sleep: true,
+            ..Default::default()
+        };
+        let rig = super::super::rig::Rig::load();
+        let mut c = Controller::new(1);
+        c.sleep_now(10.0, &settings);
+        let sample = |c: &Controller, now, reduced| {
+            let mut pose = Pose::default();
+            c.apply_sleep(&rig, &mut pose, now, reduced, false);
+            pose
+        };
+        assert_eq!(sample(&c, 10.0, false).expression, Expression::Idle);
+        assert_eq!(sample(&c, 10.8, false).expression, Expression::Blink);
+        assert_eq!(sample(&c, 11.2, false).expression, Expression::Idle);
+        assert_eq!(sample(&c, 12.0, false).expression, Expression::Blink);
+        assert!(!c.sleep_picture(12.0));
+        assert!(c.sleep_picture(12.7));
+        assert!(sample(&c, 12.7, false).head_drop > 0.0);
+        assert_eq!(sample(&c, 12.7, true).head_drop, 0.0);
+        assert_eq!(c.wake(13.0), Some(Event::Wake));
+        assert!(!c.sleep_picture(13.0));
+        assert!(sample(&c, 13.1, false).head_drop > sample(&c, 14.0, false).head_drop);
+        assert_eq!(sample(&c, 13.8, false).expression, Expression::Blink);
+        assert!(!c.sleep_motion(14.5));
+        c.sleep_now(20.0, &settings);
+        let mut press = input(20.2);
+        press.button = true;
+        assert_eq!(c.step(&settings, press), Some(Event::Wake));
+        assert!(!c.sleep_motion(20.2));
     }
     #[test]
     fn idle_response_defers_sleep_without_resetting_countdown() {

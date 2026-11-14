@@ -23,9 +23,69 @@ pub(in crate::mascot) struct Manifest {
     pub(in crate::mascot) lines: Lines,
     /// How it bops to music, if not the default nod.
     pub(in crate::mascot) bop: Option<Bop>,
+    pub(in crate::mascot) music_art: Option<MusicArtwork>,
     /// The pack's reaction defaults (`reactions`); the user's changes are
     /// overrides on top.
     pub(in crate::mascot) reactions: super::super::reactions::Config,
+}
+
+/// Complete standing body and aligned arm alternatives, used only with music.
+#[derive(Debug, Clone)]
+pub(in crate::mascot) struct MusicArtwork {
+    pub head: Option<String>,
+    pub head_pivot: Option<(f32, f32)>,
+    pub body: String,
+    pub relaxed_arm: String,
+    pub phone_arm: String,
+    pub stick_arm: String,
+    pub pivot: (f32, f32),
+}
+
+impl MusicArtwork {
+    pub fn assets(&self) -> Vec<&str> {
+        let mut assets = vec![
+            self.body.as_str(),
+            &self.relaxed_arm,
+            &self.phone_arm,
+            &self.stick_arm,
+        ];
+        assets.extend(self.head.as_deref());
+        assets
+    }
+    fn parse(v: &Json) -> Result<Option<Self>, String> {
+        if v.is_null() {
+            return Ok(None);
+        }
+        let head = if v["head"].is_null() {
+            None
+        } else {
+            Some(asset_field(&v["head"], "music head")?)
+        };
+        let head_pivot = if head.is_some() {
+            Some(fraction_pair(&v["head_pivot"]).ok_or("music head needs a neck pivot")?)
+        } else {
+            None
+        };
+        Ok(Some(Self {
+            head,
+            head_pivot,
+            body: asset_field(&v["body"], "music body")?,
+            relaxed_arm: asset_field(&v["relaxed_arm"], "music relaxed arm")?,
+            phone_arm: asset_field(&v["phone_arm"], "music phone arm")?,
+            stick_arm: asset_field(&v["stick_arm"], "music glow-stick arm")?,
+            pivot: fraction_pair(&v["pivot"]).ok_or("music artwork needs a shoulder pivot")?,
+        }))
+    }
+    fn to_json(&self) -> Json {
+        let mut value = json!({"body":self.body,"relaxed_arm":self.relaxed_arm,
+            "phone_arm":self.phone_arm,"stick_arm":self.stick_arm,
+            "pivot":[self.pivot.0,self.pivot.1]});
+        if let (Some(head), Some(pivot)) = (&self.head, self.head_pivot) {
+            value["head"] = json!(head);
+            value["head_pivot"] = json!([pivot.0, pivot.1]);
+        }
+        value
+    }
 }
 
 /// The original PNG's size and the visible box quick import kept from it
@@ -337,6 +397,26 @@ pub(in crate::mascot) fn parse_layers(
         }
         parts.push(part);
     }
+    if let Some(arm) = parts.iter().find(|p| p.kind == PartType::HoldingArm) {
+        for part in parts.iter().filter(|p| {
+            matches!(
+                p.kind,
+                PartType::Grip
+                    | PartType::Phone
+                    | PartType::GlowStick
+                    | PartType::PhoneGlow
+                    | PartType::StickGlow
+            )
+        }) {
+            if part.parent.is_some()
+                || arm.parent.is_some()
+                || (part.pivot.0 - arm.pivot.0).abs() > 0.0001
+                || (part.pivot.1 - arm.pivot.1).abs() > 0.0001
+            {
+                return Err("Music items, glow and grip fingers must be root layers with the same shoulder pivot as holding_arm.".into());
+            }
+        }
+    }
     let eyes = match &pose["eyes"] {
         Json::Null => Vec::new(),
         Json::Array(list) => list
@@ -375,6 +455,13 @@ impl Manifest {
         }
         // Held poses and artwork reactions: canvas-sized, like any layer,
         // so they count against the image and memory limits too.
+        if let Some(art) = &self.music_art {
+            for a in art.assets() {
+                if !out.contains(&a) {
+                    out.push(a);
+                }
+            }
+        }
         for r in self.reactions.images() {
             if let SoundRef::Pack(a) = r
                 && !out.contains(&a.as_str())
@@ -508,6 +595,12 @@ impl Manifest {
         }
         if let Some(bop) = self.bop {
             m["music"] = json!({ "bop": bop.name() });
+        }
+        if let Some(art) = &self.music_art {
+            if m["music"].is_null() {
+                m["music"] = json!({});
+            }
+            m["music"]["artwork"] = art.to_json();
         }
         m
     }
@@ -725,6 +818,7 @@ pub(in crate::mascot) fn parse_manifest(text: &str) -> Result<Manifest, String> 
         lines: Lines::parse(&m, false)?,
         // A style this version doesn't know bops the default way.
         bop: m["music"]["bop"].as_str().and_then(Bop::parse),
+        music_art: MusicArtwork::parse(&m["music"]["artwork"])?,
         reactions: super::super::reactions::Config::parse(&m["reactions"], false)?,
     };
     manifest.editor =
@@ -740,7 +834,13 @@ pub(in crate::mascot) fn parse_manifest(text: &str) -> Result<Manifest, String> 
             .poses
             .iter()
             .map(|p| p.assets().len() as u64)
-            .sum::<u64>();
+            .sum::<u64>()
+        + manifest.music_art.as_ref().map_or(0, |art| {
+            u64::from(manifest.canvas.0)
+                * u64::from(manifest.canvas.1)
+                * 4
+                * art.assets().len() as u64
+        });
     let editor_bytes: u64 = manifest
         .editor
         .iter()

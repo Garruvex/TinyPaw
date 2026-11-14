@@ -125,6 +125,17 @@ pub struct EditEye {
     pub travel: f32,
 }
 
+impl EditEye {
+    fn slot_mut(&mut self, slot: EyeSlot) -> &mut Option<Layer> {
+        match slot {
+            EyeSlot::White => &mut self.white,
+            EyeSlot::Pupil => &mut self.pupil,
+            EyeSlot::Mask => &mut self.mask,
+            EyeSlot::Blink => &mut self.blink,
+        }
+    }
+}
+
 /// The eye images, in the order the Art tab shows them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EyeSlot {
@@ -197,7 +208,8 @@ pub enum Gesture {
     Nudge,
     Field(usize),
     Travel(usize),
-    PupilSize(usize),
+    EyeSize(usize),
+    EyeLayerSize(usize, EyeSlot),
     Rename(usize),
 }
 
@@ -273,6 +285,7 @@ pub struct Editor {
     /// The pack's lines, bop and reactions, kept as they are by an art save.
     lines: super::lines::Lines,
     bop: Option<super::motion::Bop>,
+    music_art: Option<super::pack::MusicArtwork>,
     reactions: super::reactions::Config,
     /// Poses this editor doesn't show, kept as they are.
     others: Vec<Pose>,
@@ -366,6 +379,7 @@ impl Editor {
             author: m.author.clone(),
             lines: m.lines.clone(),
             bop: m.bop,
+            music_art: m.music_art.clone(),
             reactions: m.reactions.clone(),
             others: m
                 .poses
@@ -554,18 +568,12 @@ impl Editor {
                 if p.kind != PartType::Head {
                     return Err("only the head has faces".into());
                 }
-                p.faces[slot.min(2)] = Some(layer);
-                self.select(Selected::Face(part, slot.min(2)));
+                *p.faces.get_mut(slot).ok_or("Unknown head expression.")? = Some(layer);
+                self.select(Selected::Face(part, slot));
             }
             Target::Eye(eye, slot) => {
                 let e = self.eyes.get_mut(eye).ok_or("that eye is gone")?;
-                let field = match slot {
-                    EyeSlot::White => &mut e.white,
-                    EyeSlot::Pupil => &mut e.pupil,
-                    EyeSlot::Mask => &mut e.mask,
-                    EyeSlot::Blink => &mut e.blink,
-                };
-                *field = Some(layer);
+                *e.slot_mut(slot) = Some(layer);
             }
         }
         Ok(())
@@ -802,33 +810,78 @@ impl Editor {
         }
     }
 
-    /// Scale the pupil around its visible centre, keeping neutral gaze aligned.
-    pub fn set_pupil_size(&mut self, index: usize, scale: f32) -> Result<(), String> {
-        let pupil = self
+    /// Scale the tracking layers together around the visible eye background.
+    pub fn set_eye_size(&mut self, index: usize, scale: f32) -> Result<(), String> {
+        let mut eye = self.eyes.get(index).ok_or("Unknown eye.")?.clone();
+        let white = eye
+            .white
+            .as_ref()
+            .ok_or("Choose an eye background first.")?;
+        let (cx, cy, _) = white
+            .visible_centre(self.canvas)
+            .ok_or("The eye background is empty.")?;
+        let (x, y) = (cx * self.canvas.0 as f32, cy * self.canvas.1 as f32);
+        let ratio = scale / white.placement.scale;
+        for layer in [
+            &mut eye.white,
+            &mut eye.mask,
+            &mut eye.pupil,
+            &mut eye.blink,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let p = &mut layer.placement;
+            p.x = x + (p.x - x) * ratio;
+            p.y = y + (p.y - y) * ratio;
+            p.scale *= ratio;
+            if !p.valid(self.canvas) {
+                return Err("This eye size exceeds the stage's placement range.".into());
+            }
+        }
+        self.checkpoint_gesture(Gesture::EyeSize(index));
+        self.eyes[index] = eye;
+        Ok(())
+    }
+
+    /// Resize a single eye layer around its visible centre.
+    pub fn set_eye_layer_size(
+        &mut self,
+        index: usize,
+        slot: EyeSlot,
+        scale: f32,
+    ) -> Result<(), String> {
+        let layer = self
             .eyes
             .get(index)
-            .and_then(|eye| eye.pupil.as_ref())
-            .ok_or("Choose a pupil image first.")?;
+            .and_then(|eye| match slot {
+                EyeSlot::White => eye.white.as_ref(),
+                EyeSlot::Mask => eye.mask.as_ref(),
+                EyeSlot::Blink => eye.blink.as_ref(),
+                EyeSlot::Pupil => eye.pupil.as_ref(),
+            })
+            .ok_or("Choose an eye image first.")?;
         if !scale.is_finite() {
-            return Err("Pupil size must be a finite number.".into());
+            return Err("Eye layer size must be a finite number.".into());
         }
-        let centre = pupil
+        let centre = layer
             .visible_centre(self.canvas)
-            .ok_or("The pupil image is empty.")?;
-        let mut placement = pupil.placement;
+            .ok_or("The eye image is empty.")?;
+        let mut placement = layer.placement;
         placement.scale = scale.clamp(0.01, 8.0);
-        let mut resized = pupil.clone();
+        let mut resized = layer.clone();
         resized.placement = placement;
         let next = resized
             .visible_centre(self.canvas)
-            .ok_or("The pupil image is empty.")?;
+            .ok_or("The eye image is empty.")?;
         placement.x += (centre.0 - next.0) * self.canvas.0 as f32;
         placement.y += (centre.1 - next.1) * self.canvas.1 as f32;
         if !placement.valid(self.canvas) {
-            return Err("This pupil size exceeds the stage's placement range.".into());
+            return Err("This eye layer size exceeds the stage's placement range.".into());
         }
-        self.checkpoint_gesture(Gesture::PupilSize(index));
-        self.eyes[index].pupil.as_mut().unwrap().placement = placement;
+        self.checkpoint_gesture(Gesture::EyeLayerSize(index, slot));
+        resized.placement = placement;
+        *self.eyes[index].slot_mut(slot) = Some(resized);
         Ok(())
     }
 }
@@ -876,6 +929,7 @@ impl Editor {
             author: None,
             lines: super::lines::Lines::default(),
             bop: None,
+            music_art: None,
             // A new character's touch events start at None, written out.
             reactions: super::reactions::new_character(),
             others: Vec::new(),
@@ -1247,6 +1301,9 @@ fn guess_kind(path: &Path, has_head: bool) -> PartType {
         .and_then(|s| s.to_str())
         .unwrap_or_default()
         .to_lowercase();
+    for kind in PartType::ALL {
+        if name == kind.name() { return kind; }
+    }
     for (word, kind) in [
         ("tail", PartType::Tail),
         ("ear", PartType::Ear),

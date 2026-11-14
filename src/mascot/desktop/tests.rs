@@ -347,6 +347,9 @@ fn hit_testing_follows_the_drawn_lean() {
 fn a_carried_character_leans_around_the_grab_and_trails_unprotected_parts() {
     let (mut d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 500.0), 5, false);
     let o = Options {
+        energy: None,
+        bop: None,
+        dance: Default::default(),
         eyes: false,
         idle: true,
         reduced: false,
@@ -421,6 +424,9 @@ fn a_carried_character_leans_around_the_grab_and_trails_unprotected_parts() {
 fn a_released_character_falls_to_rest_once_and_a_pickup_catches_it() {
     let (mut d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 300.0), 5, false);
     let o = Options {
+        energy: None,
+        bop: None,
+        dance: Default::default(),
         eyes: false,
         idle: false,
         reduced: false,
@@ -611,6 +617,9 @@ fn the_carry_limit_is_the_window_edge_not_a_step_short_of_it() {
 fn a_held_pose_swings_from_its_scruff_when_shaken_and_settles() {
     let (mut d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 500.0), 5, false);
     let o = Options {
+        energy: None,
+        bop: None,
+        dance: Default::default(),
         eyes: false,
         idle: false,
         reduced: false,
@@ -686,6 +695,9 @@ fn a_held_pose_swings_from_its_scruff_when_shaken_and_settles() {
 fn gestures_emit_each_event_once_and_cancellation_none() {
     let (mut d, _) = Desktop::open("yohta", Rig::load(), 160.0, (500.0, 500.0), 5, false);
     let o = Options {
+        energy: None,
+        bop: None,
+        dance: Default::default(),
         eyes: false,
         idle: false,
         reduced: false,
@@ -729,6 +741,9 @@ fn gestures_emit_each_event_once_and_cancellation_none() {
 fn a_held_press_keeps_its_pose_and_eases_out_on_release() {
     let (mut d, _) = Desktop::open("yohta", Rig::load(), 160.0, (500.0, 500.0), 5, false);
     let o = Options {
+        energy: None,
+        bop: None,
+        dance: Default::default(),
         eyes: false,
         idle: true,
         reduced: false,

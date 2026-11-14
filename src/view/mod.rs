@@ -140,6 +140,8 @@ pub enum UiMsg {
     ),
     /// Choose the PNG for an artwork reaction, or Pick up's held pose.
     ReactionPicture(crate::mascot::reactions::Event),
+    SleepPoseAdd,
+    SleepPoseEdit(usize, bool),
     ReactionHeldClear,
     PlacementPreview(Option<crate::mascot::reactions::Event>),
     /// Create from reference.
@@ -148,6 +150,7 @@ pub enum UiMsg {
     ReferenceCanvas(u32),
     ReferenceTail(bool),
     ReferenceHead(bool),
+    ReferenceDance(bool),
     ReferenceEyes(bool),
     ReferenceTracking(bool),
     ReferenceBrows(bool),
@@ -195,7 +198,8 @@ pub enum UiMsg {
     ArtRemoveEye(usize),
     ArtRemoveBlink(usize),
     ArtTravel(usize, f32),
-    ArtPupilSize(usize, f32),
+    ArtEyeSize(usize, f32),
+    ArtEyeLayerSize(usize, crate::mascot::editor::EyeSlot, f32),
     ArtClick(f32, f32),
     ArtName(String),
     ArtSave,

@@ -91,6 +91,21 @@ impl App {
                 // Use artwork starts by choosing its PNG.
                 return self.ui_message(UiMsg::ReactionPicture(e), now, out);
             }
+            UiMsg::SleepPoseEdit(index, remove) => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.edit_sleep_pose(index, remove);
+                }
+            }
+            UiMsg::SleepPoseAdd => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.adding_sleep_pose = true;
+                }
+                return self.ui_message(
+                    UiMsg::ReactionPicture(crate::mascot::reactions::Event::Sleep),
+                    now,
+                    out,
+                );
+            }
             UiMsg::ReactionPicture(e) => {
                 return Task::perform(
                     rfd::AsyncFileDialog::new()

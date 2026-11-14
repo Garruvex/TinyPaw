@@ -15,6 +15,12 @@ impl App {
     pub(super) fn mascot_options(&self) -> crate::mascot::desktop::Options {
         let s = self.session.settings();
         crate::mascot::desktop::Options {
+            bop: self
+                .studio
+                .motion_preview
+                .as_ref()
+                .filter(|p| p.id == s.choice(character::CHARACTER))
+                .map(|p| p.rig().bop()),
             eyes: s.bool(character::EYES),
             idle: s.bool(character::IDLE),
             reduced: system::reduced(s),
@@ -25,7 +31,9 @@ impl App {
                 s.float(character::IDLE_MAX) as f32 * 60.0,
             ),
             music: self.music_level(),
+            energy: self.music_energy(),
             beat: self.beat_phase(),
+            dance: self.dance_options(),
         }
     }
 

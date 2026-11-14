@@ -30,6 +30,21 @@ pub const MUSIC_SOURCE: &str = "mascot.music_source";
 pub const BEAT_SENSITIVITY: &str = "mascot.beat_sensitivity";
 pub const BEAT_TIMING: &str = "mascot.beat_timing";
 pub const BEAT_ENGINE: &str = "mascot.beat_engine";
+pub const MUSIC_POSE: &str = "mascot.music_pose";
+pub const EXCITEMENT: &str = "mascot.excitement_threshold";
+pub const WAVE_X: &str = "mascot.wave_x";
+pub const WAVE_Y: &str = "mascot.wave_y";
+pub const WAVE_ANGLE: &str = "mascot.wave_angle";
+pub const WAVE_RANGE: &str = "mascot.wave_range";
+pub const DANCE_EVERY: &str = "mascot.dance_every";
+pub const DANCE_ITEM: &str = "mascot.dance_item";
+pub const DANCE_STYLES: [&str; 5] = [
+    "mascot.dance_nod",
+    "mascot.dance_groove",
+    "mascot.dance_rubber",
+    "mascot.dance_compress",
+    "mascot.dance_wave",
+];
 /// Idle lines come at a random time within this many minutes.
 pub const IDLE_MIN: &str = "mascot.idle_lines_min";
 pub const IDLE_MAX: &str = "mascot.idle_lines_max";
@@ -174,6 +189,66 @@ pub fn register(r: &mut Registrar) {
         order: 9,
         default: Value::Bool(false),
         constraint: Constraint::None,
+    });
+    r.setting(SettingDef {
+        id: MUSIC_POSE,
+        label: "Music pose",
+        group: "Character",
+        order: 10,
+        default: Value::Choice("auto"),
+        constraint: Constraint::Choices(&["auto", "sit", "stand"]),
+    });
+    r.setting(SettingDef {
+        id: EXCITEMENT,
+        label: "Standing threshold",
+        group: "Character",
+        order: 10,
+        default: Value::Float(62.0),
+        constraint: Constraint::Range {
+            min: 30.0,
+            max: 90.0,
+        },
+    });
+    for (id, label, default, min, max) in [
+        (WAVE_X, "Hand horizontal", 0.0, -15.0, 15.0),
+        (WAVE_Y, "Hand vertical", 0.0, -15.0, 15.0),
+        (WAVE_ANGLE, "Hand angle", 0.0, -45.0, 45.0),
+        (WAVE_RANGE, "Wave range", 100.0, 0.0, 200.0),
+    ] {
+        r.setting(SettingDef {
+            id,
+            label,
+            group: "Character",
+            order: 10,
+            default: Value::Float(default),
+            constraint: Constraint::Range { min, max },
+        });
+    }
+    for id in DANCE_STYLES {
+        r.setting(SettingDef {
+            id,
+            label: "Include dance style",
+            group: "Character",
+            order: 10,
+            default: Value::Bool(true),
+            constraint: Constraint::None,
+        });
+    }
+    r.setting(SettingDef {
+        id: DANCE_EVERY,
+        label: "Change style every",
+        group: "Character",
+        order: 10,
+        default: Value::Choice("16"),
+        constraint: Constraint::Choices(&["8", "16", "32"]),
+    });
+    r.setting(SettingDef {
+        id: DANCE_ITEM,
+        label: "Light-wave item",
+        group: "Character",
+        order: 10,
+        default: Value::Choice("random"),
+        constraint: Constraint::Choices(&["glow_stick", "phone", "random"]),
     });
     r.setting(SettingDef {
         id: MUSIC_STRENGTH,

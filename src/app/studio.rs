@@ -32,7 +32,7 @@ pub(super) struct Studio {
     pub(super) motion_failed: Option<&'static str>,
     pub(super) motion_ticked: Option<Instant>,
     /// The beat phase and when it was last sampled, to find its pace.
-    pub(super) motion_beat: Option<(f32, Instant)>,
+
     /// Create from reference in progress, and its reference thumbnail.
     pub(super) reference: Option<crate::mascot::reference::Request>,
     pub(super) reference_thumb: Option<image::Handle>,
@@ -529,6 +529,8 @@ impl App {
                             if e == Event::Pickup {
                                 p.set_held(Some(art));
                                 p.placement_preview = Some(e);
+                            } else if e == Event::Sleep && std::mem::take(&mut p.adding_sleep_pose) {
+                                p.add_sleep_pose(art);
                             } else {
                                 p.set_art(e, Some(art));
                             }
@@ -540,7 +542,7 @@ impl App {
                     }
                 }
             }
-            Message::ReactionPicturePicked(_, None) => {}
+            Message::ReactionPicturePicked(_, None) => { if let Some(p) = &mut self.studio.motion_preview { p.adding_sleep_pose = false; } }
             Message::ReferencePicked(Some(path)) => {
                 // A thumbnail only; the reference stays where it is.
                 self.studio.reference_thumb = ::image::open(&path).ok().map(|img| {
@@ -652,19 +654,15 @@ impl App {
                 let o = self.motion_options();
                 let beat = self.beat_phase();
                 let sampled = Instant::now();
-                // Cycles per second, from the last two samples.
-                let beat_rate = match (beat, self.studio.motion_beat) {
-                    (Some(now), Some((before, at))) => {
-                        let dt = sampled.duration_since(at).as_secs_f32().max(0.001);
-                        (((now - before + 0.5).rem_euclid(1.0) - 0.5) / dt).clamp(0.0, 6.0)
-                    }
-                    _ => 0.0,
-                };
-                self.studio.motion_beat = beat.map(|b| (b, sampled));
+                // Use the clock speed directly. Wrapped phase differences
+                // alias after a delayed refresh and can falsely freeze a preview.
+                let beat_rate = self.beat_clock.get().0.bpm() / 60.0;
                 let control = crate::mascot::preview::Control {
+                    dance: self.dance_options(),
                     idle: o.0,
                     reduced: o.1,
                     music: self.music_level(),
+                    energy: self.music_energy(),
                     beat,
                     beat_rate,
                     sampled: Some(sampled),

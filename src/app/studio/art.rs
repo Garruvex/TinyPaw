@@ -154,9 +154,14 @@ impl App {
                     eye.travel = travel.clamp(0.0, 0.05);
                 }
             }
-            UiMsg::ArtPupilSize(i, scale) => {
+            UiMsg::ArtEyeSize(i, scale) => {
                 if let Some(e) = &mut self.studio.art {
-                    self.notice = e.set_pupil_size(i, scale).err();
+                    self.notice = e.set_eye_size(i, scale).err();
+                }
+            }
+            UiMsg::ArtEyeLayerSize(i, slot, scale) => {
+                if let Some(e) = &mut self.studio.art {
+                    self.notice = e.set_eye_layer_size(i, slot, scale).err();
                 }
             }
             UiMsg::ArtClick(x, y) => {
