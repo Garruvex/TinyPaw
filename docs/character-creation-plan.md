@@ -1,5 +1,9 @@
 # Character creation plan
 
+## Current character and editor roadmap
+
+The [character and editor improvement plan](character-editor-improvement-plan.md) and its [artwork rules](character-artwork-rules.md) consolidate shared parts, pose variants, editor organization and creation prompts as of 14 November 2026. They take precedence for those areas. The dated sections below retain earlier design decisions and implementation history.
+
 Proposed plan, 11 November 2026. It finishes the desktop character as a
 creator tool: import art, set how each part moves, give the character speech
 lines, and let it react to music. It builds on

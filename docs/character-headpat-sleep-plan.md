@@ -1,5 +1,9 @@
 # Headpat and sleeping implementation scope
 
+## Shared artwork and sleep recipes
+
+The [character and editor improvement plan](character-editor-improvement-plan.md) governs shared artwork and editor integration. Seated dozing and curled sleeping are two pose recipes. Compatible recipes reuse closed eyes, head and other parts under the [artwork rules](character-artwork-rules.md). The sleep timing, wake behavior and interaction details below remain supporting requirements.
+
 Scoped and implemented in phases on 12 November 2026. Automated checks and a Windows Settings preview smoke check have passed. Mixed-DPI hardware, audio-device transitions and performance measurements remain release checks.
 
 This extends the [behavior plan](character-behaviors-plan.md) with petting and persistent sleep. It replaces the earlier deferral of petting for this implementation scope. Existing packs and their click, carry, drop, music and sound behavior must remain unchanged when these features are absent or disabled.
@@ -119,3 +123,16 @@ Sleep monitoring uses the selected music source while music response is enabled.
 Headpat currently uses the head and its attachments when a head exists, or visible pixels for a flat character. A custom painted or rectangular petting region remains an advanced follow-up. Mouth positioning uses a point in the shared sleeping canvas, with direct preview placement and fine adjustment. The Zzz uses cached procedural image glyphs so it composites visibly above character artwork in the software renderer.
 
 Native evidence covers the Windows settings layout, sleep with closed eyes, animated Zzz, mouth placement and explicit wake restoring open eyes. Sustained real audio, mouse/touchpad threshold tuning, repeated desktop pickup from changed sleep artwork, mixed-DPI monitors, suspend/resume and idle CPU measurements still require the release playtest. The native checks used isolated temporary application data.
+
+
+## Optional sleeping positions, 13 November 2026
+
+Seated dozing reuses the existing head and blink artwork; it requires no additional sleep or wake PNG. The shared controller lowers the head during sleep entry and lifts it during waking. A flat character without closed-eye artwork cannot invent closed eyes; a single optional sleeping PNG supplies that expression or a different body position.
+
+Behavior > Sleep & wake offers Add sleep pose, with up to eight complete sleeping PNGs. Each nap selects one available pose and retains it for the nap, avoiding the previous choice when alternatives exist. A single pose needs no randomization setup. The first pose is the one currently being edited; selecting another pose for editing swaps it into that position, preserving both images' placement and mouth origins. Each pose can be removed independently. Existing packs remain valid.
+
+The existing `reactions.sleep.visual` remains the primary image. Extra images are stored in `reactions.sleep.sleep_poses`, an array of `{ "art": { "image": "curled.png", "place": [0, 0, 1] }, "mouth": [0.5, 0.35] }`. All images participate in validation, file loading and export. The primary mouth remains `reactions.companionship.mouth`; extra poses retain their own stage-normalized mouth. Changing a pose does not add required animation frames or a required wake image. Additional positions return to the normal rig for waking rather than using a potentially mismatched wake image.
+
+Creation prompts explicitly request one optional curled-up still, consistent character scale and floor baseline, with no baked-in breathing, Zzz or motion marks. The wake prompt is separately optional and asks for the sleep image as a reference. TinyPaw changes between complete body poses; it does not synthesize an articulated sit-to-lie transition.
+
+Automated checks cover per-nap selection, avoiding repeats, image-reference export, metadata round trips, editing/removing poses and existing sleep input interruption. Native visual timing and the new pose controls still need an in-app playtest.

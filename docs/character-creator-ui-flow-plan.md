@@ -1,5 +1,9 @@
 # Character creator UI and interaction plan
 
+## Current consolidation plan
+
+The [character and editor improvement plan](character-editor-improvement-plan.md) now owns shared parts, variant reuse, pose composition, editor organization and prompt requirements. Use the interaction, carrying, alignment and draft details below as supporting requirements. The dated baseline and earlier music/editor layout statements describe the 11 November review.
+
 Proposed, 11 November 2026. Revised the same day after review. **Planning only; not implemented by this document.**
 
 This refines the [character creation plan](character-creation-plan.md) and its [reaction sound feature](character-reaction-sounds.md). It is the intended replacement for the earlier creator layout, mandatory ground-point workflow and exposed generic pivot mode. Pack compatibility and existing artwork must be preserved.

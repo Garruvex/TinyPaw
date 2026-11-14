@@ -1,5 +1,9 @@
 # Character pose alignment and pickup
 
+## Shared composition integration
+
+The [character and editor improvement plan](character-editor-improvement-plan.md) owns the shared part library and pose editor. Apply the alignment, source geometry, carrying and validation requirements below to the resolved composition and its complete-pose compatibility images.
+
 **Implementation in progress.** A creator can align replacement poses with the resting character, match apparent head size, and author the pickup grip. Final desktop and performance validation is still pending. The desktop character size should be set once. A dangling body can be taller than a sitting body, and a curled sleeping pose can be shorter.
 
 ## What needs fixing
