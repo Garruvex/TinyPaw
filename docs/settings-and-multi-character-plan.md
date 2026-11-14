@@ -20,6 +20,9 @@ This plan replaces the single event loop with three, moves characters to a nativ
 | Characters are aware of each other | Agreed |
 | No hard cap on instances; ten or more must work | Agreed |
 | Design is guarded by templates, a guide and unified styles | Agreed |
+| Voice volume, lines on or off and Quiet are app settings; music pose and its standing threshold belong to the character | Agreed |
+| One master switch shows or hides all characters; each instance keeps its own shown flag | Agreed |
+| Code is licensed GPL-3.0-or-later; character artwork is not covered by the code licence | Agreed; licence files not yet added |
 | Three loops, with characters on a native stage outside Iced | Proposed; assumed by this plan |
 | Slint for Settings and the studio | Proposed; decided by the prototype in step 0 |
 | Overlays and the quick bar stay on Iced | Proposed |
@@ -142,11 +145,19 @@ Pages and sections are registered: a page has an ID, navigation group, label, ic
 
 | Scope | Examples | Stored in |
 |---|---|---|
-| App | Frame rate, music source, strength, beat engine, sensitivity and timing | The settings registry |
-| Character | Artwork, lines, reactions, motion, bop, dance styles and hand tuning, sleep poses | The pack and its overrides |
+| App | Master show or hide, frame rate, voice volume, lines on or off, Quiet, music source, strength, beat engine, sensitivity and timing | The settings registry |
+| Character | Artwork, lines, reactions, sounds and their volume, motion, bop, music pose and standing threshold, dance styles and hand tuning, sleep poses | The pack and its overrides |
 | Instance | Character ID, shown, position, size, eyes, idle | A new instance store |
 
-Dance styles and hand tuning move from app scope to character scope. The current global keys migrate into the first instance.
+Music pose, the standing threshold, dance styles and hand tuning move from app scope to character scope. The other per-instance global keys migrate into the first instance.
+
+Voice volume is one master volume for all characters. Each character's own sound switch and volume, already in its overrides, set the mix between characters.
+
+### Showing and hiding
+
+`mascot.enabled` becomes the master switch and keeps its ID. The tray's Show characters and `tinypaw mascot` toggle it; `tinypaw mascot-hide` turns it off. Hide all on the Characters page turns it off.
+
+Each instance has its own shown flag, changed from its menu or its row in Settings. A character is visible when the master switch and its own flag are both on, so turning the master back on restores what was showing before and leaves individually hidden instances hidden.
 
 ## Awareness
 
@@ -197,9 +208,13 @@ Each step ends with tests, strict Clippy and a Windows release build passing.
 - Per-pixel hit testing and drag capture on native character windows must match today's behaviour.
 - One window per instance may cost too much at twenty; one transparent stage window per display is the fallback.
 
+## Licence
+
+The code is licensed GPL-3.0-or-later. This matches Slint's GPL option and is compatible with GPUI's Apache-2.0 licence, so it holds whichever framework step 0 chooses. The artwork under `assets/mascot/yohta` is not covered by the code licence and needs its own terms.
+
+To do in step 1: add the licence file and the `license` field in `Cargo.toml`, state the artwork terms, and check the full dependency list for compatibility.
+
 ## Open questions
 
-- Scope of voice volume, lines on or off and music pose.
-- Whether Hide character and the tray toggle act on all instances.
-- What `tinypaw mascot` means on the command line with several instances.
-- Which licence TinyPaw declares, given Slint's GPL and royalty-free options. The repository has no licence file.
+- The terms for the Yohta artwork.
+- Whether a single instance can be muted, and whether `tinypaw mascot <name>` is wanted. Neither is planned.
