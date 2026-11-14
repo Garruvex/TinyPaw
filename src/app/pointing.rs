@@ -129,7 +129,7 @@ impl App {
                 .filter(|h| *h != 0)
                 .collect();
             if let Some(m) = &self.mascot {
-                exclude.push(m.hwnd());
+                exclude.push(m.stage.hwnd());
             }
             exclude.extend(
                 self.helper_hwnds

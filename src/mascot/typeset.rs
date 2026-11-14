@@ -20,7 +20,6 @@ const LINE: f32 = 1.3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Face {
-    Regular,
     Semibold,
 }
 
@@ -114,7 +113,6 @@ impl Typeset {
             let attrs = Attrs::new()
                 .family(Family::Name("Segoe UI"))
                 .weight(match face {
-                    Face::Regular => Weight::NORMAL,
                     Face::Semibold => Weight::SEMIBOLD,
                 });
             buffer.set_text(fonts, text, &attrs, Shaping::Advanced, None);

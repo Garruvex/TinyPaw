@@ -115,23 +115,16 @@ impl App {
         let fall = p.falls();
         self.notice = None;
         #[cfg(windows)]
-        if self.mascot.as_ref().is_some_and(|m| m.character() == id) {
+        if self.mascot.as_ref().is_some_and(|m| m.character == id) {
             self.reaction_sounds = saved_sounds;
             let lines = p.lines.clone();
-            let rig = self.character_rig(id);
-            let options = self.mascot_options();
-            let pictures = self
-                .characters
-                .iter()
-                .find(|c| c.id == id)
-                .map(character_pictures)
-                .unwrap_or_default();
-            if let Some(m) = &mut self.mascot {
-                m.set_rig(id, rig);
-                m.set_lines(lines, &options);
-                m.set_click_compress(compress);
-                m.set_pictures(pictures);
-                m.set_fall(fall);
+            let mut character = self.character_setup(id);
+            character.lines = lines;
+            character.click_compress = compress;
+            character.fall = fall;
+            if let Some(m) = &self.mascot {
+                m.stage
+                    .send(crate::stage::Intent::SetCharacter(Box::new(character)));
             }
         }
         Ok(())
@@ -402,10 +395,11 @@ impl App {
                     }
                     self.add_character(c.clone());
                     #[cfg(windows)]
-                    if self.mascot.as_ref().is_some_and(|m| m.character() == c.id) {
-                        let rig = self.character_rig(c.id);
-                        if let Some(m) = &mut self.mascot {
-                            m.set_rig(c.id, rig);
+                    if self.mascot.as_ref().is_some_and(|m| m.character == c.id) {
+                        let character = self.character_setup(c.id);
+                        if let Some(m) = &self.mascot {
+                            m.stage
+                                .send(crate::stage::Intent::SetCharacter(Box::new(character)));
                         }
                     }
                 }
@@ -654,7 +648,7 @@ impl App {
                 let sampled = Instant::now();
                 // Use the clock speed directly. Wrapped phase differences
                 // alias after a delayed refresh and can falsely freeze a preview.
-                let beat_rate = self.beat_clock.get().0.bpm() / 60.0;
+                let beat_rate = self.beat_clock.lock().unwrap_or_else(|e| e.into_inner()).0.bpm() / 60.0;
                 let control = crate::mascot::preview::Control {
                     dance: self.dance_options(),
                     idle: o.0,

@@ -23,9 +23,7 @@ pub mod render;
 #[cfg(all(test, not(feature = "gpu")))]
 mod render_tests;
 pub mod rig;
-#[allow(dead_code)]
 pub mod typeset;
-#[allow(dead_code)]
 pub mod surface;
 mod yohta_pack;
 

@@ -1,17 +1,27 @@
 use super::*;
 
-impl App {
-    pub(super) fn mascot_window(&self) -> Option<window::Id> {
-        #[cfg(windows)]
-        {
-            self.mascot.as_ref().map(|m| m.id)
-        }
-        #[cfg(not(windows))]
-        {
-            None
-        }
-    }
+/// The app's side of the desktop character: the stage thread's handle and
+/// what was last sent to it, so only changes are sent.
+#[cfg(windows)]
+pub(super) struct MascotStage {
+    pub stage: crate::stage::Stage,
+    pub character: &'static str,
+    size: f32,
+    rows: usize,
+    /// Annotation owns input, so the character is hidden.
+    pub hidden: bool,
+    /// The character has sleep artwork, which keeps audio listening.
+    pub sleep: bool,
+    /// Visible and not busy: an idle sound may play.
+    pub free: bool,
+    /// Moving fast enough that timers need to be fine.
+    pub animating: bool,
+    options: crate::mascot::desktop::Options,
+    menu: Vec<crate::mascot::desktop::Item>,
+    audio: (crate::mascot::companionship::Audio, bool),
+}
 
+impl App {
     pub(super) fn mascot_options(&self) -> crate::mascot::desktop::Options {
         let s = self.session.settings();
         crate::mascot::desktop::Options {
@@ -30,13 +40,15 @@ impl App {
                 s.float(character::IDLE_MIN) as f32 * 60.0,
                 s.float(character::IDLE_MAX) as f32 * 60.0,
             ),
-            music: self.music_level(),
-            energy: self.music_energy(),
-            beat: self.beat_phase(),
+            // The stage samples these from `Signals` on its own clock.
+            music: 0.0,
+            energy: None,
+            beat: None,
             dance: self.dance_options(),
         }
     }
 
+    /// A menu row chosen on the stage.
     #[cfg_attr(not(windows), allow(unused_variables))]
     pub(super) fn mascot_message(
         &mut self,
@@ -48,128 +60,214 @@ impl App {
         use crate::mascot::Msg;
         match msg {
             // Menu entries go through the registry like every other surface.
-            Msg::Command(id) => {
-                #[cfg(windows)]
-                if let Some(m) = &mut self.mascot {
-                    m.close_menu();
-                }
-                out.collect(self.dispatch(id, now).ok());
-            }
+            Msg::Command(id) => out.collect(self.dispatch(id, now).ok()),
             Msg::CharacterSettings => {
-                #[cfg(windows)]
-                if let Some(m) = &mut self.mascot {
-                    m.close_menu();
-                }
                 self.page = Page::Character;
                 tasks.push(self.open_settings());
             }
-            #[cfg(windows)]
-            msg => {
-                let options = self.mascot_options();
-                let audio = self.companion_audio();
-                let voice_busy = self.voice.busy(self.voice_clock.elapsed().as_secs_f64());
-                if let Some(m) = &mut self.mascot {
-                    m.set_audio(audio);
-                    m.set_voice_busy(voice_busy);
-                    let (task, save) = m.update(msg, &options);
-                    tasks.push(task);
-                    if let Some((x, y)) = save {
-                        out.sets.push((character::X, Value::Float(x)));
-                        out.sets.push((character::Y, Value::Float(y)));
-                    }
-                }
-                self.play_mascot_sound();
-            }
-            #[cfg(not(windows))]
             _ => {}
         }
     }
 
-    /// Opens, closes, resizes and hides the character window to match its
-    /// settings. It stays while annotation is Off and steps aside while the
-    /// annotation surface owns input.
+    /// What the stage reported: gestures and line sounds to voice, a spot to
+    /// save, a menu row, or a change in how busy the character is.
+    #[cfg(windows)]
+    pub(super) fn character_event(
+        &mut self,
+        event: crate::stage::Event,
+        now: Millis,
+        out: &mut Outcomes,
+        tasks: &mut Vec<Task<Message>>,
+    ) {
+        use crate::stage::Event;
+        match event {
+            Event::Ready => {}
+            Event::Voice { gestures, line } => self.play_mascot_sound(gestures, line),
+            Event::Placed(x, y) => {
+                out.sets.push((character::X, Value::Float(x)));
+                out.sets.push((character::Y, Value::Float(y)));
+            }
+            Event::Menu(msg) => self.mascot_message(msg, now, out, tasks),
+            Event::Status { free, animating } => {
+                if let Some(m) = &mut self.mascot {
+                    m.free = free;
+                    m.animating = animating;
+                }
+            }
+        }
+    }
+
+    /// The live music inputs the stage samples for itself.
+    #[cfg(windows)]
+    pub(super) fn mascot_signals(&self) -> crate::stage::Signals {
+        let s = self.session.settings();
+        crate::stage::Signals {
+            meter: self.music.as_ref().map(Arc::downgrade).unwrap_or_default(),
+            follower: self.beat.as_ref().map(Arc::downgrade).unwrap_or_default(),
+            clock: self.beat_clock.clone(),
+            music_on: s.bool(character::MUSIC),
+            strength: s.float(character::MUSIC_STRENGTH) as f32,
+            beat_offset: match s.choice(character::BEAT_TIMING) {
+                "earlier" => 0.06,
+                "later" => -0.06,
+                _ => 0.0,
+            },
+        }
+    }
+
+    /// Tells the stage what is playing and whether a voice line is busy.
+    #[cfg(windows)]
+    pub(super) fn sync_mascot_audio(&mut self) {
+        let audio = (
+            self.companion_audio(),
+            self.voice.busy(self.voice_clock.elapsed().as_secs_f64()),
+        );
+        if let Some(m) = &mut self.mascot
+            && m.audio != audio
+        {
+            m.audio = audio;
+            m.stage.send(crate::stage::Intent::Audio {
+                audio: audio.0,
+                voice_busy: audio.1,
+            });
+        }
+    }
+
+    /// Everything the stage needs to show a character, from the app's packs.
+    #[cfg(windows)]
+    pub(super) fn character_setup(&mut self, id: &'static str) -> crate::stage::Character {
+        let rig = self.character_rig(id);
+        let lines = self.character_lines(id);
+        let c = self.characters.iter().find(|c| c.id == id);
+        let click_compress = c.is_none_or(|c| {
+            c.reaction_visual(crate::mascot::reactions::Event::Click)
+                == crate::mascot::reactions::Visual::Compress
+        });
+        let pictures = c.map(character_pictures).unwrap_or_default();
+        let fall = c.is_some_and(|c| {
+            let user = characters::load_overrides(c.id)
+                .reactions
+                .unwrap_or_default();
+            crate::mascot::reactions::falls(&c.pack_reactions(), &user)
+        });
+        crate::stage::Character {
+            id,
+            rig,
+            lines,
+            click_compress,
+            pictures,
+            fall,
+        }
+    }
+
+    /// Starts, stops, resizes and hides the character on the stage to match
+    /// its settings. It stays while annotation is Off and steps aside while the
+    /// annotation surface owns input. Only what changed is sent.
     pub(super) fn reconcile_mascot(&mut self) -> Task<Message> {
         #[cfg(windows)]
         {
+            use crate::stage::Intent;
             let s = self.session.settings();
             let want = s.bool(character::ENABLED);
             let size = s.float(character::HEIGHT) as f32;
             let hidden = self.session.overlay_state() == OverlayState::Interactive;
-            // The menu is as tall as its visible rows.
-            let rows = self.mascot_menu().len();
             let selected = s.choice(character::CHARACTER);
             let anchor = (s.float(character::X), s.float(character::Y));
+            if !want {
+                if self.mascot.take().is_some() {
+                    self.stop_character_voice();
+                }
+                return Task::none();
+            }
+            // The menu is as tall as its visible rows.
+            let menu = self.mascot_menu();
+            let rows = menu.len();
+            let options = self.mascot_options();
             let stale = self
                 .mascot
                 .as_ref()
-                .is_some_and(|m| m.character() != selected);
-            let options = self.mascot_options();
-            if want && (self.mascot.is_none() || stale) {
-                let rig = self.character_rig(selected);
-                let lines = self.character_lines(selected);
+                .is_some_and(|m| m.character != selected);
+            if self.mascot.is_none() || stale {
                 self.stop_character_voice();
-                let c = self.characters.iter().find(|c| c.id == selected);
-                self.reaction_sounds = c.map(|c| c.reaction_sounds()).unwrap_or_default();
-                let compress = c.is_none_or(|c| {
-                    c.reaction_visual(crate::mascot::reactions::Event::Click)
-                        == crate::mascot::reactions::Visual::Compress
-                });
-                let pictures = c.map(character_pictures).unwrap_or_default();
-                let fall = c.is_some_and(|c| {
-                    let user = characters::load_overrides(c.id)
-                        .reactions
-                        .unwrap_or_default();
-                    crate::mascot::reactions::falls(&c.pack_reactions(), &user)
-                });
+                let character = self.character_setup(selected);
+                self.reaction_sounds = self
+                    .characters
+                    .iter()
+                    .find(|c| c.id == selected)
+                    .map(|c| c.reaction_sounds())
+                    .unwrap_or_default();
+                let sleep = character.pictures.settings.zzz;
                 match &mut self.mascot {
                     Some(m) => {
-                        m.set_rig(selected, rig);
-                        m.set_lines(lines, &options);
-                        m.set_click_compress(compress);
-                        m.set_pictures(pictures);
-                        m.set_fall(fall);
+                        m.stage.send(Intent::SetCharacter(Box::new(character)));
+                        m.character = selected;
+                        m.sleep = sleep;
                     }
                     None => {
-                        let (mut m, open) = crate::mascot::desktop::Desktop::open(
-                            selected, rig, size, anchor, rows, hidden,
-                        );
-                        m.set_lines(lines, &options);
-                        m.set_click_compress(compress);
-                        m.set_pictures(pictures);
-                        m.set_fall(fall);
-                        self.mascot = Some(m);
-                        return open.map(Message::WindowOpened);
+                        let stage = crate::stage::Stage::spawn(|event| {
+                            platform::send(External::Character(event))
+                        });
+                        stage.send(Intent::Open {
+                            character: Box::new(character),
+                            size,
+                            anchor,
+                            rows,
+                            hidden,
+                            options,
+                        });
+                        self.mascot = Some(MascotStage {
+                            stage,
+                            character: selected,
+                            size,
+                            rows,
+                            hidden,
+                            sleep,
+                            free: false,
+                            animating: false,
+                            options,
+                            menu: menu.clone(),
+                            audio: (crate::mascot::companionship::Audio::Unknown, false),
+                        });
+                        let items = menu.clone();
+                        if let Some(m) = &self.mascot {
+                            m.stage.send(Intent::Menu(items));
+                        }
                     }
                 }
             }
-            match (&mut self.mascot, want) {
-                (None, true) => {}
-                (Some(_), false) => {
-                    self.stop_character_voice();
-                    let m = self.mascot.take().expect("mascot window");
-                    return window::close(m.id);
-                }
-                (Some(m), true) => {
-                    m.resize(size, rows);
-                    let was_hidden = m.is_hidden();
-                    let task = m.set_hidden(hidden);
-                    if hidden && !was_hidden {
-                        // Annotation owns input: character audio stops.
-                        self.voice.stop();
-                        self.audio.stop_voice();
-                    }
-                    let Some(m) = &mut self.mascot else {
-                        return task;
-                    };
+            let signals = self.mascot_signals();
+            let Some(m) = &mut self.mascot else {
+                return Task::none();
+            };
+            m.stage.send(Intent::Signals(signals));
+            if (size, rows) != (m.size, m.rows) {
+                m.size = size;
+                m.rows = rows;
+                m.stage.send(Intent::Resize { size, rows });
+            }
+            if options != m.options {
+                m.options = options;
+                m.stage.send(Intent::Options(options));
+            }
+            if menu != m.menu {
+                m.menu = menu.clone();
+                m.stage.send(Intent::Menu(menu));
+            }
+            let was_hidden = m.hidden;
+            if hidden != was_hidden {
+                m.hidden = hidden;
+                m.stage.send(Intent::Hidden(hidden));
+                if hidden {
+                    // Annotation owns input: character audio stops.
+                    self.voice.stop();
+                    self.audio.stop_voice();
+                } else {
                     // Back from annotation: the character can say so.
-                    if was_hidden && !hidden {
-                        m.say(crate::mascot::lines::Trigger::AnnotationEnd, &options);
-                    }
-                    self.play_mascot_sound();
-                    return task;
+                    m.stage
+                        .send(Intent::Say(crate::mascot::lines::Trigger::AnnotationEnd));
                 }
-                (None, false) => {}
             }
+            self.sync_mascot_audio();
         }
         Task::none()
     }
@@ -177,17 +275,20 @@ impl App {
     /// Routes the desktop character's gesture events through the one
     /// character voice, then its line sound. A trigger plays one sound:
     /// an accepted reaction sound wins over that trigger's line sound.
-    pub(super) fn play_mascot_sound(&mut self) {
+    pub(super) fn play_mascot_sound(
+        &mut self,
+        gestures: Vec<crate::mascot::reactions::Event>,
+        line: Option<crate::mascot::lines::SoundRef>,
+    ) {
         #[cfg(windows)]
         {
             use crate::mascot::reactions::{Event, Quiet};
             let now = self.voice_clock.elapsed().as_secs_f64();
-            let Some(m) = &mut self.mascot else {
+            let Some(m) = &self.mascot else {
                 return;
             };
-            let mut events = m.take_events();
-            let (free, hidden) = (m.idle_free(), m.is_hidden());
-            let line = m.take_sound();
+            let mut events = gestures;
+            let (free, hidden) = (m.free, m.hidden);
             let pick = || (self.voice_clock.elapsed().subsec_nanos() % 1000) as f32 / 1000.0;
             if self.voice.idle_due(&self.reaction_sounds, free, now, pick)
                 && !platform::windows::foreground_fullscreen()
@@ -211,9 +312,9 @@ impl App {
             if !reacted
                 && let Some(sound) = line
                 && let Some(seconds) = self.play_line_sound(&sound)
-                && let Some(m) = &mut self.mascot
+                && let Some(m) = &self.mascot
             {
-                m.hold_speech(seconds);
+                m.stage.send(crate::stage::Intent::HoldSpeech(seconds));
             }
             self.audio.release_idle(self.session.is_enabled());
         }

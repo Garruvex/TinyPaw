@@ -11,12 +11,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use iced::widget::canvas::{self, Frame, Geometry};
-use iced::widget::{Column, button, canvas as canvas_widget, column, container, row, space, text};
-use iced::window::{self, settings::PlatformSpecific};
-use iced::{
-    Alignment, Element, Length, Point, Rectangle, Renderer, Size, Task, Theme, Vector, mouse,
-};
+use iced::{Point, Rectangle, Size, Vector};
 
 use super::Msg;
 use super::companionship::{self, Controller, State};
@@ -25,7 +20,6 @@ use super::motion::{Animator, Expression, Inputs, PartMotion, Pose};
 use super::reactions::Event;
 use super::rig::Rig;
 use super::surface::Surface;
-use crate::app::Message;
 use crate::features::mascot as feature;
 use crate::platform::windows as native;
 use crate::view::theme;
@@ -526,7 +520,7 @@ fn flight(
 }
 
 /// Character choices that change behaviour, read from settings each update.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Options {
     /// Unsaved style preview for the currently selected character.
     pub bop: Option<super::motion::Bop>,
@@ -548,6 +542,7 @@ pub struct Options {
 }
 
 /// One menu row. `checked` draws a switch; `on_press: None` disables it.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Item {
     pub icon: crate::view::icons::Glyph,
     pub label: &'static str,
@@ -633,7 +628,6 @@ pub struct Effects {
 }
 
 pub struct Desktop {
-    pub id: window::Id,
     hwnd: isize,
     rig: Rig,
     /// The selected character this rig was loaded for.
@@ -707,51 +701,9 @@ impl Desktop {
     /// once its native handle arrives. (A window opened invisible and shown
     /// later never presents a frame with Iced 0.14 here, so it starts visible
     /// but out of sight.)
-    pub fn open(
-        character: &'static str,
-        rig: Rig,
-        size: f32,
-        anchor: (f64, f64),
-        rows: usize,
-        hidden: bool,
-    ) -> (Self, Task<window::Id>) {
-        let layout = layout(
-            size,
-            rig.visible_height(),
-            rig.size(),
-            rig.anchor(),
-            rows,
-            0.0,
-        );
-        let (id, task) = window::open(window::Settings {
-            size: layout.window,
-            position: window::Position::Specific(Point::new(-32000.0, -32000.0)),
-            visible: true,
-            decorations: false,
-            transparent: true,
-            resizable: false,
-            closeable: false,
-            minimizable: false,
-            level: window::Level::AlwaysOnTop,
-            exit_on_close_request: false,
-            platform_specific: PlatformSpecific {
-                skip_taskbar: true,
-                drag_and_drop: false,
-                ..PlatformSpecific::default()
-            },
-            ..window::Settings::default()
-        });
-        (
-            Self::new(id, character, rig, size, anchor, rows, hidden),
-            task,
-        )
-    }
-
-    /// The character's state, with no window yet. The host attaches its
-    /// native window with `attach`: the Iced window for the app today, the
-    /// stage's own window otherwise.
+    /// The character's state, with no window yet. The stage attaches its
+    /// native window with `attach`.
     pub fn new(
-        id: window::Id,
         character: &'static str,
         rig: Rig,
         size: f32,
@@ -769,7 +721,6 @@ impl Desktop {
         );
         let parts = rig.motion_parts();
         Self {
-            id,
             hwnd: 0,
             rig,
             character,
@@ -956,9 +907,6 @@ impl Desktop {
             && !self.companion.sleep_due
     }
 
-    pub fn sleep_enabled(&self) -> bool {
-        self.pictures.settings.sleep
-    }
     pub fn set_voice_busy(&mut self, busy: bool) {
         self.voice_busy = busy;
     }
@@ -966,14 +914,7 @@ impl Desktop {
         self.audio = audio;
     }
 
-    pub fn is_hidden(&self) -> bool {
-        self.hidden
-    }
 
-    /// The selected character this window shows.
-    pub fn character(&self) -> &'static str {
-        self.character
-    }
 
     /// Shows another character, keeping its feet where these were.
     pub fn set_rig(&mut self, character: &'static str, rig: Rig) {
@@ -1006,10 +947,6 @@ impl Desktop {
         }
     }
 
-    /// The native window, once known; 0 before then.
-    pub fn hwnd(&self) -> isize {
-        self.hwnd
-    }
 
     /// Closes the menu, letting it fade away.
     pub fn close_menu(&mut self) {
@@ -1083,37 +1020,6 @@ impl Desktop {
 
     /// Handles window input and polling. Returns window operations and, when
     /// a drag ends, the ground anchor to save.
-    /// The Iced host: runs a step and turns its effects into window tasks.
-    pub fn update(&mut self, msg: Msg, o: &Options) -> (Task<Message>, Option<(f64, f64)>) {
-        if let Msg::Native(hwnd) = msg {
-            native::never_activate(hwnd);
-            // Display, DPI, lock and suspend notifications while Off.
-            native::observe(hwnd);
-        }
-        let fx = self.step(msg, o);
-        (self.tasks(&fx), fx.save)
-    }
-
-    fn tasks(&self, fx: &Effects) -> Task<Message> {
-        let mut tasks = Vec::new();
-        match fx.passthrough {
-            Some(true) => tasks.push(window::enable_mouse_passthrough(self.id)),
-            Some(false) => tasks.push(window::disable_mouse_passthrough(self.id)),
-            None => {}
-        }
-        if let Some(hide) = fx.hide {
-            tasks.push(window::set_mode(
-                self.id,
-                if hide {
-                    window::Mode::Hidden
-                } else {
-                    window::Mode::Windowed
-                },
-            ));
-        }
-        Task::batch(tasks)
-    }
-
     /// Attaches the native window this character is shown in.
     pub fn attach(&mut self, hwnd: isize, o: &Options) -> Effects {
         self.step(Msg::Native(hwnd), o)
@@ -1799,14 +1705,6 @@ impl Desktop {
     }
 
     /// Steps aside while annotation owns input; comes back at the same spot.
-    pub fn set_hidden(&mut self, hidden: bool) -> Task<Message> {
-        let fx = Effects {
-            hide: self.hide(hidden),
-            ..Effects::default()
-        };
-        self.tasks(&fx)
-    }
-
     /// The window change a new hidden state needs, if any.
     pub fn hide(&mut self, hidden: bool) -> Option<bool> {
         if hidden == self.hidden {
@@ -1829,11 +1727,6 @@ impl Desktop {
         Some(hidden)
     }
 
-    /// Carried or in flight: the window itself is moving, which looks
-    /// choppy at anything less than once per display frame.
-    pub fn moving(&self) -> bool {
-        self.flight.is_some() || self.press.as_ref().is_some_and(|p| p.dragging)
-    }
 
     /// How often to poll, or `None` when nothing needs watching. Anything
     /// under 100 ms means motion: the app then polls once per display frame.
@@ -1947,156 +1840,6 @@ impl Desktop {
         }
         over(&self.layout, &self.rig, &self.pose, p)
     }
-
-    pub fn view<'a>(&'a self, items: Vec<Item>, o: &Options) -> Element<'a, Message> {
-        let l = &self.layout;
-        let slot = |side: Side, items: &mut Option<Vec<Item>>| -> Element<'a, Message> {
-            let width = match side {
-                Side::Left => l.character.x,
-                Side::Right => l.window.width - l.character.x - l.character.width,
-            };
-            match (self.menu == Some(side), items.take()) {
-                (true, Some(items)) => {
-                    let r = l.menu(side);
-                    // The bubble itself is drawn on the stage canvas, which
-                    // repaints whole every frame, so it can pop and fade.
-                    let rows = items.into_iter().enumerate().map(|(i, item)| {
-                        let hover = self.hover.get(i).copied().unwrap_or(0.0);
-                        menu_row(item, hover, self.row_reveal(i))
-                    });
-                    let menu = container(Column::with_children(rows))
-                        .padding(MENU_PAD)
-                        .width(MENU_W)
-                        .height(r.height);
-                    let menu = container(menu).width(width).align_x(match side {
-                        Side::Left => Alignment::Start,
-                        Side::Right => Alignment::End,
-                    });
-                    column![space().height(r.y), menu].width(width).into()
-                }
-                (_, rest) => {
-                    *items = rest;
-                    space().width(width).into()
-                }
-            }
-        };
-        let mut items = Some(items);
-        let _ = o;
-        let stage = canvas_widget(Stage { desktop: self })
-            .width(Length::Fill)
-            .height(Length::Fill);
-        let menus = row![
-            slot(Side::Left, &mut items),
-            space().width(l.character.width),
-            slot(Side::Right, &mut items)
-        ]
-        .width(Length::Fill)
-        .height(Length::Fill);
-        let body = iced::widget::stack![stage, menus];
-        // Always a stack with a bubble layer, so a bubble appearing doesn't
-        // change the widget structure under the stage's state.
-        let Some(speech) = self.speech.as_ref().filter(|_| o.lines) else {
-            return iced::widget::stack![body, space()].into();
-        };
-        // The bubble sits by its anchor, above the head unless the
-        // character says otherwise, kept inside the window. It never takes
-        // clicks.
-        let b = self.lines.bubble;
-        let place = speech_place(l, b, self.rig.visible_rows().0, self.menu);
-        let width = match place {
-            SpeechPlace::Above { width, .. } | SpeechPlace::Beside { width, .. } => width,
-        };
-        // Pops up from its anchor, with a little bounce.
-        let (pop, alpha) = if self.reduced {
-            (1.0, 1.0)
-        } else {
-            let t = (self.now - self.speech_at) / SPEECH_POP;
-            (ease_out_back(t), (t * 3.0).min(1.0))
-        };
-        let lift = ((1.0 - pop) * 10.0).max(0.0);
-        let fill = faded(
-            iced::Color::from_rgb8(b.background[0], b.background[1], b.background[2]),
-            alpha,
-        );
-        let ink = faded(
-            iced::Color::from_rgb8(b.text[0], b.text[1], b.text[2]),
-            alpha,
-        );
-        let line = faded(ink, 0.28);
-        let bubble = container(
-            text(speech.text().to_owned())
-                .size(15)
-                .font(theme::MEDIUM)
-                .color(ink),
-        )
-        .padding([10, 15])
-        .max_width(width)
-        .style(move |_: &Theme| container::Style {
-            background: Some(fill.into()),
-            border: iced::Border {
-                radius: 16.0.into(),
-                width: 1.5,
-                color: line,
-            },
-            ..container::Style::default()
-        });
-        let grow = SPEECH_TAIL * pop.clamp(0.0, 1.0);
-        let (band, base, tip, normal) = match place {
-            // Beside the anchor: the bubble's bottom a little below it, the
-            // tail pointing straight at it from the bubble's edge.
-            SpeechPlace::Beside {
-                left,
-                width,
-                edge,
-                at,
-                side,
-            } => {
-                let band = container(row![
-                    space().width(left),
-                    container(bubble).width(width).align_x(match side {
-                        Side::Left => Alignment::End,
-                        Side::Right => Alignment::Start,
-                    })
-                ])
-                .width(Length::Fill)
-                .height((at.y + SIDE_DROP + lift).min(l.window.height).max(1.0))
-                .align_y(Alignment::End);
-                let base = Point::new(edge, at.y + lift);
-                let (tip, normal) = match side {
-                    Side::Left => (Point::new(edge + grow, base.y), Vector::new(1.0, 0.0)),
-                    Side::Right => (Point::new(edge - grow, base.y), Vector::new(-1.0, 0.0)),
-                };
-                (band, base, tip, normal)
-            }
-            // Above the anchor, centred on it and kept inside the window.
-            SpeechPlace::Above { left, width, at } => {
-                let bottom = at.y - SPEECH_TAIL - lift;
-                let band = container(row![
-                    space().width(left),
-                    container(bubble).width(width).center_x(width)
-                ])
-                .width(Length::Fill)
-                .height(bottom.max(1.0))
-                .align_y(Alignment::End);
-                // The tail hangs from the middle of the bubble, leaning
-                // toward the anchor, and grows in with the pop.
-                let centre = left + width / 2.0;
-                let base = Point::new(centre, bottom);
-                let tip = Point::new(at.x.clamp(centre - 12.0, centre + 12.0), base.y + grow);
-                (band, base, tip, Vector::new(0.0, 1.0))
-            }
-        };
-        let tail = canvas_widget(SpeechTail {
-            base,
-            tip,
-            normal,
-            fill,
-            line,
-        })
-        .width(Length::Fill)
-        .height(Length::Fill);
-        iced::widget::stack![body, band, tail].into()
-    }
 }
 
 /// How far a side bubble's bottom sits below its anchor, so the tail
@@ -2182,289 +1925,6 @@ fn over(l: &Layout, rig: &Rig, pose: &Pose, p: Point) -> bool {
     let drawn = Point::new((p.x - c.x) / l.scale, (p.y - c.y) / l.scale);
     let local = super::motion::unplaced(pose, rig.anchor(), rig.size().height, drawn);
     rig.hit(local, pose).is_some()
-}
-
-/// One menu row: icon, label and, for a setting, a switch. `hover` (0–1)
-/// lights the row and nudges it right; `reveal` (0–1) fades and slides it in.
-fn menu_row(item: Item, hover: f32, reveal: f32) -> Element<'static, Message> {
-    use crate::view::icons;
-    let enabled = item.on_press.is_some();
-    let hover = if enabled { hover } else { 0.0 };
-    let (fg, glyph) = if enabled {
-        (
-            mix(theme::TEXT_SOFT, iced::Color::WHITE, hover),
-            mix(theme::TEXT_SOFT, theme::CYAN_TEXT, hover),
-        )
-    } else {
-        (theme::DISABLED, theme::DISABLED)
-    };
-    let mut content = row![
-        icons::icon(item.icon, 20.0, faded(glyph, reveal)),
-        text(item.label)
-            .size(15)
-            .font(theme::MEDIUM)
-            .color(faded(fg, reveal)),
-        space().width(Length::Fill),
-    ]
-    .spacing(12)
-    .height(Length::Fill)
-    .align_y(Alignment::Center);
-    if let Some(on) = item.checked {
-        content = content.push(switch(on, enabled, reveal));
-    }
-    let shift = (1.0 - reveal) * 10.0 + hover * 3.0;
-    button(content)
-        .width(Length::Fill)
-        .height(ROW_H)
-        .padding(iced::Padding {
-            top: 0.0,
-            right: 10.0,
-            bottom: 0.0,
-            left: 10.0 + shift,
-        })
-        .style(move |_: &Theme, status| {
-            let pressed = if status == button::Status::Pressed {
-                0.06
-            } else {
-                0.0
-            };
-            button::Style {
-                background: Some(
-                    iced::Color::from_rgba(1.0, 1.0, 1.0, (0.10 * hover + pressed) * reveal).into(),
-                ),
-                text_color: fg,
-                border: iced::Border {
-                    radius: 10.0.into(),
-                    ..iced::Border::default()
-                },
-                ..button::Style::default()
-            }
-        })
-        .on_press_maybe(item.on_press.map(Message::Mascot))
-        .into()
-}
-
-/// A small on/off pill for menu rows that toggle a setting.
-fn switch(on: bool, enabled: bool, alpha: f32) -> Element<'static, Message> {
-    let track = match (on, enabled) {
-        (_, false) => theme::DISABLED,
-        (true, true) => theme::CYAN,
-        (false, true) => iced::Color::from_rgb8(0x4A, 0x4E, 0x5A),
-    };
-    let knob = container(space())
-        .width(12)
-        .height(12)
-        .style(theme::fill(faded(iced::Color::WHITE, alpha), 6.0));
-    container(knob)
-        .width(30)
-        .height(18)
-        .padding(3)
-        .align_x(if on { Alignment::End } else { Alignment::Start })
-        .style(theme::fill(faded(track, alpha), 9.0))
-        .into()
-}
-
-/// The menu's speech-bubble outline: a rounded box with a tail on the side
-/// facing the character. Returns the path and the tail's tip.
-fn menu_bubble(r: Rectangle, side: Side) -> (canvas::Path, Point) {
-    // Inset so the outline's stroke stays inside the menu's bounds.
-    let (x, y, w, h) = (r.x + 1.5, r.y + 1.5, r.width - 3.0, r.height - 3.0);
-    let rad = 16.0f32.min(h / 3.0);
-    let low = y + h - rad - 2.0;
-    let high = low - 16.0;
-    let tip = match side {
-        Side::Right => Point::new(x - MENU_TAIL, low + 8.0),
-        Side::Left => Point::new(x + w + MENU_TAIL, low + 8.0),
-    };
-    let path = canvas::Path::new(|p| {
-        p.move_to(Point::new(x + rad, y));
-        p.line_to(Point::new(x + w - rad, y));
-        p.arc_to(Point::new(x + w, y), Point::new(x + w, y + rad), rad);
-        if side == Side::Left {
-            p.line_to(Point::new(x + w, high));
-            p.line_to(tip);
-            p.line_to(Point::new(x + w, low));
-        }
-        p.line_to(Point::new(x + w, y + h - rad));
-        p.arc_to(
-            Point::new(x + w, y + h),
-            Point::new(x + w - rad, y + h),
-            rad,
-        );
-        p.line_to(Point::new(x + rad, y + h));
-        p.arc_to(Point::new(x, y + h), Point::new(x, y + h - rad), rad);
-        if side == Side::Right {
-            p.line_to(Point::new(x, low));
-            p.line_to(tip);
-            p.line_to(Point::new(x, high));
-        }
-        p.line_to(Point::new(x, y + rad));
-        p.arc_to(Point::new(x, y), Point::new(x + rad, y), rad);
-        p.close();
-    });
-    (path, tip)
-}
-
-/// Draws the menu bubble scaled about its tail's tip, so it pops out of
-/// the character.
-fn draw_menu(frame: &mut Frame, r: Rectangle, side: Side, scale: f32, alpha: f32) {
-    let (path, tip) = menu_bubble(r, side);
-    frame.with_save(|f| {
-        f.translate(Vector::new(tip.x, tip.y));
-        f.scale(scale);
-        f.translate(Vector::new(-tip.x, -tip.y));
-        f.with_save(|f| {
-            f.translate(Vector::new(0.0, 3.0));
-            f.fill(&path, iced::Color::from_rgba(0.0, 0.0, 0.0, 0.28 * alpha));
-        });
-        f.fill(
-            &path,
-            iced::Color::from_rgba8(0x1D, 0x20, 0x2C, 0.97 * alpha),
-        );
-        f.stroke(
-            &path,
-            canvas::Stroke::default()
-                .with_color(iced::Color::from_rgba(1.0, 1.0, 1.0, 0.92 * alpha))
-                .with_width(2.0)
-                .with_line_join(canvas::LineJoin::Round),
-        );
-    });
-}
-
-/// The speech bubble's tail, drawn over the bubble's bottom edge so the
-/// two read as one outline. It never takes clicks.
-struct SpeechTail {
-    base: Point,
-    tip: Point,
-    /// Out of the bubble, toward the anchor: the base runs across it.
-    normal: Vector,
-    fill: iced::Color,
-    line: iced::Color,
-}
-
-impl canvas::Program<Message> for SpeechTail {
-    type State = ();
-
-    fn draw(
-        &self,
-        _: &(),
-        renderer: &Renderer,
-        _: &Theme,
-        bounds: Rectangle,
-        _: mouse::Cursor,
-    ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        let (b, tip, n) = (self.base, self.tip, self.normal);
-        // Across the base, and a little back into the bubble so the fill
-        // covers its edge.
-        let across = Vector::new(-n.y, n.x) * 8.0;
-        let back = n * -2.0;
-        let (one, two) = (b - across, b + across);
-        let shape = canvas::Path::new(|p| {
-            p.move_to(one + back);
-            p.line_to(tip);
-            p.line_to(two + back);
-            p.close();
-        });
-        frame.fill(&shape, self.fill);
-        let edges = canvas::Path::new(|p| {
-            p.move_to(one);
-            p.line_to(tip);
-            p.line_to(two);
-        });
-        frame.stroke(
-            &edges,
-            canvas::Stroke::default()
-                .with_color(self.line)
-                .with_width(1.5)
-                .with_line_join(canvas::LineJoin::Round),
-        );
-        vec![frame.into_geometry()]
-    }
-}
-
-struct Stage<'a> {
-    desktop: &'a Desktop,
-}
-
-impl Stage<'_> {
-    /// Canvas-local point to window coordinates: the stage fills the window.
-    fn window_point(&self, p: Point) -> Point {
-        p
-    }
-}
-
-impl canvas::Program<Message> for Stage<'_> {
-    type State = ();
-
-    fn update(
-        &self,
-        _: &mut (),
-        event: &canvas::Event,
-        bounds: Rectangle,
-        cursor: mouse::Cursor,
-    ) -> Option<canvas::Action<Message>> {
-        let over = cursor
-            .position_in(bounds)
-            .is_some_and(|p| self.desktop.over_character(self.window_point(p)));
-        match event {
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) if over => {
-                Some(canvas::Action::publish(Message::Mascot(Msg::Pressed)).and_capture())
-            }
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right))
-                if over && self.desktop.press.is_none() =>
-            {
-                Some(canvas::Action::publish(Message::Mascot(Msg::Menu)).and_capture())
-            }
-            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
-                if self.desktop.press.is_some() =>
-            {
-                Some(canvas::Action::publish(Message::Mascot(Msg::Released)).and_capture())
-            }
-            _ => None,
-        }
-    }
-
-    fn draw(
-        &self,
-        _: &(),
-        renderer: &Renderer,
-        _: &Theme,
-        bounds: Rectangle,
-        _: mouse::Cursor,
-    ) -> Vec<Geometry> {
-        let d = self.desktop;
-        let l = &d.layout;
-        let mut frame = Frame::new(renderer, bounds.size());
-        d.paint_character(&mut frame);
-        let mut sleep_overlay = Frame::new(renderer, bounds.size());
-        d.paint_overlay(&mut sleep_overlay);
-        let mut geometry = vec![frame.into_geometry(), sleep_overlay.into_geometry()];
-        if let Some((side, scale, alpha)) = d.menu_look() {
-            let mut ui = Frame::new(renderer, bounds.size());
-            draw_menu(&mut ui, l.menu(side), side, scale, alpha);
-            geometry.push(ui.into_geometry());
-        }
-        geometry
-    }
-
-    fn mouse_interaction(
-        &self,
-        _: &(),
-        bounds: Rectangle,
-        cursor: mouse::Cursor,
-    ) -> mouse::Interaction {
-        if self.desktop.press.as_ref().is_some_and(|p| p.dragging) {
-            mouse::Interaction::Grabbing
-        } else if cursor
-            .position_in(bounds)
-            .is_some_and(|p| self.desktop.over_character(self.window_point(p)))
-        {
-            mouse::Interaction::Pointer
-        } else {
-            mouse::Interaction::default()
-        }
-    }
 }
 
 mod paint;

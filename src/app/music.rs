@@ -68,26 +68,13 @@ impl App {
     /// The followed beat's phase, shifted by Beat timing, while music plays.
     pub(super) fn beat_phase(&self) -> Option<f32> {
         #[cfg(windows)]
-        if self.music_level() > 0.0 {
-            let offset = match self.session.settings().choice(character::BEAT_TIMING) {
-                "earlier" => 0.06,
-                "later" => -0.06,
-                _ => 0.0,
-            };
-            // The followed beat when there is one; the clock eases to it,
-            // and back to the steady pace when it's lost.
-            let target = self
-                .beat
-                .as_ref()
-                .and_then(|b| b.phase(offset).zip(b.bpm()));
-            let (mut clock, last) = self.beat_clock.get();
-            let now = Instant::now();
-            let dt = last.map_or(0.0, |l| now.duration_since(l).as_secs_f32());
-            let phase = clock.step(dt, target);
-            self.beat_clock.set((clock, Some(now)));
-            return Some(phase);
+        {
+            self.mascot_signals().sample().2
         }
-        None
+        #[cfg(not(windows))]
+        {
+            None
+        }
     }
 
     /// The Follow beat trial's status line.
@@ -105,7 +92,14 @@ impl App {
             return match (b.available(), b.bpm()) {
                 (false, _) => "Can't listen to the output".into(),
                 // The eased tempo the character is moving at.
-                (true, Some(_)) => format!("Following · {:.0} BPM", self.beat_clock.get().0.bpm()),
+                (true, Some(_)) => format!(
+                    "Following · {:.0} BPM",
+                    self.beat_clock
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .0
+                        .bpm()
+                ),
                 (true, None) => "Looking for a beat".into(),
             };
         }
@@ -219,8 +213,8 @@ impl App {
         #[cfg(windows)]
         {
             let on = self.session.settings().bool(character::MUSIC);
-            let showing = self.mascot.as_ref().is_some_and(|m| !m.is_hidden());
-            let sleep_audio = self.mascot.as_ref().is_some_and(|m| m.sleep_enabled()) && showing;
+            let showing = self.mascot.as_ref().is_some_and(|m| !m.hidden);
+            let sleep_audio = self.mascot.as_ref().is_some_and(|m| m.sleep) && showing;
             let wanted = (on && (showing || self.studio.motion_preview.is_some())) || sleep_audio;
             use crate::mascot::music::Source;
             use platform::beat::Target;
@@ -230,7 +224,9 @@ impl App {
                 self.music_source()
             };
             match (wanted, &self.music) {
-                (true, None) => self.music = Some(platform::music::Meter::start(source.clone())),
+                (true, None) => {
+                    self.music = Some(Arc::new(platform::music::Meter::start(source.clone())))
+                }
                 (true, Some(m)) => m.set_source(&source),
                 (false, Some(_)) => self.music = None,
                 (false, None) => {}
@@ -264,17 +260,22 @@ impl App {
                     b.set_sensitivity(sensitivity)
                 }
                 (Some(t), _) => {
-                    self.beat = Some(platform::beat::Follower::start(sensitivity, engine, t))
+                    self.beat = Some(Arc::new(platform::beat::Follower::start(
+                        sensitivity,
+                        engine,
+                        t,
+                    )))
                 }
                 (None, Some(_)) => self.beat = None,
                 (None, None) => {}
             }
-            if on && self.music.as_ref().is_some_and(|m| m.take_started()) {
-                let options = self.mascot_options();
-                if let Some(m) = &mut self.mascot {
-                    m.say(crate::mascot::lines::Trigger::MusicStart, &options);
-                }
-                self.play_mascot_sound();
+            if on
+                && self.music.as_ref().is_some_and(|m| m.take_started())
+                && let Some(m) = &self.mascot
+            {
+                m.stage.send(crate::stage::Intent::Say(
+                    crate::mascot::lines::Trigger::MusicStart,
+                ));
             }
         }
     }

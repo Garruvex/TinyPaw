@@ -84,7 +84,9 @@ pub enum Message {
     TextChanged(String),
     TextSubmit,
     Still(Ticket, Result<Vec<(OutputId, image::Handle)>, String>),
-    Mascot(crate::mascot::Msg),
+    /// Keeps the app-owned inputs to the character stage in step.
+    #[cfg(windows)]
+    MascotTick,
     /// An overlay just started taking input: keep it from occluding apps.
     Unoccluding(window::Id),
     Frame,
@@ -157,13 +159,14 @@ pub struct App {
     voice_clock: Instant,
     /// The playback meter, while music response is on and needed.
     #[cfg(windows)]
-    music: Option<platform::music::Meter>,
+    music: Option<Arc<platform::music::Meter>>,
     /// The Follow beat trial's loopback analysis, while it's on.
     #[cfg(windows)]
-    beat: Option<platform::beat::Follower>,
+    beat: Option<Arc<platform::beat::Follower>>,
     /// Eases between followed tempos and the steady pace, so the music
     /// motion never jumps. Stepped by wall time wherever the phase is read.
-    beat_clock: std::cell::Cell<(crate::mascot::music::BeatClock, Option<Instant>)>,
+    #[cfg(windows)]
+    beat_clock: crate::stage::SharedClock,
     editing_pack: Option<&'static str>,
     rebinding: Option<&'static str>,
     alt_down: bool,
@@ -177,7 +180,8 @@ pub struct App {
     spot_cursor: Option<(OutputId, Pt)>,
     /// The desktop character window, while enabled.
     #[cfg(windows)]
-    mascot: Option<crate::mascot::desktop::Desktop>,
+    #[cfg(windows)]
+    mascot: Option<mascot::MascotStage>,
     #[cfg(windows)]
     sources: Vec<platform::windows::WindowSource>,
     /// Why overlays cannot open on this desktop; settings stay usable.
@@ -576,8 +580,8 @@ impl App {
             }
             Message::External(External::DisplaysChanged) => {
                 #[cfg(windows)]
-                if let Some(m) = &mut self.mascot {
-                    m.displays_changed();
+                if let Some(m) = &self.mascot {
+                    m.stage.send(crate::stage::Intent::DisplaysChanged);
                 }
                 let displays = displays::list();
                 if self.displays != displays {
@@ -649,7 +653,15 @@ impl App {
                 self.run(id, now, &mut out);
             }
             Message::Set(id, value) => out.sets.push((id, value)),
-            Message::Mascot(msg) => self.mascot_message(msg, now, &mut out, &mut tasks),
+            #[cfg(windows)]
+            Message::External(External::Character(event)) => {
+                self.character_event(event, now, &mut out, &mut tasks)
+            }
+            #[cfg(windows)]
+            Message::MascotTick => {
+                self.sync_mascot_audio();
+                self.play_mascot_sound(Vec::new(), None);
+            }
             Message::Ui(ui) => tasks.push(self.ui_message(ui, now, &mut out)),
             Message::Key(key, modifiers, window) => {
                 if Some(window) == self.settings_window && self.rebinding.is_some() {
@@ -805,17 +817,6 @@ impl App {
                         Message::NativeReady(id, hwnd)
                     }));
                 }
-                #[cfg(windows)]
-                if self.mascot.as_ref().is_some_and(|m| m.id == id) {
-                    tasks.push(window::run(id, |w| {
-                        use iced::window::raw_window_handle::RawWindowHandle;
-                        let hwnd = match w.window_handle().map(|h| h.as_raw()) {
-                            Ok(RawWindowHandle::Win32(h)) => h.hwnd.get(),
-                            _ => 0,
-                        };
-                        Message::Mascot(crate::mascot::Msg::Native(hwnd))
-                    }));
-                }
                 if let Some(o) = self.overlays.iter_mut().find(|o| o.id == id) {
                     o.ready = true;
                     #[cfg(windows)]
@@ -844,8 +845,6 @@ impl App {
                 } else if Some(id) == self.first_run_window {
                     self.first_run_window = None;
                     tasks.push(window::close(id));
-                } else if self.mascot_window() == Some(id) {
-                    out.sets.push((character::ENABLED, Value::Bool(false)));
                 }
             }
             Message::Tick => {
@@ -1089,8 +1088,8 @@ impl App {
             }
             UiMsg::ResetMascotPosition => {
                 #[cfg(windows)]
-                if let Some(m) = &mut self.mascot {
-                    m.reset_position();
+                if let Some(m) = &self.mascot {
+                    m.stage.send(crate::stage::Intent::ResetPosition);
                 }
                 let unplaced = Value::Float(character::UNPLACED);
                 out.sets.push((character::X, unplaced.clone()));
@@ -1472,11 +1471,7 @@ impl App {
             || self.spotlight_anywhere.on()
             || self.lens_anywhere.on()
             || self.studio.motion_preview.is_some()
-            || self
-                .mascot
-                .as_ref()
-                .and_then(|m| m.poll_interval(&self.mascot_options()))
-                .is_some_and(|every| every < Duration::from_millis(100))
+            || self.mascot.as_ref().is_some_and(|m| m.animating)
     }
 
     fn sync_tray(&mut self) {
@@ -1650,26 +1645,10 @@ impl App {
             }
             return element;
         }
-        #[cfg(windows)]
-        if let Some(m) = self.mascot.as_ref().filter(|m| m.id == window) {
-            return m.view(self.mascot_menu(), &self.mascot_options());
-        }
         if Some(window) == self.first_run_window {
             return view::first_run::view(&self.registry);
         }
         iced::widget::space().into()
-    }
-
-    /// Character animation steps at the frame rate chosen in Settings.
-    fn animation_ticks(&self) -> Subscription<()> {
-        let rate = self
-            .session
-            .settings()
-            .choice(crate::features::mascot::FRAME_RATE);
-        match crate::features::mascot::frame_period(rate) {
-            Some(every) => iced::time::every(every).map(|_| ()),
-            None => Subscription::run(platform::refresh_ticks),
-        }
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -1739,31 +1718,11 @@ impl App {
         if self.spotlight_anywhere.on() && !self.session.is_pointing() {
             subs.push(Subscription::run(platform::refresh_ticks).map(|_| Message::SpotTick));
         }
+        // The stage runs the character on its own clock. This slow tick (every five seconds) only
+        // keeps what the app owns in step: what is playing, and idle sounds.
         #[cfg(windows)]
-        if let Some(m) = &self.mascot
-            && let Some(every) = m.poll_interval(&self.mascot_options())
-        {
-            // Every message rebuilds every open window, and idle polling
-            // runs at the chosen frame rate (60 per second by default). While
-            // Settings is open, idle motion polls at 15 per second instead so
-            // its pages stay responsive; carried, thrown and popping states
-            // keep full rate.
-            let idle = every == Duration::from_millis(33) && !m.moving();
-            // Carried or thrown: every display frame, whatever the chosen
-            // rate, since the window itself is moving. Otherwise moving: at
-            // the chosen frame rate. Still: a slow timer.
-            subs.push(if m.moving() {
-                Subscription::run(platform::refresh_ticks)
-                    .map(|_| Message::Mascot(crate::mascot::Msg::Poll))
-            } else if idle && self.settings_window.is_some() {
-                iced::time::every(Duration::from_millis(66))
-                    .map(|_| Message::Mascot(crate::mascot::Msg::Poll))
-            } else if every < Duration::from_millis(100) {
-                self.animation_ticks()
-                    .map(|_| Message::Mascot(crate::mascot::Msg::Poll))
-            } else {
-                iced::time::every(every).map(|_| Message::Mascot(crate::mascot::Msg::Poll))
-            });
+        if self.mascot.is_some() {
+            subs.push(iced::time::every(Duration::from_secs(5)).map(|_| Message::MascotTick));
         }
         // The Motion tab's preview animates while it's open.
         if self.studio.motion_preview.is_some() {

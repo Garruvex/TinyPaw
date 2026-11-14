@@ -908,29 +908,6 @@ pub fn move_window(hwnd: isize, x: i32, y: i32, size: Option<(i32, i32)>) {
     }
 }
 
-/// Clicks on this window never activate it, so the app the user was in keeps
-/// keyboard focus while they use the desktop character.
-pub fn never_activate(hwnd: isize) {
-    unsafe {
-        windows_sys::Win32::UI::Shell::SetWindowSubclass(hwnd as _, Some(no_activate), 0x4D41, 0);
-    }
-}
-
-unsafe extern "system" fn no_activate(
-    hwnd: windows_sys::Win32::Foundation::HWND,
-    msg: u32,
-    w: usize,
-    l: isize,
-    _: usize,
-    _: usize,
-) -> isize {
-    use windows_sys::Win32::UI::WindowsAndMessaging::*;
-    if msg == WM_MOUSEACTIVATE {
-        return MA_NOACTIVATE as isize;
-    }
-    unsafe { windows_sys::Win32::UI::Shell::DefSubclassProc(hwnd, msg, w, l) }
-}
-
 /// Keeps a full-screen overlay that is taking input from counting as an
 /// opaque window. Chromium, Electron (Discord, browsers) and other apps with
 /// occlusion tracking stop rendering when a visible, non-layered window covers

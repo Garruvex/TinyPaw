@@ -293,7 +293,7 @@ pub enum Expression {
 }
 
 /// Shared dance choices from Music settings. Style stays saved per character.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Dance {
     /// 0 follows sustained energy, 1 seated, 2 standing while music plays.
     pub pose: u8,

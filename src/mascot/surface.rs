@@ -107,7 +107,8 @@ impl Raster {
     }
 
     /// The buffer as straight (unpremultiplied) RGBA, for showing in a toolkit
-    /// that expects it.
+    /// that expects it. The studio preview (plan step 5) uses it.
+    #[allow(dead_code)]
     pub fn to_straight_rgba(&self) -> Vec<u8> {
         self.pixels
             .pixels()
@@ -117,10 +118,6 @@ impl Raster {
                 [c.red(), c.green(), c.blue(), c.alpha()]
             })
             .collect()
-    }
-
-    pub fn pixmap(&self) -> &Pixmap {
-        &self.pixels
     }
 
     /// A point in the current transform's space, in device pixels.
@@ -247,11 +244,6 @@ impl Raster {
                     .min(255.0) as u8;
             }
         }
-    }
-
-    /// Decoded images are cached by handle; drop any not in `keep`.
-    pub fn retain_images(&mut self, keep: impl Fn(&Id) -> bool) {
-        self.images.retain(|id, _| keep(id));
     }
 }
 

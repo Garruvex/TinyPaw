@@ -12,14 +12,18 @@
 
 #[cfg(windows)]
 mod native;
+#[cfg(windows)]
+mod signals;
 
 #[cfg(windows)]
 pub use native::{Stage, probe};
+#[cfg(windows)]
+pub use signals::{SharedClock, Signals};
 
 use crate::mascot::Msg;
 use crate::mascot::companionship::Audio;
 use crate::mascot::desktop::{Item, Options, Pictures};
-use crate::mascot::lines::{Lines, SoundRef};
+use crate::mascot::lines::{Lines, SoundRef, Trigger};
 use crate::mascot::reactions::Event as Gesture;
 use crate::mascot::rig::Rig;
 
@@ -49,8 +53,16 @@ pub enum Intent {
     },
     /// Switches to another character, keeping the feet where they were.
     SetCharacter(Box<Character>),
-    /// New behaviour settings, read on every step.
+    /// New behaviour settings, read on every step. Its music, energy and
+    /// beat fields are ignored: the stage samples those from [`Signals`].
     Options(Options),
+    /// Where to read the live music signals.
+    #[cfg(windows)]
+    Signals(Signals),
+    /// Say a line for this trigger, if the character has one.
+    Say(Trigger),
+    /// Keep the bubble up this many seconds, while its sound plays.
+    HoldSpeech(f32),
     /// The menu's rows, as the app wants them shown.
     Menu(Vec<Item>),
     /// What is playing and whether a voice line is busy.
@@ -73,10 +85,18 @@ pub enum Intent {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     Ready,
-    /// A gesture to react to, each raised once.
-    Gesture(Gesture),
-    /// A line's sound to play.
-    Sound(SoundRef),
+    /// Gestures to react to and a line's sound, from one step; each is
+    /// raised once.
+    Voice {
+        gestures: Vec<Gesture>,
+        line: Option<SoundRef>,
+    },
+    /// The character's state changed in a way the app plans around: free for
+    /// an idle sound, and moving fast enough to need fine timers.
+    Status {
+        free: bool,
+        animating: bool,
+    },
     /// A menu row was chosen: a registered command or the character page.
     Menu(Msg),
     /// The character came to rest here: the feet's physical position, to save.

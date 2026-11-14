@@ -23,6 +23,7 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
+use super::signals::Signals;
 use super::{Character, Event, Intent};
 use crate::mascot::Msg;
 use crate::mascot::desktop::{Desktop, Effects, Item, Options, SceneKey};
@@ -32,27 +33,35 @@ use crate::mascot::typeset::{IconCache, Typeset};
 /// A handle to the stage thread.
 pub struct Stage {
     intents: Sender<Intent>,
-    pub events: Receiver<Event>,
     window: Arc<AtomicIsize>,
     thread: Option<JoinHandle<()>>,
 }
 
+/// Where the stage sends its events.
+type Sink = Box<dyn Fn(Event) + Send>;
+
 impl Stage {
-    pub fn spawn() -> Self {
+    /// Starts the stage thread. `sink` is called on that thread with each
+    /// event, so it should only forward.
+    pub fn spawn(sink: impl Fn(Event) + Send + 'static) -> Self {
         let (intents, intent_rx) = channel();
-        let (event_tx, events) = channel();
         let window = Arc::new(AtomicIsize::new(0));
         let shared = window.clone();
+        let sink: Sink = Box::new(sink);
         let thread = std::thread::Builder::new()
             .name("tinypaw-stage".into())
-            .spawn(move || run(intent_rx, event_tx, shared))
+            .spawn(move || run(intent_rx, sink, shared))
             .expect("start the stage thread");
         Self {
             intents,
-            events,
             window,
             thread: Some(thread),
         }
+    }
+
+    /// The stage window's native handle, 0 until it exists.
+    pub fn hwnd(&self) -> isize {
+        self.window.load(Ordering::Acquire)
     }
 
     pub fn send(&self, intent: Intent) {
@@ -147,7 +156,16 @@ struct Window {
     next_poll: Instant,
     /// Something changed outside a poll; draw at the next one.
     dirty: bool,
-    events: Sender<Event>,
+    events: Sink,
+    signals: Option<Signals>,
+    /// The last status sent to the app.
+    status: Option<(bool, bool)>,
+}
+
+impl Window {
+    fn emit(&self, event: Event) {
+        (self.events)(event);
+    }
 }
 
 thread_local! {
@@ -162,7 +180,7 @@ fn with_window<R>(f: impl FnOnce(&mut Window) -> R) -> Option<R> {
     WINDOW.with(|w| w.try_borrow_mut().ok()?.as_mut().map(f))
 }
 
-fn run(intents: Receiver<Intent>, events: Sender<Event>, shared: Arc<AtomicIsize>) {
+fn run(intents: Receiver<Intent>, events: Sink, shared: Arc<AtomicIsize>) {
     let class = wide("TinyPawStage");
     let hwnd = unsafe {
         let instance = GetModuleHandleW(null());
@@ -214,12 +232,12 @@ fn run(intents: Receiver<Intent>, events: Sender<Event>, shared: Arc<AtomicIsize
             next_poll: Instant::now(),
             dirty: false,
             events,
+            signals: None,
+            status: None,
         });
     });
     shared.store(hwnd as isize, Ordering::Release);
-    with_window(|w| {
-        let _ = w.events.send(Event::Ready);
-    });
+    with_window(|w| w.emit(Event::Ready));
 
     loop {
         let mut msg: MSG = unsafe { zeroed() };
@@ -274,15 +292,7 @@ impl Window {
                     pictures,
                     fall,
                 } = *character;
-                let mut desktop = Desktop::new(
-                    iced::window::Id::unique(),
-                    id,
-                    rig,
-                    size,
-                    anchor,
-                    rows,
-                    hidden,
-                );
+                let mut desktop = Desktop::new(id, rig, size, anchor, rows, hidden);
                 desktop.set_lines(lines, &options);
                 desktop.set_click_compress(click_compress);
                 desktop.set_pictures(pictures);
@@ -314,6 +324,17 @@ impl Window {
             }
             Intent::Options(options) => self.options = Some(options),
             Intent::Menu(items) => self.items = items,
+            Intent::Signals(signals) => self.signals = Some(signals),
+            Intent::Say(trigger) => {
+                if let (Some(d), Some(options)) = (&mut self.desktop, self.options) {
+                    d.say(trigger, &options);
+                }
+            }
+            Intent::HoldSpeech(seconds) => {
+                if let Some(d) = &mut self.desktop {
+                    d.hold_speech(seconds);
+                }
+            }
             Intent::Audio { audio, voice_busy } => {
                 if let Some(d) = &mut self.desktop {
                     d.set_audio(audio);
@@ -358,14 +379,13 @@ impl Window {
             None => {}
         }
         if let Some((x, y)) = fx.save {
-            let _ = self.events.send(Event::Placed(x, y));
+            self.emit(Event::Placed(x, y));
         }
         if let Some(d) = &mut self.desktop {
-            for gesture in d.take_events() {
-                let _ = self.events.send(Event::Gesture(gesture));
-            }
-            if let Some(sound) = d.take_sound() {
-                let _ = self.events.send(Event::Sound(sound));
+            let gestures = d.take_events();
+            let line = d.take_sound();
+            if !gestures.is_empty() || line.is_some() {
+                self.emit(Event::Voice { gestures, line });
             }
         }
     }
@@ -377,16 +397,28 @@ impl Window {
         if now < self.next_poll {
             return self.next_poll - now;
         }
-        let Some(options) = self.options else {
+        let Some(mut options) = self.options else {
             return IDLE;
         };
+        if let Some(signals) = &self.signals {
+            (options.music, options.energy, options.beat) = signals.sample();
+        }
         let Some(d) = &mut self.desktop else {
             return IDLE;
         };
         let fx = d.step(Msg::Poll, &options);
         let interval = d.poll_interval(&options);
+        let animating = interval.is_some_and(|i| i < Duration::from_millis(100));
+        let status = (d.idle_free(), animating);
         self.effects(fx);
-        self.draw(interval.is_none_or(|i| i < Duration::from_millis(100)));
+        if self.status != Some(status) {
+            self.status = Some(status);
+            self.emit(Event::Status {
+                free: status.0,
+                animating: status.1,
+            });
+        }
+        self.draw(animating);
         let wait = interval.unwrap_or(IDLE);
         self.next_poll = Instant::now() + wait;
         wait
@@ -550,7 +582,7 @@ unsafe extern "system" fn window_proc(
                         && let Some(msg) = w.items.get(row).and_then(|i| i.on_press.clone())
                     {
                         d.close_menu();
-                        let _ = w.events.send(Event::Menu(msg));
+                        w.emit(Event::Menu(msg));
                     } else if armed.is_none() {
                         let fx = d.step(Msg::Released, &options);
                         w.effects(fx);
@@ -589,7 +621,12 @@ pub fn probe() {
         DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
     };
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
-    let stage = Stage::spawn();
+    // `quiet` turns off idle sway and eye tracking, to measure a resting character.
+    let quiet = std::env::args().any(|a| a == "quiet");
+    let (events, received) = std::sync::mpsc::channel();
+    let stage = Stage::spawn(move |event| {
+        let _ = events.send(event);
+    });
     let mut lines = Lines::default();
     for trigger in [Trigger::Click, Trigger::Pickup, Trigger::Drop] {
         lines.get_mut(trigger).push(Line {
@@ -633,8 +670,8 @@ pub fn probe() {
         options: Options {
             bop: None,
             dance: Default::default(),
-            eyes: true,
-            idle: true,
+            eyes: !quiet,
+            idle: !quiet,
             reduced: false,
             lines: true,
             quiet: false,
@@ -648,7 +685,7 @@ pub fn probe() {
         "stage probe running (pid {}); Ctrl+C to stop",
         std::process::id()
     );
-    while let Ok(event) = stage.events.recv() {
+    while let Ok(event) = received.recv() {
         println!("{event:?}");
     }
 }

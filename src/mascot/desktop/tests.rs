@@ -345,7 +345,7 @@ fn hit_testing_follows_the_drawn_lean() {
 
 #[test]
 fn a_carried_character_leans_around_the_grab_and_trails_unprotected_parts() {
-    let (mut d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 500.0), 5, false);
+    let mut d = Desktop::new("yohta", Rig::load(), 146.0, (500.0, 500.0), 5, false);
     let o = Options {
         energy: None,
         bop: None,
@@ -422,7 +422,7 @@ fn a_carried_character_leans_around_the_grab_and_trails_unprotected_parts() {
 
 #[test]
 fn a_released_character_falls_to_rest_once_and_a_pickup_catches_it() {
-    let (mut d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 300.0), 5, false);
+    let mut d = Desktop::new("yohta", Rig::load(), 146.0, (500.0, 300.0), 5, false);
     let o = Options {
         energy: None,
         bop: None,
@@ -453,8 +453,8 @@ fn a_released_character_falls_to_rest_once_and_a_pickup_catches_it() {
     assert!(d.take_events().is_empty(), "landing is not a Drop");
     // Picking it up mid-flight catches it at once.
     d.flight = flight((0.0, 0.0), 1.0, true, (500.0, 300.0), bounds);
-    assert!(d.moving());
-    let _ = d.update(Msg::Pressed, &o);
+    assert!(d.flight.is_some() || d.press.as_ref().is_some_and(|p| p.dragging));
+    let _ = d.step(Msg::Pressed, &o);
     assert!(d.flight.is_none());
     // Off unless the character asks for it.
     d.set_fall(false);
@@ -592,7 +592,7 @@ fn a_thrown_character_arcs_bounces_off_the_edges_and_comes_to_rest() {
 
 #[test]
 fn the_carry_limit_is_the_window_edge_not_a_step_short_of_it() {
-    let (d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 500.0), 5, false);
+    let d = Desktop::new("yohta", Rig::load(), 146.0, (500.0, 500.0), 5, false);
     let l = d.layout;
     // Held by the body, low down: the window's bottom edge stops the swing.
     let pivot = Point::new(310.0, 650.0);
@@ -615,7 +615,7 @@ fn the_carry_limit_is_the_window_edge_not_a_step_short_of_it() {
 
 #[test]
 fn a_held_pose_swings_from_its_scruff_when_shaken_and_settles() {
-    let (mut d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 500.0), 5, false);
+    let mut d = Desktop::new("yohta", Rig::load(), 146.0, (500.0, 500.0), 5, false);
     let o = Options {
         energy: None,
         bop: None,
@@ -693,7 +693,7 @@ fn a_held_pose_swings_from_its_scruff_when_shaken_and_settles() {
 
 #[test]
 fn gestures_emit_each_event_once_and_cancellation_none() {
-    let (mut d, _) = Desktop::open("yohta", Rig::load(), 160.0, (500.0, 500.0), 5, false);
+    let mut d = Desktop::new("yohta", Rig::load(), 160.0, (500.0, 500.0), 5, false);
     let o = Options {
         energy: None,
         bop: None,
@@ -732,14 +732,14 @@ fn gestures_emit_each_event_once_and_cancellation_none() {
     // Releasing with no press, or hiding mid-drag, invents nothing.
     assert_eq!(d.release(&o), None);
     d.press = Some(press(true));
-    let _ = d.set_hidden(true);
+    let _ = d.hide(true);
     assert_eq!(d.release(&o), None);
     assert!(d.take_events().is_empty());
 }
 
 #[test]
 fn a_held_press_keeps_its_pose_and_eases_out_on_release() {
-    let (mut d, _) = Desktop::open("yohta", Rig::load(), 160.0, (500.0, 500.0), 5, false);
+    let mut d = Desktop::new("yohta", Rig::load(), 160.0, (500.0, 500.0), 5, false);
     let o = Options {
         energy: None,
         bop: None,
@@ -811,7 +811,7 @@ fn a_held_press_keeps_its_pose_and_eases_out_on_release() {
 
 #[test]
 fn enlarged_held_art_keeps_room_to_swing() {
-    let (mut d, _) = Desktop::open("yohta", Rig::load(), 292.0, (500.0, 500.0), 5, false);
+    let mut d = Desktop::new("yohta", Rig::load(), 292.0, (500.0, 500.0), 5, false);
     let size = d.rig.size();
     let mut art = image::RgbaImage::new(size.width as u32, size.height as u32);
     for y in 20..size.height as u32 - 1 {
@@ -845,8 +845,8 @@ fn enlarged_held_art_keeps_room_to_swing() {
 fn authored_grips_keep_full_swing_clearance_for_rectangular_original_art() {
     for grip in [[0.0, 0.0], [1.0, 0.0], [0.15, 0.3], [0.5, 1.0]] {
         for height in [73.0, 292.0, 584.0] {
-            let (mut desktop, _) =
-                Desktop::open("yohta", Rig::load(), height, (500.0, 500.0), 5, false);
+            let mut desktop =
+                Desktop::new("yohta", Rig::load(), height, (500.0, 500.0), 5, false);
             let stage = desktop.rig.size();
             let pixels = image::RgbaImage::from_pixel(100, 260, image::Rgba([120, 180, 220, 255]));
             let mut picture =
@@ -894,7 +894,7 @@ fn stage_paints_speech_bubble_and_menu() {
         energy: None,
         beat: None,
     };
-    let (mut d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 500.0), 3, false);
+    let mut d = Desktop::new("yohta", Rig::load(), 146.0, (500.0, 500.0), 3, false);
     let mut lines = Lines::default();
     lines.get_mut(Trigger::Click).push(super::super::lines::Line {
         text: "Hi! I'm Yohta. Click me again, or right-click for the menu.".into(),

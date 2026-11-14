@@ -175,7 +175,7 @@ Each instance has its own shown flag, changed from its menu or its row in Settin
 | 0 | Slint prototype: Characters page and the studio preview pane with one draggable layer, software renderer | Drag feel, window open time, memory and overlay alignment under zoom are recorded, and the framework is chosen. Done: Slint chosen; drag feel confirmed by hand |
 | 1 | Foundations: tokens, kit, templates, `docs/ui-guide.md`, the guard, and the typed boundary between core and UI | A sample page built only from the kit passes the guard. Done except the snapshot type: the licence, `ui/` kit, templates, gallery, `docs/ui-guide.md` and the guard test landed; `Set` and `Command` already exist in `src/registry`, and the read-only snapshot type is defined with the first page in step 4 |
 | 2 | Shared character renderer: the rig draws to a pixel buffer without Iced | The current desktop character and preview render from it with pixel checks unchanged. Done as a renderer with pixel parity tests; the live desktop and the studio switch to it in steps 3 and 5 (see [Step 2 results](#step-2-results)) |
-| 3 | Stage engine with one character | Same behaviour as today; no character traffic in the dispatcher; idle footprint within budget. In progress: slice 3a landed (see [Step 3 progress](#step-3-progress)) |
+| 3 | Stage engine with one character | Same behaviour as today; no character traffic in the dispatcher; idle footprint within budget. Done in code; waiting on a hands-on check of the live app (see [Step 3 progress](#step-3-progress)) |
 | 4 | Settings in the new framework: registry, then Sound, Display & motion, Shortcuts, Ink & text, Spotlight & lens, Pointer, Music response; first-run window | The Iced settings views are deleted; every control saves at once |
 | 5 | Character studio window | Artwork, Reactions, Speech, Motion and Advanced work on one draft; Settings never shows the leave prompt |
 | 6 | Multi-character: scopes, instance store and migration, Characters page, several instances, coordinator tiers one to three | An existing installation opens unchanged; two instances of one character move and size independently; 1, 10 and 20 instances are measured |
@@ -251,7 +251,7 @@ The Iced desktop character is a 2,400-line state machine (`mascot/desktop.rs`) t
 | 3a | `src/stage`: a stage thread with a native layered window, drawn from the shared renderer, click-through outside the artwork, carried with the mouse, intents in and events out | Done; reachable with `tinypaw --stage-probe [animate]` |
 | 3b | Move the motion and gesture state machine (`Desktop` poll, press, flight, music, sleep, gaze) onto the stage thread, free of Iced tasks | Done; the stage hosts the real `Desktop` (see below) |
 | 3c | Speech bubble and right-click menu drawn by the stage; text drawn with cosmic-text, which Iced already depends on | Done; drawing checked in a test image, input not yet tried by hand (see below) |
-| 3d | Cut the dispatcher over: settings changes become intents, gestures become events, the Iced desktop view and its 15–60 Hz polling are deleted | Not started |
+| 3d | Cut the dispatcher over: settings changes become intents, gestures become events, the Iced desktop view and its 15–60 Hz polling are deleted | Done (see below) |
 
 Slice 3b results. The stage thread now runs the same `Desktop` state machine the Iced character uses, so the behaviour is shared rather than copied:
 
@@ -271,6 +271,17 @@ Slice 3c results. The stage now draws the speech bubble and the right-click menu
 - **Checked** with a test that paints a bubble and a menu (one hovered row, one switch, one disabled row) into a buffer and looks at the result: layout, text, icons and colours came out as designed (`TINYPAW_PAINT_PNG=path cargo test stage_paints` saves it). Release probe memory with text loaded: 22 MiB working set, 11.4 MiB private.
 - **Not checked by hand:** clicking the live menu and seeing a bubble appear on a real click. While testing, the cursor could not be moved by script (something on this machine keeps it clamped), so the right-click and row-click paths were reviewed but not exercised. Please try `tinypaw --stage-probe`: click Yohta for a line, right-click for the menu, click a row.
 - **Known gaps:** a pressed menu row has no extra highlight yet, and the drawing is duplicated with the Iced view until the cutover.
+
+Slice 3d results. The app now runs the desktop character on the stage and nothing else:
+
+- **Dispatcher side:** `MascotStage` in `app/mascot.rs` holds the stage handle and what was last sent. `reconcile_mascot` sends only what changed: open or switch character, options, menu rows, size and rows, hidden, and the live music inputs. A new character, saved art, imported art and the menu's Settings and command rows all go through the same typed `Intent`s and `Event`s.
+- **Events in:** `Voice` (gestures and a line sound from one step, played through the one character voice), `Placed` (the spot to save), `Menu` (a chosen row, run through the registry), `Status` (free for an idle sound, animating for fine timers). They arrive as `External::Character` on the existing bridge.
+- **Music without per-frame traffic:** the stage samples loudness, energy and the followed beat itself from weak handles to the meter and the beat follower (`Signals`), and steps the shared beat clock, so the dispatcher passes no message per frame. The app keeps the meter and follower in `Arc` and Settings still reads the tempo from the shared clock.
+- **Deleted:** the Iced character window, its canvas, speech and menu widgets, the 15–60 Hz polling subscription and its frame-rate tick, the window-id plumbing and the native no-activate subclass, about 650 lines. The dispatcher keeps one slow tick every five seconds for what the app owns: what is playing, and the idle sound check.
+- **Tests:** the Desktop unit tests run unchanged on the shared state machine (275 pass).
+- **Run for real** with an isolated copy of the app (own settings folder and command endpoint, so the running instance was left alone): enabling the character creates the stage window, disabling it removes the window, and the character logic, menu rows and saves take the new path. Release build, character on, idle motion, eyes and music off: the stage thread uses 0.6% of one core (about 0.6 ms per 100 ms poll); with idle sway on at 30 Hz, 1.7%. Memory, whole app with the character on: 38.8 MiB working set, 17 MiB private; with the character off 26 MiB and 7 MiB. When music response or sleep audio is on, the music meter thread adds about 2% of a core as it did before; that is unchanged by this step.
+- **Not checked by hand:** carrying and throwing the character, clicking the menu and watching a bubble, with the real mouse. Please run the app and try them.
+- **Known gaps:** a pressed menu row has no extra highlight, and per-poll cost (about 0.6 ms) is higher than it needs to be; trimming it is a later optimisation. Step 3's "within budget" has no number in this plan, so the figures above are the baseline to hold.
 
 Slice 3a results (release build, Windows 11, Yohta at 300 px tall, a 237×329 window):
 
