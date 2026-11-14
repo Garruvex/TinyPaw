@@ -16,6 +16,7 @@ mod platform;
 mod preferences;
 mod registry;
 mod session;
+mod settings_ui;
 mod stage;
 mod view;
 
@@ -38,6 +39,9 @@ fn usage(registry: &Registry) -> String {
 }
 
 fn main() -> ExitCode {
+    if std::env::args().nth(1).as_deref() == Some("--settings") {
+        return settings_ui::run(&std::env::args().nth(2).unwrap_or_default());
+    }
     #[cfg(windows)]
     if std::env::args().nth(1).as_deref() == Some("--stage-probe") {
         stage::probe();

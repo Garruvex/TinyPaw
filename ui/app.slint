@@ -1,0 +1,45 @@
+import { Tokens } from "tokens.slint";
+import { Page, Section } from "kit.slint";
+import { Scroller } from "kit.slint";
+import { SettingsShell, NavEntry } from "templates/settings_shell.slint";
+import { ItemView, ItemModel, SectionModel } from "pages/item.slint";
+
+export { NavEntry, ItemModel, SectionModel }
+
+// The Settings window the app opens: the shell, and one page built from the
+// sections the registry's page definitions produce.
+export component SettingsWindow inherits SettingsShell {
+    // Forwarded from the shell, whose own properties the Rust API does not show.
+    in property <[NavEntry]> nav-entries;
+    in-out property <int> current-page;
+    callback navigate-to(int);
+    entries: root.nav-entries;
+    current <=> root.current-page;
+    navigate(i) => { root.navigate-to(i); }
+    in property <string> page-title;
+    in property <string> page-summary;
+    in property <[SectionModel]> sections;
+    callback toggled(string, bool);
+    callback ranged(string, float);
+    callback chosen(string, int);
+    callback pressed(string);
+    Rectangle {
+        background: Tokens.surface;
+        Scroller {
+            Page {
+                title: root.page-title;
+                summary: root.page-summary;
+                for section in root.sections: Section {
+                    title: section.title;
+                    for item in section.items: ItemView {
+                        item: item;
+                        toggled(on) => { root.toggled(item.id, on); }
+                        ranged(v) => { root.ranged(item.id, v); }
+                        chosen(i) => { root.chosen(item.id, i); }
+                        pressed => { root.pressed(item.id); }
+                    }
+                }
+            }
+        }
+    }
+}

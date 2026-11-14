@@ -7,6 +7,7 @@ license = "GPL-3.0-or-later"
 
 [build-dependencies]
 winresource = "0.1"
+slint-build = "=1.18.1"
 
 [dependencies]
 iced = { version = "0.14.0", default-features = false, features = ["tiny-skia", "canvas", "svg", "crisp", "smol", "advanced", "image-without-codecs"] }
@@ -20,6 +21,9 @@ tiny-skia = { version = "0.11", default-features = false, features = ["std", "si
 # The stage draws speech and menu text and icons itself: the same text engine
 # and SVG renderer Iced already builds with.
 cosmic-text = "0.15"
+# Settings and the character studio are Slint windows on their own thread, drawn
+# by the software renderer (plan step 4). The kit lives in ui/.
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software"] }
 resvg = "0.45"
 
 [features]

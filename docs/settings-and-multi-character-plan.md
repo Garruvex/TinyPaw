@@ -50,7 +50,7 @@ flowchart LR
         Instances --> Renderer["Shared character renderer (tiny-skia)"]
         Renderer --> Windows["Per-pixel-alpha windows"]
     end
-    subgraph UiLoop["UI windows (own thread)"]
+    subgraph UiLoop["UI windows (own process, on demand)"]
         Settings["Settings"]
         Studio["Character studio"]
     end
@@ -67,13 +67,13 @@ flowchart LR
 |---|---|---|
 | Core dispatcher (the Iced `update`) | Session, registry, preferences, overlays, window lifecycle | Commands in, events out |
 | Character stage (own thread and frame clock) | Instances, animation, physics, the awareness coordinator, drawing to per-pixel-alpha windows with tiny-skia | Intents in: show, move, settings changed, beat phase. Events out: clicked, dropped, menu requested |
-| UI windows (Settings and studio) | Page state and drafts | The typed `Set` and `Command` path the CLI uses, plus snapshots from the core |
+| UI windows (Settings and studio) | Page state and drafts, in a process of their own | The `set` and command path the CLI uses over the local endpoint, and the current settings read back from the core |
 
 Lens already follows this shape: `platform/lens.rs` owns native instances behind a controller. Known desktop characters built from 2D sprites, such as Shimeji, use the same native-window approach.
 
 One renderer draws the character for the stage and for the studio preview, into a pixel buffer. The studio shows that buffer and draws only the editing overlay (selection, handles, guides) itself, so the preview cannot drift from the desktop.
 
-Settings and the studio run in-process on their own thread at first. Because they only exchange messages with the core, moving them to an on-demand process later is a contained change.
+Settings and the studio run as an on-demand process of their own, the same executable started with `--settings`. This was planned as a thread, but winit allows one event loop per process and Iced already owns it, so Slint cannot start a second one in the resident process (it fails with "EventLoop can't be recreated"). A process also frees the window's memory when it closes. The window talks to the core only through the command endpoint, which the CLI already uses.
 
 The speech bubble is drawn by the stage. The right-click menu becomes a short-lived window.
 
@@ -176,7 +176,7 @@ Each instance has its own shown flag, changed from its menu or its row in Settin
 | 1 | Foundations: tokens, kit, templates, `docs/ui-guide.md`, the guard, and the typed boundary between core and UI | A sample page built only from the kit passes the guard. Done except the snapshot type: the licence, `ui/` kit, templates, gallery, `docs/ui-guide.md` and the guard test landed; `Set` and `Command` already exist in `src/registry`, and the read-only snapshot type is defined with the first page in step 4 |
 | 2 | Shared character renderer: the rig draws to a pixel buffer without Iced | The current desktop character and preview render from it with pixel checks unchanged. Done as a renderer with pixel parity tests; the live desktop and the studio switch to it in steps 3 and 5 (see [Step 2 results](#step-2-results)) |
 | 3 | Stage engine with one character | Same behaviour as today; no character traffic in the dispatcher; idle footprint within budget. Done in code; waiting on a hands-on check of the live app (see [Step 3 progress](#step-3-progress)) |
-| 4 | Settings in the new framework: registry, then Sound, Display & motion, Shortcuts, Ink & text, Spotlight & lens, Pointer, Music response; first-run window | The Iced settings views are deleted; every control saves at once |
+| 4 | Settings in the new framework: registry, then Sound, Display & motion, Shortcuts, Ink & text, Spotlight & lens, Pointer, Music response; first-run window | In progress: slice 4a landed (see [Step 4 progress](#step-4-progress)). The Iced settings views are deleted; every control saves at once |
 | 5 | Character studio window | Artwork, Reactions, Speech, Motion and Advanced work on one draft; Settings never shows the leave prompt |
 | 6 | Multi-character: scopes, instance store and migration, Characters page, several instances, coordinator tiers one to three | An existing installation opens unchanged; two instances of one character move and size independently; 1, 10 and 20 instances are measured |
 | 7 | Social awareness | Planned separately |
@@ -282,6 +282,25 @@ Slice 3d results. The app now runs the desktop character on the stage and nothin
 - **Run for real** with an isolated copy of the app (own settings folder and command endpoint, so the running instance was left alone): enabling the character creates the stage window, disabling it removes the window, and the character logic, menu rows and saves take the new path. Release build, character on, idle motion, eyes and music off: the stage thread uses 0.6% of one core (about 0.6 ms per 100 ms poll); with idle sway on at 30 Hz, 1.7%. Memory, whole app with the character on: 38.8 MiB working set, 17 MiB private; with the character off 26 MiB and 7 MiB. When music response or sleep audio is on, the music meter thread adds about 2% of a core as it did before; that is unchanged by this step.
 - **Not checked by hand:** carrying and throwing the character, clicking the menu and watching a bubble, with the real mouse. Please run the app and try them.
 - **Known gaps:** a pressed menu row has no extra highlight, and per-poll cost (about 0.6 ms) is higher than it needs to be; trimming it is a later optimisation. Step 3's "within budget" has no number in this plan, so the figures above are the baseline to hold.
+
+## Step 4 progress
+
+| Slice | Scope | State |
+|---|---|---|
+| 4a | Slint in the main crate; the Settings window as its own process; page definitions that the registry mounts; Sound and Display & motion pages | Done; opt in with `TINYPAW_SLINT_SETTINGS=1` |
+| 4b | Shortcuts (rebinding is custom) | Not started |
+| 4c | Ink & text, Spotlight & lens | Not started |
+| 4d | Pointer | Not started |
+| 4e | Music response (moved out of the Character page) and the Characters page, with Customize opening the existing editor until step 5 | Not started |
+| 4f | First-run window; delete the Iced settings views | Not started |
+
+Slice 4a results:
+
+- **One process per window.** Two winit event loops cannot share a process, so `tinypaw --settings [page]` is the Slint window. The resident app starts it on demand (no console window), brings it forward when Settings is asked for again, and the window closing ends the process. The window reads the settings with a new `settings-state` command, changes them with the same `set` command the CLI uses (so each control saves at once through the one path), runs a button with `settings-action`, and refreshes about 2.5 times a second so changes from a shortcut, the tray or the CLI show up. If the resident app goes away, the window closes.
+- **Pages are data.** `settings_ui/pages.rs` defines each page as sections of items that name registered settings, with the wording and choice labels the registry does not hold. The window renders any page from that: toggle, range, choice, action button, note. Adding a setting to a page is one line. Items update in place while a page keeps its shape, so a slider being dragged is not rebuilt.
+- **Kit additions:** a `Select` for long lists (a popup list), a `Scroller`, and the setting row now keeps controls at their own width. Pages remain free of raw sizes and colours; the guard test still passes.
+- **Checked:** both pages rendered from the real app's settings, and a `tinypaw set sound.mute true` from the command line appeared in the open window within about two seconds. A separate screenshot per page was read. Five unit tests cover the page definitions, how choices and ranges map back to values, the state the app reports and the text a value takes on the command line (280 tests pass).
+- **Not checked by hand:** clicking, dragging and the dropdown with a real mouse, which could not be scripted on this machine. The settings process measured 31 MiB working set and 6 MiB private in a debug build while open.
 
 Slice 3a results (release build, Windows 11, Yohta at 300 px tall, a 237×329 window):
 

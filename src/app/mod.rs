@@ -6,6 +6,7 @@ mod input;
 mod mascot;
 mod music;
 mod pointing;
+mod settings_window;
 mod studio;
 use studio::Studio;
 
@@ -124,6 +125,10 @@ pub struct App {
     started: Instant,
     overlays: Vec<Overlay>,
     displays: Vec<Display>,
+    /// The Slint Settings process, while open.
+    settings_child: Option<std::process::Child>,
+    /// Settings was asked for again while open: bring it forward.
+    settings_focus: bool,
     settings_window: Option<window::Id>,
     /// Whether Settings uses the merged Windows header.
     settings_framed: bool,
@@ -413,6 +418,8 @@ impl App {
             started: Instant::now(),
             overlays: Vec::new(),
             displays: displays::list(),
+            settings_child: None,
+            settings_focus: false,
             settings_window: None,
             settings_framed: false,
             helper_hwnds: std::collections::BTreeMap::new(),
@@ -644,9 +651,16 @@ impl App {
                 out.collect(self.dispatch(system::MASTER_TOGGLE, now).ok());
             }
             Message::External(External::Cli { line, reply }) => {
-                let (answer, result) = self.cli(&line, now);
-                out.collect(result);
-                let _ = reply.send(answer);
+                if line.trim() == "settings-state" {
+                    let _ = reply.send(self.settings_state());
+                } else if let Some(name) = line.trim().strip_prefix("settings-action ") {
+                    let answer = self.settings_action(name.trim(), now, &mut out, &mut tasks);
+                    let _ = reply.send(answer);
+                } else {
+                    let (answer, result) = self.cli(&line, now);
+                    out.collect(result);
+                    let _ = reply.send(answer);
+                }
             }
             Message::Command(id) => {
                 self.ui.close_menus();
@@ -1353,6 +1367,15 @@ impl App {
     }
 
     fn open_settings(&mut self) -> Task<Message> {
+        if Self::slint_settings_wanted() {
+            self.open_slint_settings();
+            return Task::none();
+        }
+        self.open_classic_settings()
+    }
+
+    /// The Iced Settings window, until every page has moved to Slint.
+    fn open_classic_settings(&mut self) -> Task<Message> {
         if let Some(id) = self.settings_window {
             return window::gain_focus(id);
         }

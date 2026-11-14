@@ -169,6 +169,7 @@ export component Range inherits Rectangle {
     in property <bool> enabled: true;
     callback changed(float);
     min-width: Tokens.label-w / 2;
+    preferred-width: Tokens.label-w;
     height: Tokens.h-control;
     property <float> fraction: root.maximum > root.minimum ? (root.value - root.minimum) / (root.maximum - root.minimum) : 0;
     Rectangle {
@@ -261,7 +262,10 @@ export component SettingRow inherits Rectangle {
         }
         VerticalLayout {
             alignment: center;
-            @children
+            HorizontalLayout {
+                alignment: end;
+                @children
+            }
         }
     }
 }
@@ -332,5 +336,84 @@ export component SaveBar inherits Rectangle {
         if root.dirty: Hint { text: "Unsaved changes"; vertical-alignment: center; }
         Btn { text: "Revert"; enabled: root.dirty; clicked => { root.revert(); } }
         Btn { text: "Save"; primary: true; enabled: root.dirty; clicked => { root.save(); } }
+    }
+}
+
+// ---- Choosing and scrolling ------------------------------------------------
+
+// A pick from a list that is too long for Segmented. Opens a list below it.
+export component Select inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> current;
+    in property <bool> enabled: true;
+    callback selected(int);
+    height: Tokens.h-control;
+    preferred-width: Tokens.label-w;
+    border-radius: Tokens.radius-control;
+    border-width: Tokens.hairline;
+    border-color: Tokens.line-strong;
+    background: !root.enabled ? Tokens.raised : area.has-hover ? Tokens.hover : Tokens.control;
+    Text {
+        x: Tokens.space-3;
+        y: (parent.height - self.height) / 2;
+        width: parent.width - 3 * Tokens.space-3 - Tokens.space-2;
+        overflow: elide;
+        text: root.current >= 0 && root.current < root.options.length ? root.options[root.current] : "";
+        font-size: Tokens.font-body;
+        color: root.enabled ? Tokens.text : Tokens.disabled;
+    }
+    Text {
+        x: parent.width - Tokens.space-3 - self.width;
+        y: (parent.height - self.height) / 2;
+        text: "▾";
+        font-size: Tokens.font-body;
+        color: Tokens.muted;
+    }
+    area := TouchArea {
+        enabled: root.enabled;
+        clicked => { list.show(); }
+    }
+    list := PopupWindow {
+        x: 0px;
+        y: root.height + Tokens.space-1;
+        width: root.width;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Tokens.raised;
+            border-radius: Tokens.radius-control;
+            border-width: Tokens.hairline;
+            border-color: Tokens.line-strong;
+            VerticalLayout {
+                padding: Tokens.space-1;
+                for option[i] in root.options: Rectangle {
+                    height: Tokens.h-control;
+                    border-radius: Tokens.radius-small;
+                    background: i == root.current ? Tokens.cyan-bg : (row.has-hover ? Tokens.hover : Tokens.none);
+                    Text {
+                        x: Tokens.space-3;
+                        y: (parent.height - self.height) / 2;
+                        text: option;
+                        font-size: Tokens.font-body;
+                        color: i == root.current ? Tokens.cyan-text : Tokens.text;
+                    }
+                    row := TouchArea {
+                        clicked => {
+                            root.current = i;
+                            root.selected(i);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A page body that scrolls when it is taller than the window.
+export component Scroller inherits Flickable {
+    content-height: inner.preferred-height;
+    inner := VerticalLayout {
+        width: root.width;
+        alignment: start;
+        @children
     }
 }

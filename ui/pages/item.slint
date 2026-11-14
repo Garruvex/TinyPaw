@@ -1,0 +1,95 @@
+import { Tokens } from "../tokens.slint";
+import { SettingRow, Toggle, Range, Select, Btn, Notice, Hint } from "../kit.slint";
+
+// One setting as the registry's page definitions describe it. The Rust side
+// fills these in; the control shown depends on `kind`.
+export struct ItemModel {
+    id: string,
+    // 0 toggle, 1 range, 2 choice, 3 action button, 4 note
+    kind: int,
+    label: string,
+    hint: string,
+    on: bool,
+    value: float,
+    min: float,
+    max: float,
+    // The value as shown beside a range, a button's caption, or a note's text.
+    text: string,
+    options: [string],
+    index: int,
+    enabled: bool,
+    warning: bool,
+}
+
+export struct SectionModel {
+    title: string,
+    items: [ItemModel],
+}
+
+// Controls keep a local copy so dragging and clicking feel immediate; a new
+// item from the app replaces it.
+export component ItemView inherits VerticalLayout {
+    in property <ItemModel> item;
+    callback toggled(bool);
+    callback ranged(float);
+    callback chosen(int);
+    callback pressed();
+    in-out property <bool> on: item.on;
+    in-out property <float> value: item.value;
+    in-out property <int> index: item.index;
+    changed item => {
+        root.on = root.item.on;
+        root.value = root.item.value;
+        root.index = root.item.index;
+    }
+    // A warning stands out; any other note is quiet text under the rows.
+    if root.item.kind == 4 && root.item.warning: Notice {
+        text: root.item.text;
+        warning: true;
+    }
+    if root.item.kind == 4 && !root.item.warning: Rectangle {
+        Hint {
+            x: Tokens.space-3;
+            width: parent.width - 2 * Tokens.space-3;
+            text: root.item.text;
+        }
+    }
+    if root.item.kind != 4: SettingRow {
+        label: root.item.label;
+        hint: root.item.hint;
+        if root.item.kind == 0: Toggle {
+            checked <=> root.on;
+            enabled: root.item.enabled;
+            toggled(c) => { root.toggled(c); }
+        }
+        if root.item.kind == 1: HorizontalLayout {
+            spacing: Tokens.space-3;
+            Range {
+                value <=> root.value;
+                minimum: root.item.min;
+                maximum: root.item.max;
+                enabled: root.item.enabled;
+                changed(v) => { root.ranged(v); }
+            }
+            Text {
+                width: Tokens.value-w;
+                text: root.item.text;
+                font-size: Tokens.font-body;
+                color: Tokens.muted;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+            }
+        }
+        if root.item.kind == 2: Select {
+            options: root.item.options;
+            current <=> root.index;
+            enabled: root.item.enabled;
+            selected(i) => { root.chosen(i); }
+        }
+        if root.item.kind == 3: Btn {
+            text: root.item.text;
+            enabled: root.item.enabled;
+            clicked => { root.pressed(); }
+        }
+    }
+}
