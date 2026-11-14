@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Character studio: Reactions</title>
+<link rel="stylesheet" href="mockup.css">
+</head>
+<body>
+<div class="window" style="width:1100px;height:720px">
+  <div class="header">
+    <i class="ti ti-brush"></i><span class="title">Character studio</span>
+    <span class="btn small"><i class="ti ti-cat"></i>Yohta <i class="ti ti-chevron-down"></i></span>
+    <span class="grow"></span>
+    <span class="amber">Unsaved changes</span>
+    <span class="btn small">Discard</span>
+    <span class="btn small primary">Save</span>
+    <span class="caption"><i class="ti ti-minus"></i><i class="ti ti-square"></i><i class="ti ti-x"></i></span>
+  </div>
+  <div class="body">
+    <div class="preview">
+      <div class="row-head">
+        <div class="tabs"><span class="tab on">Test</span><span class="tab">Arrange</span></div>
+        <span class="grow"></span>
+        <span class="muted"><i class="ti ti-zoom-out"></i> 100% <i class="ti ti-zoom-in"></i></span>
+      </div>
+      <div class="stage">
+        <i class="ti ti-cat"></i>
+        <span class="sel" style="left:118px;top:120px;width:150px;height:130px"></span>
+        <span class="handle" style="left:114px;top:116px"></span>
+        <span class="handle" style="left:263px;top:116px"></span>
+        <span class="handle" style="left:114px;top:245px"></span>
+        <span class="handle" style="left:263px;top:245px"></span>
+      </div>
+      <div class="actions">
+        <span class="btn small">Click</span><span class="btn small">Pick up</span><span class="btn small">Drop</span>
+        <span class="btn small">Headpat</span><span class="btn small">Sleep</span><span class="btn small">Music</span>
+      </div>
+      <span class="hint">The preview stays in view on every tab. The character picture comes from the shared renderer; the selection box and handles are drawn by the studio.</span>
+    </div>
+    <div class="page" style="padding:16px 22px">
+      <div class="tabs"><span class="tab">Artwork</span><span class="tab on">Reactions</span><span class="tab">Speech</span><span class="tab">Motion</span><span class="tab">Advanced</span></div>
+
+      <h2>When touched</h2>
+      <div class="list">
+        <div class="row"><span class="label">Click</span><span class="btn small"><i class="ti ti-photo"></i>click.png</span><span class="btn small"><i class="ti ti-volume"></i>Chirp</span><span class="grow"></span><i class="ti ti-chevron-right muted"></i></div>
+        <div class="row"><span class="label">Pick up</span><span class="btn small"><i class="ti ti-photo"></i>held.png</span><span class="btn small"><i class="ti ti-volume"></i>None</span><span class="grow"></span><i class="ti ti-chevron-right muted"></i></div>
+        <div class="row"><span class="label">Drop</span><span class="btn small"><i class="ti ti-photo"></i>drop.png</span><span class="btn small">Then: Fall <i class="ti ti-chevron-down"></i></span><span class="grow"></span><i class="ti ti-chevron-right muted"></i></div>
+        <div class="row"><span class="label">Headpat</span><span class="btn small"><i class="ti ti-photo"></i>headpat.png</span><span class="btn small"><i class="ti ti-volume"></i>Purr</span><span class="grow"></span><i class="ti ti-chevron-right muted"></i></div>
+      </div>
+
+      <h2>Sleep and wake</h2>
+      <div class="list">
+        <div class="row"><span class="label">Poses</span><span class="btn small">Seated doze</span><span class="btn small">Curled</span><span class="btn small"><i class="ti ti-plus"></i>Add pose</span></div>
+        <div class="row"><span class="label">Wake</span><span class="btn small"><i class="ti ti-photo"></i>wake.png</span><span class="grow"></span><i class="ti ti-chevron-right muted"></i></div>
+      </div>
+
+      <h2>Character sounds</h2>
+      <div class="list">
+        <div class="row"><span class="label">Sounds</span><span class="toggle"></span><span class="label" style="margin-left:18px">Volume</span><div class="slider"><b style="width:70%"></b></div><span class="value">70%</span></div>
+      </div>
+      <p class="hint">A row expands to show its placement, cooldown and lines.</p>
+    </div>
+  </div>
+</div>
+</body>
+</html>
