@@ -22,7 +22,7 @@ This plan replaces the single event loop with three, moves characters to a nativ
 | Design is guarded by templates, a guide and unified styles | Agreed |
 | Voice volume, lines on or off and Quiet are app settings; music pose and its standing threshold belong to the character | Agreed |
 | One master switch shows or hides all characters; each instance keeps its own shown flag | Agreed |
-| Code is licensed GPL-3.0-or-later; character artwork is not covered by the code licence | Agreed; licence files not yet added |
+| Code is licensed GPL-3.0-or-later; character artwork is not covered by the code licence | Agreed; licence files added in step 1. Artwork is all rights reserved |
 | Three loops, with characters on a native stage outside Iced | Proposed; assumed by this plan |
 | Slint for Settings and the studio | Chosen. Step 0 measured it (see [Step 0 results](#step-0-results)) and the drag feel was confirmed by hand |
 | Overlays and the quick bar stay on Iced | Proposed |
@@ -251,11 +251,10 @@ Findings for the design system:
 
 ## Licence
 
-The code is licensed GPL-3.0-or-later. This matches Slint's GPL option and is compatible with GPUI's Apache-2.0 licence, so it holds whichever framework step 0 chooses. The artwork under `assets/mascot/yohta` is not covered by the code licence and needs its own terms.
+The code is licensed GPL-3.0-or-later. This matches Slint's GPL option and is compatible with GPUI's Apache-2.0 licence, so it holds whichever framework step 0 chooses. The artwork under `assets/mascot` is not covered by the code licence; it is all rights reserved.
 
-Done in step 1: `LICENSE` (GPL-3.0) and `license = "GPL-3.0-or-later"` are in place, and the dependency list was checked: every licence is permissive or MPL-2.0, which is compatible. The artwork has a placeholder notice at `assets/mascot/NOTICE.md` (all rights reserved) until the author picks terms; this is still open.
+Done in step 1: `LICENSE` (GPL-3.0) and `license = "GPL-3.0-or-later"` are in place, and the dependency list was checked: every licence is permissive or MPL-2.0, which is compatible. The artwork is all rights reserved, stated in `assets/mascot/NOTICE.md`.
 
 ## Open questions
 
-- The terms for the Yohta artwork.
 - Whether a single instance can be muted, and whether `tinypaw mascot <name>` is wanted. Neither is planned.
