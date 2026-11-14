@@ -16,6 +16,8 @@ mod platform;
 mod preferences;
 mod registry;
 mod session;
+// The stage's app-facing API is used from the cutover (plan step 3d).
+#[allow(dead_code, unused_imports)]
 mod stage;
 mod view;
 

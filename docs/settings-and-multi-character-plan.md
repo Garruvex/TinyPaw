@@ -249,9 +249,18 @@ The Iced desktop character is a 2,400-line state machine (`mascot/desktop.rs`) t
 | Slice | Scope | State |
 |---|---|---|
 | 3a | `src/stage`: a stage thread with a native layered window, drawn from the shared renderer, click-through outside the artwork, carried with the mouse, intents in and events out | Done; reachable with `tinypaw --stage-probe [animate]` |
-| 3b | Move the motion and gesture state machine (`Desktop` poll, press, flight, music, sleep, gaze) onto the stage thread, free of Iced tasks and window ids | Not started |
+| 3b | Move the motion and gesture state machine (`Desktop` poll, press, flight, music, sleep, gaze) onto the stage thread, free of Iced tasks | Done; the stage hosts the real `Desktop` (see below) |
 | 3c | Speech bubble and right-click menu drawn by the stage; text drawn with cosmic-text, which Iced already depends on | Not started |
 | 3d | Cut the dispatcher over: settings changes become intents, gestures become events, the Iced desktop view and its 15–60 Hz polling are deleted | Not started |
+
+Slice 3b results. The stage thread now runs the same `Desktop` state machine the Iced character uses, so the behaviour is shared rather than copied:
+
+- `Desktop::step` returns `Effects` (mouse passthrough, hide or show, a spot to save) instead of Iced tasks. The Iced host turns them into tasks as before; the stage applies them to its own window. `Desktop::new` makes the state without opening an Iced window; `open` is `new` plus the Iced window. `Desktop` still stores an inert `window::Id` for the Iced host.
+- Drawing goes through `Surface`: `paint_character` and `paint_overlay` draw the character, sleep marks and hearts for either an Iced canvas frame or the stage's pixel buffer. The Iced canvas now calls the same functions.
+- The stage takes typed `Intent`s (open, switch character, options, audio, resize, reset position, displays changed, hidden) and sends `Event`s (gesture, line sound, the spot to save). It polls at the character's own cadence (16, 33 or 100 ms), draws only when the pose, size or a change says so, and sleeps otherwise.
+- Hit testing asks the character logic, so the click-through region is exactly today's (silhouette cells, reaction pictures), not just pixel alpha.
+- Checked with `tinypaw --stage-probe` in a release build: Yohta appears at the default spot, a press and release raises `Gesture(Click)`, points on the artwork take the click and the window corner passes through. Idle sway on (33 ms tier): 0.3% of one core (16 ms over 5 s), 21 MiB working set, 10.5 MiB private. The Desktop unit tests still pass unchanged (274 tests).
+- Not on the stage yet: speech bubble and right-click menu (slice 3c), so lines raise sound events but show no text and the right button does nothing. Carry, throw and fall use the existing logic and have not been tried by hand on the stage.
 
 Slice 3a results (release build, Windows 11, Yohta at 300 px tall, a 237×329 window):
 

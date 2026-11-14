@@ -24,6 +24,7 @@ use super::lines::{BubbleSide, Lines, MenuAlign, MenuSide, Picker, SoundRef, Spe
 use super::motion::{Animator, Expression, Inputs, PartMotion, Pose};
 use super::reactions::Event;
 use super::rig::Rig;
+use super::surface::Surface;
 use crate::app::Message;
 use crate::features::mascot as feature;
 use crate::platform::windows as native;
@@ -620,6 +621,17 @@ pub fn carried_origin(cursor: (i32, i32), grab: Point, k: f32) -> (i32, i32) {
     )
 }
 
+/// What a host does after a step, besides drawing.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Effects {
+    /// Mouse passthrough should become this (true: clicks pass through).
+    pub passthrough: Option<bool>,
+    /// The window should be hidden (true) or shown (false).
+    pub hide: Option<bool>,
+    /// A resting spot to save: the feet's physical position.
+    pub save: Option<(f64, f64)>,
+}
+
 pub struct Desktop {
     pub id: window::Id,
     hwnd: isize,
@@ -711,7 +723,6 @@ impl Desktop {
             rows,
             0.0,
         );
-        let parts = rig.motion_parts();
         let (id, task) = window::open(window::Settings {
             size: layout.window,
             position: window::Position::Specific(Point::new(-32000.0, -32000.0)),
@@ -730,7 +741,34 @@ impl Desktop {
             },
             ..window::Settings::default()
         });
-        let desktop = Self {
+        (
+            Self::new(id, character, rig, size, anchor, rows, hidden),
+            task,
+        )
+    }
+
+    /// The character's state, with no window yet. The host attaches its
+    /// native window with `attach`: the Iced window for the app today, the
+    /// stage's own window otherwise.
+    pub fn new(
+        id: window::Id,
+        character: &'static str,
+        rig: Rig,
+        size: f32,
+        anchor: (f64, f64),
+        rows: usize,
+        hidden: bool,
+    ) -> Self {
+        let layout = layout(
+            size,
+            rig.visible_height(),
+            rig.size(),
+            rig.anchor(),
+            rows,
+            0.0,
+        );
+        let parts = rig.motion_parts();
+        Self {
             id,
             hwnd: 0,
             rig,
@@ -776,8 +814,7 @@ impl Desktop {
             shown: false,
             left_down: false,
             right_down: false,
-        };
-        (desktop, task)
+        }
     }
 
     /// Room above the character for a bubble, when it has lines, and
@@ -1046,21 +1083,56 @@ impl Desktop {
 
     /// Handles window input and polling. Returns window operations and, when
     /// a drag ends, the ground anchor to save.
+    /// The Iced host: runs a step and turns its effects into window tasks.
     pub fn update(&mut self, msg: Msg, o: &Options) -> (Task<Message>, Option<(f64, f64)>) {
+        if let Msg::Native(hwnd) = msg {
+            native::never_activate(hwnd);
+            // Display, DPI, lock and suspend notifications while Off.
+            native::observe(hwnd);
+        }
+        let fx = self.step(msg, o);
+        (self.tasks(&fx), fx.save)
+    }
+
+    fn tasks(&self, fx: &Effects) -> Task<Message> {
+        let mut tasks = Vec::new();
+        match fx.passthrough {
+            Some(true) => tasks.push(window::enable_mouse_passthrough(self.id)),
+            Some(false) => tasks.push(window::disable_mouse_passthrough(self.id)),
+            None => {}
+        }
+        if let Some(hide) = fx.hide {
+            tasks.push(window::set_mode(
+                self.id,
+                if hide {
+                    window::Mode::Hidden
+                } else {
+                    window::Mode::Windowed
+                },
+            ));
+        }
+        Task::batch(tasks)
+    }
+
+    /// Attaches the native window this character is shown in.
+    pub fn attach(&mut self, hwnd: isize, o: &Options) -> Effects {
+        self.step(Msg::Native(hwnd), o)
+    }
+
+    /// One message or poll. Window and mouse changes come back as effects,
+    /// so any host can apply them.
+    pub fn step(&mut self, msg: Msg, o: &Options) -> Effects {
         match msg {
             Msg::Native(hwnd) => {
                 self.hwnd = hwnd;
-                native::never_activate(hwnd);
-                // Display, DPI, lock and suspend notifications while Off.
-                native::observe(hwnd);
                 self.place();
                 self.passthrough = Some(true);
-                let mut tasks = vec![window::enable_mouse_passthrough(self.id)];
                 self.shown = !self.hidden;
-                if self.hidden {
-                    tasks.push(window::set_mode(self.id, window::Mode::Hidden));
+                Effects {
+                    passthrough: Some(true),
+                    hide: self.hidden.then_some(true),
+                    save: None,
                 }
-                (Task::batch(tasks), None)
             }
             Msg::Pressed => {
                 // Picking it up mid-flight catches it at once.
@@ -1092,9 +1164,12 @@ impl Desktop {
                         trail: VecDeque::new(),
                     });
                 }
-                (Task::none(), None)
+                Effects::default()
             }
-            Msg::Released => (Task::none(), self.release(o)),
+            Msg::Released => Effects {
+                save: self.release(o),
+                ..Effects::default()
+            },
             Msg::Menu => {
                 self.reduced = o.reduced;
                 if self.menu.is_some() {
@@ -1102,14 +1177,14 @@ impl Desktop {
                 } else {
                     self.open_menu();
                 }
-                (Task::none(), None)
+                Effects::default()
             }
             Msg::Poll => self.poll(o),
-            Msg::Command(_) | Msg::CharacterSettings => (Task::none(), None),
+            Msg::Command(_) | Msg::CharacterSettings => Effects::default(),
         }
     }
 
-    fn poll(&mut self, o: &Options) -> (Task<Message>, Option<(f64, f64)>) {
+    fn poll(&mut self, o: &Options) -> Effects {
         self.now = self.started.elapsed().as_secs_f32();
         self.reduced = o.reduced;
         if self
@@ -1119,12 +1194,12 @@ impl Desktop {
             self.closing = None;
         }
         if !self.shown {
-            return (Task::none(), None);
+            return Effects::default();
         }
         let mut picked_up = false;
         let (Some(cursor), Some(rect)) = (native::cursor_pos(), native::window_rect(self.hwnd))
         else {
-            return (Task::none(), None);
+            return Effects::default();
         };
         let k = self.k(rect);
         let local = Point::new(
@@ -1190,15 +1265,11 @@ impl Desktop {
             || self
                 .menu
                 .is_some_and(|s| self.layout.menu(s).contains(local));
-        let task = if self.passthrough != Some(!hit) {
+        let passthrough = if self.passthrough != Some(!hit) {
             self.passthrough = Some(!hit);
-            if hit {
-                window::disable_mouse_passthrough(self.id)
-            } else {
-                window::enable_mouse_passthrough(self.id)
-            }
+            Some(!hit)
         } else {
-            Task::none()
+            None
         };
 
         self.target = match self.rig.eye_point() {
@@ -1287,7 +1358,11 @@ impl Desktop {
             self.say(Trigger::Pickup, o);
         }
         self.step_speech(o);
-        (task, save)
+        Effects {
+            passthrough,
+            hide: None,
+            save,
+        }
     }
 
     /// Moves a line along, and says an idle line when one is due and the
@@ -1725,8 +1800,17 @@ impl Desktop {
 
     /// Steps aside while annotation owns input; comes back at the same spot.
     pub fn set_hidden(&mut self, hidden: bool) -> Task<Message> {
+        let fx = Effects {
+            hide: self.hide(hidden),
+            ..Effects::default()
+        };
+        self.tasks(&fx)
+    }
+
+    /// The window change a new hidden state needs, if any.
+    pub fn hide(&mut self, hidden: bool) -> Option<bool> {
         if hidden == self.hidden {
-            return Task::none();
+            return None;
         }
         self.hidden = hidden;
         self.companion.reset();
@@ -1739,17 +1823,10 @@ impl Desktop {
             self.events.clear();
         }
         if self.hwnd == 0 {
-            return Task::none();
+            return None;
         }
         self.shown = !hidden;
-        window::set_mode(
-            self.id,
-            if hidden {
-                window::Mode::Hidden
-            } else {
-                window::Mode::Windowed
-            },
-        )
+        Some(hidden)
     }
 
     /// Carried or in flight: the window itself is moving, which looks
@@ -1786,6 +1863,78 @@ impl Desktop {
                 // Still: only hit testing and new gaze targets.
                 100
             },
+        ))
+    }
+
+    /// Draws the character into `s`, whose origin is the window's top-left, in
+    /// the window's logical pixels.
+    pub fn paint_character<S: Surface>(&self, s: &mut S) {
+        let l = &self.layout;
+        let pose = &self.pose;
+        s.translate(Vector::new(l.character.x, l.character.y));
+        s.scale(l.scale);
+        // Carried with a held pose: it hangs from its scruff at the cursor.
+        if let Some(press) = self.press.as_ref().filter(|p| p.dragging)
+            && let Some(held) = &self.pictures.held
+        {
+            let angle = pose.carry.map_or(0.0, |(_, a)| a);
+            self.rig.draw_hanging(s, held, press.pivot, angle);
+        } else {
+            super::motion::place(s, pose, self.rig.anchor(), self.rig.size().height);
+            match self.picture() {
+                Some(picture) => self.rig.draw_picture(s, picture),
+                None => self.rig.draw_pose(s, pose),
+            }
+        }
+    }
+
+    /// Sleep marks and hearts, drawn over the character.
+    pub fn paint_overlay<S: Surface>(&self, s: &mut S) {
+        let l = &self.layout;
+        let pose = &self.pose;
+        s.translate(Vector::new(l.character.x, l.character.y));
+        s.scale(l.scale);
+        super::motion::place(s, pose, self.rig.anchor(), self.rig.size().height);
+        companionship::draw_zzz(
+            s,
+            self.rig.size(),
+            &self.sleep_settings(),
+            self.companion.state,
+            self.companion.stirring,
+            self.now,
+            self.reduced,
+        );
+        if self.press.is_none() && self.flight.is_none() && self.menu.is_none() {
+            self.companion.draw_affection(
+                s,
+                self.rig.size(),
+                self.rig.visible_bounds(),
+                self.now,
+                self.reduced,
+            );
+        }
+    }
+
+    /// The latest frame of motion.
+    pub fn pose(&self) -> &Pose {
+        &self.pose
+    }
+
+    /// The window's physical rectangle and its physical pixels per logical
+    /// pixel, once attached.
+    pub fn window_scale(&self) -> Option<((i32, i32, i32, i32), f32)> {
+        let rect = native::window_rect(self.hwnd)?;
+        Some((rect, self.k(rect)))
+    }
+
+    /// Whether a physical screen point is over the character as drawn now.
+    pub fn over_screen(&self, p: (i32, i32)) -> bool {
+        let Some((rect, k)) = self.window_scale() else {
+            return false;
+        };
+        self.over_character(Point::new(
+            (p.0 - rect.0) as f32 / k,
+            (p.1 - rect.1) as f32 / k,
         ))
     }
 
@@ -2291,50 +2440,10 @@ impl canvas::Program<Message> for Stage<'_> {
     ) -> Vec<Geometry> {
         let d = self.desktop;
         let l = &d.layout;
-        let pose = &d.pose;
         let mut frame = Frame::new(renderer, bounds.size());
-        frame.translate(Vector::new(l.character.x, l.character.y));
-        frame.scale(l.scale);
-        // Carried with a held pose: it hangs from its scruff at the cursor.
-        if let Some(press) = d.press.as_ref().filter(|p| p.dragging)
-            && let Some(held) = &d.pictures.held
-        {
-            let angle = pose.carry.map_or(0.0, |(_, a)| a);
-            d.rig.draw_hanging(&mut frame, held, press.pivot, angle);
-        } else {
-            super::motion::place(&mut frame, pose, d.rig.anchor(), d.rig.size().height);
-            match d.picture() {
-                Some(picture) => d.rig.draw_picture(&mut frame, picture),
-                None => d.rig.draw_pose(&mut frame, pose),
-            }
-        }
+        d.paint_character(&mut frame);
         let mut sleep_overlay = Frame::new(renderer, bounds.size());
-        sleep_overlay.translate(Vector::new(l.character.x, l.character.y));
-        sleep_overlay.scale(l.scale);
-        super::motion::place(
-            &mut sleep_overlay,
-            pose,
-            d.rig.anchor(),
-            d.rig.size().height,
-        );
-        companionship::draw_zzz(
-            &mut sleep_overlay,
-            d.rig.size(),
-            &d.sleep_settings(),
-            d.companion.state,
-            d.companion.stirring,
-            d.now,
-            d.reduced,
-        );
-        if d.press.is_none() && d.flight.is_none() && d.menu.is_none() {
-            d.companion.draw_affection(
-                &mut sleep_overlay,
-                d.rig.size(),
-                d.rig.visible_bounds(),
-                d.now,
-                d.reduced,
-            );
-        }
+        d.paint_overlay(&mut sleep_overlay);
         let mut geometry = vec![frame.into_geometry(), sleep_overlay.into_geometry()];
         if let Some((side, scale, alpha)) = d.menu_look() {
             let mut ui = Frame::new(renderer, bounds.size());

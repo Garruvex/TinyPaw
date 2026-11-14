@@ -1,5 +1,6 @@
 //! Shared, clock-driven headpat and sleep state. Platform adapters supply
 //! proximity, posed hit tests and external audio status.
+use super::surface::Surface;
 use iced::Point;
 use serde_json::{Value, json};
 
@@ -212,9 +213,9 @@ impl Controller {
         pose.lean += tilt * 0.35;
         pose.squash += amount * (0.08 + 0.06 * (now * 6.0).sin());
     }
-    pub fn draw_affection(
+    pub fn draw_affection<S: Surface>(
         &self,
-        frame: &mut iced::widget::canvas::Frame,
+        frame: &mut S,
         stage: iced::Size,
         bounds: iced::Rectangle,
         now: f32,
@@ -752,8 +753,8 @@ mod tests {
 }
 
 /// Sleep decoration in stage coordinates. Its bounds never participate in input.
-pub fn draw_zzz(
-    frame: &mut iced::widget::canvas::Frame,
+pub fn draw_zzz<S: Surface>(
+    frame: &mut S,
     stage: iced::Size,
     settings: &Settings,
     state: State,
@@ -798,7 +799,8 @@ pub fn draw_zzz(
             let opacity = (alpha * (1.0 - t) * 15.0).round().clamp(0.0, 15.0) as usize;
             frame.draw_image(
                 iced::Rectangle::new(Point::new(left, y), iced::Size::new(size * 0.6, size * 0.7)),
-                iced::widget::canvas::Image::new(zzz_images()[opacity].clone()),
+                &zzz_images()[opacity],
+                1.0,
             );
         }
     }
@@ -903,11 +905,12 @@ impl Affection {
         }
     }
 }
-fn draw_heart(frame: &mut iced::widget::canvas::Frame, origin: Point, size: f32, alpha: f32) {
+fn draw_heart<S: Surface>(frame: &mut S, origin: Point, size: f32, alpha: f32) {
     let opacity = (alpha * 15.0).round().clamp(0.0, 15.0) as usize;
     frame.draw_image(
         iced::Rectangle::new(origin, iced::Size::new(size, size)),
-        iced::widget::canvas::Image::new(heart_images()[opacity].clone()),
+        &heart_images()[opacity],
+        1.0,
     );
 }
 fn heart_images() -> &'static Vec<iced::advanced::image::Handle> {

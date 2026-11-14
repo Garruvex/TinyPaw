@@ -354,7 +354,7 @@ pub struct Inputs {
 }
 
 /// Everything the renderer needs for one frame.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Pose {
     /// Rotation per part, in radians, relative to its parent.
     pub angles: Vec<f32>,

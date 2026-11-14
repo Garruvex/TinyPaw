@@ -1,5 +1,7 @@
 //! Windows stage window: a layered, always-on-top, never-activating popup
-//! updated with `UpdateLayeredWindow` from the pixel buffer.
+//! updated with `UpdateLayeredWindow` from the pixel buffer. The stage thread
+//! owns the character's `Desktop` state, steps it on its own clock and draws
+//! it with the shared renderer.
 
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -11,8 +13,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use iced::Point;
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     AC_SRC_ALPHA, AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION,
     CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, ReleaseDC,
@@ -22,31 +23,11 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
+use super::{Character, Event, Intent};
+use crate::mascot::Msg;
+use crate::mascot::desktop::{Desktop, Effects, Options};
 use crate::mascot::motion::Pose;
-use crate::mascot::render::{Look, Placement, render_character};
-use crate::mascot::rig::Rig;
-use crate::mascot::surface::Raster;
-
-/// Messages to the stage.
-pub enum Intent {
-    /// Replaces the character and sizes the window to `height` physical pixels
-    /// of visible artwork.
-    SetCharacter(Box<Rig>, f32),
-    /// Moves the window's top-left corner, in physical pixels.
-    MoveTo(i32, i32),
-    /// Plays a gentle idle sway at the display's frame rate.
-    Animate(bool),
-    Quit,
-}
-
-/// Messages from the stage.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Event {
-    Ready,
-    Clicked,
-    /// Carried and let go, with the window's top-left corner.
-    Dropped(i32, i32),
-}
+use crate::mascot::surface::{Raster, Surface};
 
 /// A handle to the stage thread.
 pub struct Stage {
@@ -94,34 +75,8 @@ impl Drop for Stage {
     }
 }
 
-/// How far the cursor must move before a press becomes a carry, in pixels.
-const DRAG_SLOP: i32 = 4;
-/// A pixel this opaque, or more, catches the mouse.
-const SOLID: u8 = 32;
-const FRAME: Duration = Duration::from_millis(16);
-
-struct Window {
-    hwnd: HWND,
-    size: (u32, u32),
-    pos: (i32, i32),
-    rig: Option<Rig>,
-    height: f32,
-    pose: Pose,
-    raster: Option<Raster>,
-    dib: Option<Dib>,
-    animate: bool,
-    started: Instant,
-    dirty: bool,
-    /// Where the cursor grabbed the window, set while the left button is down.
-    grab: Option<Grab>,
-    events: Sender<Event>,
-}
-
-struct Grab {
-    cursor: (i32, i32),
-    offset: (i32, i32),
-    carried: bool,
-}
+/// How long the thread may sleep when nothing needs it.
+const IDLE: Duration = Duration::from_secs(3600);
 
 struct Dib {
     dc: *mut c_void,
@@ -175,12 +130,30 @@ impl Drop for Dib {
     }
 }
 
+struct Window {
+    hwnd: HWND,
+    desktop: Option<Desktop>,
+    options: Option<Options>,
+    raster: Option<Raster>,
+    dib: Option<Dib>,
+    /// The pose last drawn, to skip frames where nothing moved.
+    drawn: Option<Pose>,
+    next_poll: Instant,
+    /// Something changed outside a poll; draw at the next one.
+    dirty: bool,
+    events: Sender<Event>,
+}
+
 thread_local! {
     static WINDOW: RefCell<Option<Window>> = const { RefCell::new(None) };
 }
 
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
+}
+
+fn with_window<R>(f: impl FnOnce(&mut Window) -> R) -> Option<R> {
+    WINDOW.with(|w| w.try_borrow_mut().ok()?.as_mut().map(f))
 }
 
 fn run(intents: Receiver<Intent>, events: Sender<Event>, shared: Arc<AtomicIsize>) {
@@ -223,17 +196,13 @@ fn run(intents: Receiver<Intent>, events: Sender<Event>, shared: Arc<AtomicIsize
     WINDOW.with(|w| {
         *w.borrow_mut() = Some(Window {
             hwnd,
-            size: (0, 0),
-            pos: (0, 0),
-            rig: None,
-            height: 0.0,
-            pose: Pose::default(),
+            desktop: None,
+            options: None,
             raster: None,
             dib: None,
-            animate: false,
-            started: Instant::now(),
+            drawn: None,
+            next_poll: Instant::now(),
             dirty: false,
-            grab: None,
             events,
         });
     });
@@ -241,6 +210,7 @@ fn run(intents: Receiver<Intent>, events: Sender<Event>, shared: Arc<AtomicIsize
     with_window(|w| {
         let _ = w.events.send(Event::Ready);
     });
+
     loop {
         let mut msg: MSG = unsafe { zeroed() };
         while unsafe { PeekMessageW(&mut msg, null_mut(), 0, 0, PM_REMOVE) } != 0 {
@@ -259,98 +229,190 @@ fn run(intents: Receiver<Intent>, events: Sender<Event>, shared: Arc<AtomicIsize
             }
             with_window(|w| w.apply(intent));
         }
-        let animating = with_window(|w| {
-            w.frame();
-            w.animate
-        })
-        .unwrap_or(false);
+        let wait = with_window(|w| w.tick()).unwrap_or(IDLE);
         unsafe {
             MsgWaitForMultipleObjects(
                 0,
                 null(),
                 0,
-                if animating {
-                    FRAME.as_millis() as u32
-                } else {
-                    u32::MAX
-                },
+                wait.as_millis().min(u128::from(u32::MAX - 1)) as u32,
                 QS_ALLINPUT,
             );
         }
     }
 }
 
-fn with_window<R>(f: impl FnOnce(&mut Window) -> R) -> Option<R> {
-    WINDOW.with(|w| w.try_borrow_mut().ok()?.as_mut().map(f))
-}
-
 impl Window {
     fn apply(&mut self, intent: Intent) {
+        self.dirty = true;
+        self.next_poll = Instant::now();
         match intent {
-            Intent::SetCharacter(rig, height) => {
-                self.pose = Pose {
-                    angles: vec![0.0; rig.motion_parts().len()],
-                    ..Pose::default()
-                };
-                self.height = height;
-                self.rig = Some(*rig);
-                self.resize();
+            Intent::Open {
+                character,
+                size,
+                anchor,
+                rows,
+                hidden,
+                options,
+            } => {
+                self.options = Some(options);
+                let Character {
+                    id,
+                    rig,
+                    lines,
+                    click_compress,
+                    pictures,
+                    fall,
+                } = *character;
+                let mut desktop = Desktop::new(
+                    iced::window::Id::unique(),
+                    id,
+                    rig,
+                    size,
+                    anchor,
+                    rows,
+                    hidden,
+                );
+                desktop.set_lines(lines, &options);
+                desktop.set_click_compress(click_compress);
+                desktop.set_pictures(pictures);
+                desktop.set_fall(fall);
+                let fx = desktop.attach(self.hwnd as isize, &options);
+                self.desktop = Some(desktop);
+                self.effects(fx);
+                if !hidden {
+                    unsafe { ShowWindow(self.hwnd, SW_SHOWNOACTIVATE) };
+                }
             }
-            Intent::MoveTo(x, y) => {
-                self.pos = (x, y);
-                self.dirty = true;
+            Intent::SetCharacter(character) => {
+                let Some(options) = self.options else { return };
+                if let Some(d) = &mut self.desktop {
+                    let Character {
+                        id,
+                        rig,
+                        lines,
+                        click_compress,
+                        pictures,
+                        fall,
+                    } = *character;
+                    d.set_rig(id, rig);
+                    d.set_lines(lines, &options);
+                    d.set_click_compress(click_compress);
+                    d.set_pictures(pictures);
+                    d.set_fall(fall);
+                }
             }
-            Intent::Animate(on) => {
-                self.animate = on;
-                self.dirty = true;
+            Intent::Options(options) => self.options = Some(options),
+            Intent::Audio { audio, voice_busy } => {
+                if let Some(d) = &mut self.desktop {
+                    d.set_audio(audio);
+                    d.set_voice_busy(voice_busy);
+                }
+            }
+            Intent::Resize { size, rows } => {
+                if let Some(d) = &mut self.desktop {
+                    d.resize(size, rows);
+                }
+            }
+            Intent::ResetPosition => {
+                if let Some(d) = &mut self.desktop {
+                    d.reset_position();
+                }
+            }
+            Intent::DisplaysChanged => {
+                if let Some(d) = &mut self.desktop {
+                    d.displays_changed();
+                }
+            }
+            Intent::Hidden(hidden) => {
+                let hide = self.desktop.as_mut().and_then(|d| d.hide(hidden));
+                self.effects(Effects {
+                    hide,
+                    ..Effects::default()
+                });
             }
             Intent::Quit => {}
         }
     }
 
-    fn scale(&self) -> f32 {
-        self.rig
-            .as_ref()
-            .map_or(1.0, |r| self.height / r.visible_height().max(1.0))
-    }
-
-    fn resize(&mut self) {
-        let Some(rig) = &self.rig else { return };
-        let scale = self.scale();
-        let size = (
-            (rig.size().width * scale).ceil().max(1.0) as u32,
-            (rig.size().height * scale).ceil().max(1.0) as u32,
-        );
-        self.size = size;
-        self.raster = Raster::new(size.0, size.1);
-        self.dib = Dib::new(size.0, size.1);
-        self.dirty = true;
-    }
-
-    /// Draws and presents when something changed or the sway is running.
-    fn frame(&mut self) {
-        if !self.dirty && !self.animate {
-            return;
+    /// Applies what a step asked of the window and tells the app what it saw.
+    fn effects(&mut self, fx: Effects) {
+        match fx.hide {
+            Some(true) => unsafe {
+                ShowWindow(self.hwnd, SW_HIDE);
+            },
+            Some(false) => unsafe {
+                ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+            },
+            None => {}
         }
-        let (Some(rig), Some(raster), Some(dib)) = (&self.rig, &mut self.raster, &self.dib) else {
-            return;
-        };
-        if self.animate {
-            let t = self.started.elapsed().as_secs_f32();
-            for (i, angle) in self.pose.angles.iter_mut().enumerate() {
-                *angle = 0.05 * (t * 2.0 + i as f32).sin();
+        if let Some((x, y)) = fx.save {
+            let _ = self.events.send(Event::Placed(x, y));
+        }
+        if let Some(d) = &mut self.desktop {
+            for gesture in d.take_events() {
+                let _ = self.events.send(Event::Gesture(gesture));
+            }
+            if let Some(sound) = d.take_sound() {
+                let _ = self.events.send(Event::Sound(sound));
             }
         }
-        render_character(
-            raster,
-            rig,
-            &self.pose,
-            Look::Posed,
-            Placement {
-                origin: Point::ORIGIN,
-                scale: self.height / rig.visible_height().max(1.0),
-            },
+    }
+
+    /// Steps the character when due, draws if anything moved, and says how
+    /// long the thread may sleep.
+    fn tick(&mut self) -> Duration {
+        let now = Instant::now();
+        if now < self.next_poll {
+            return self.next_poll - now;
+        }
+        let Some(options) = self.options else {
+            return IDLE;
+        };
+        let Some(d) = &mut self.desktop else {
+            return IDLE;
+        };
+        let fx = d.step(Msg::Poll, &options);
+        let interval = d.poll_interval(&options);
+        self.effects(fx);
+        self.draw(interval.is_none_or(|i| i < Duration::from_millis(100)));
+        let wait = interval.unwrap_or(IDLE);
+        self.next_poll = Instant::now() + wait;
+        wait
+    }
+
+    /// Draws and presents. `moving` is set while the character is animating;
+    /// when it is still, a frame is drawn only if the pose or window changed.
+    fn draw(&mut self, moving: bool) {
+        let Some(d) = &self.desktop else { return };
+        let Some((rect, k)) = d.window_scale() else {
+            return;
+        };
+        let size = (
+            (rect.2 - rect.0).max(1) as u32,
+            (rect.3 - rect.1).max(1) as u32,
         );
+        let resized = self.raster.as_ref().map(|r| (r.width(), r.height())) != Some(size);
+        if resized {
+            self.raster = Raster::new(size.0, size.1);
+            self.dib = Dib::new(size.0, size.1);
+        }
+        let pose = d.pose();
+        if !moving && !resized && !self.dirty && self.drawn.as_ref() == Some(pose) {
+            return;
+        }
+        let (Some(raster), Some(dib)) = (&mut self.raster, &self.dib) else {
+            return;
+        };
+        raster.clear();
+        raster.with_save(|r| {
+            r.scale(k);
+            d.paint_character(r);
+        });
+        raster.with_save(|r| {
+            r.scale(k);
+            d.paint_overlay(r);
+        });
         // Premultiplied RGBA into the DIB's premultiplied BGRA.
         let count = (dib.size.0 * dib.size.1) as usize;
         let out = unsafe { std::slice::from_raw_parts_mut(dib.bits, count * 4) };
@@ -369,45 +431,35 @@ impl Window {
                 SourceConstantAlpha: 255,
                 AlphaFormat: AC_SRC_ALPHA as u8,
             };
-            let at = POINT {
-                x: self.pos.0,
-                y: self.pos.1,
-            };
-            let size = windows_sys::Win32::Foundation::SIZE {
+            let extent = SIZE {
                 cx: dib.size.0 as i32,
                 cy: dib.size.1 as i32,
             };
             let from = POINT { x: 0, y: 0 };
+            // No destination: the window keeps the position the character
+            // logic gave it with SetWindowPos.
             UpdateLayeredWindow(
                 self.hwnd,
                 null_mut(),
-                &at,
-                &size,
+                null(),
+                &extent,
                 dib.dc,
                 &from,
                 0,
                 &blend,
                 ULW_ALPHA,
             );
-            ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
         }
+        self.drawn = Some(pose.clone());
         self.dirty = false;
-    }
-
-    /// Alpha of the last drawn frame at a window-local pixel.
-    fn alpha_at(&self, x: i32, y: i32) -> u8 {
-        let Some(raster) = &self.raster else { return 0 };
-        if x < 0 || y < 0 || x >= self.size.0 as i32 || y >= self.size.1 as i32 {
-            return 0;
-        }
-        raster.data()[((y as u32 * self.size.0 + x as u32) * 4 + 3) as usize]
     }
 }
 
-fn cursor() -> (i32, i32) {
-    let mut p = POINT { x: 0, y: 0 };
-    unsafe { GetCursorPos(&mut p) };
-    (p.x, p.y)
+fn cursor_point(lparam: LPARAM) -> (i32, i32) {
+    (
+        (lparam & 0xFFFF) as i16 as i32,
+        ((lparam >> 16) & 0xFFFF) as i16 as i32,
+    )
 }
 
 unsafe extern "system" fn window_proc(
@@ -418,11 +470,8 @@ unsafe extern "system" fn window_proc(
 ) -> LRESULT {
     match msg {
         WM_NCHITTEST => {
-            let (x, y) = (
-                (lparam & 0xFFFF) as i16 as i32,
-                ((lparam >> 16) & 0xFFFF) as i16 as i32,
-            );
-            let solid = with_window(|w| w.alpha_at(x - w.pos.0, y - w.pos.1) >= SOLID);
+            let at = cursor_point(lparam);
+            let solid = with_window(|w| w.desktop.as_ref().is_some_and(|d| d.over_screen(at)));
             return match solid {
                 Some(false) => HTTRANSPARENT as LRESULT,
                 _ => HTCLIENT as LRESULT,
@@ -431,65 +480,81 @@ unsafe extern "system" fn window_proc(
         WM_MOUSEACTIVATE => return MA_NOACTIVATE as LRESULT,
         WM_LBUTTONDOWN => {
             with_window(|w| {
-                let at = cursor();
-                w.grab = Some(Grab {
-                    cursor: at,
-                    offset: (at.0 - w.pos.0, at.1 - w.pos.1),
-                    carried: false,
-                });
+                if let (Some(d), Some(options)) = (&mut w.desktop, w.options) {
+                    d.step(Msg::Pressed, &options);
+                    w.dirty = true;
+                    w.next_poll = Instant::now();
+                }
             });
             unsafe { SetCapture(hwnd) };
-            return 0;
-        }
-        WM_MOUSEMOVE => {
-            with_window(|w| {
-                let at = cursor();
-                let Some(grab) = &mut w.grab else { return };
-                let moved = (at.0 - grab.cursor.0)
-                    .abs()
-                    .max((at.1 - grab.cursor.1).abs());
-                if moved >= DRAG_SLOP {
-                    grab.carried = true;
-                }
-                if grab.carried {
-                    w.pos = (at.0 - grab.offset.0, at.1 - grab.offset.1);
-                    w.dirty = true;
-                    w.frame();
-                }
-            });
             return 0;
         }
         WM_LBUTTONUP => {
             unsafe { ReleaseCapture() };
             with_window(|w| {
-                if let Some(grab) = w.grab.take() {
-                    let _ = w.events.send(if grab.carried {
-                        Event::Dropped(w.pos.0, w.pos.1)
-                    } else {
-                        Event::Clicked
-                    });
+                if let (Some(d), Some(options)) = (&mut w.desktop, w.options) {
+                    let fx = d.step(Msg::Released, &options);
+                    w.effects(fx);
+                    w.dirty = true;
+                    w.next_poll = Instant::now();
                 }
             });
             return 0;
+        }
+        WM_DISPLAYCHANGE | WM_DPICHANGED => {
+            with_window(|w| {
+                if let Some(d) = &mut w.desktop {
+                    d.displays_changed();
+                    w.dirty = true;
+                    w.next_poll = Instant::now();
+                }
+            });
         }
         _ => {}
     }
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
-/// `tinypaw --stage-probe [animate]`: shows bundled Yohta on the stage so the
-/// window, hit testing, carrying and footprint can be tried by hand. It runs
-/// until the process is stopped.
+/// `tinypaw --stage-probe`: shows bundled Yohta on the stage, behaving as the
+/// desktop character does today, so it can be tried by hand. It prints the
+/// events the app would receive and runs until the process is stopped.
 pub fn probe() {
+    use crate::features::mascot as feature;
+    use crate::mascot::desktop::Pictures;
+    use crate::mascot::lines::Lines;
+    use crate::mascot::rig::Rig;
     use windows_sys::Win32::UI::HiDpi::{
         DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
     };
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
-    let animate = std::env::args().any(|a| a == "animate");
     let stage = Stage::spawn();
-    stage.send(Intent::SetCharacter(Box::new(Rig::load()), 300.0));
-    stage.send(Intent::MoveTo(300, 200));
-    stage.send(Intent::Animate(animate));
+    stage.send(Intent::Open {
+        character: Box::new(Character {
+            id: "yohta",
+            rig: Rig::load(),
+            lines: Lines::default(),
+            click_compress: true,
+            pictures: Pictures::default(),
+            fall: false,
+        }),
+        size: 146.0,
+        anchor: (feature::UNPLACED, feature::UNPLACED),
+        rows: 5,
+        hidden: false,
+        options: Options {
+            bop: None,
+            dance: Default::default(),
+            eyes: true,
+            idle: true,
+            reduced: false,
+            lines: false,
+            quiet: true,
+            idle_every: (60.0, 120.0),
+            music: 0.0,
+            energy: None,
+            beat: None,
+        },
+    });
     println!(
         "stage probe running (pid {}); Ctrl+C to stop",
         std::process::id()
