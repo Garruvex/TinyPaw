@@ -1,0 +1,73 @@
+// Design tokens: the one place raw sizes and colours live for Slint windows.
+// Colours must match src/view/theme.rs; `cargo test` fails if they drift
+// (src/view/ui_guard_tests.rs). Add a token here before using a new value.
+export global Tokens {
+    // Surfaces
+    out property <color> surface: #17181C;
+    out property <color> header: #1C1D22;
+    out property <color> nav: #1A1B20;
+    out property <color> raised: #202227;
+    out property <color> control: #23252B;
+    out property <color> hover: #2C2F36;
+    out property <color> well: #111216;
+    out property <color> line: #FFFFFF14;
+    out property <color> line-strong: #FFFFFF1F;
+    out property <color> track: #3A3D45;
+
+    // Text
+    out property <color> text: #F3F4F6;
+    out property <color> text-soft: #E5E7EB;
+    out property <color> subtle: #C9CDD4;
+    out property <color> muted: #A1A6B0;
+    out property <color> faint: #858A94;
+    out property <color> disabled: #5E636C;
+
+    // Accents
+    out property <color> cyan: #22D3EE;
+    out property <color> cyan-text: #67E8F9;
+    out property <color> cyan-bg: #22D3EE29;
+    out property <color> amber: #F5A524;
+    out property <color> amber-text: #FBBF24;
+    out property <color> amber-bg: #F5A52429;
+    out property <color> on-accent: #06262B;
+    out property <color> on-amber: #1A1206;
+    out property <color> danger: #FCA5A5;
+    out property <color> danger-bg: #F8717129;
+    out property <color> white: #FFFFFF;
+    out property <color> none: #00000000;
+
+    // Type scale
+    out property <length> font-label: 12px;
+    out property <length> font-body: 13px;
+    out property <length> font-nav: 14px;
+    out property <length> font-h2: 15px;
+    out property <length> font-h1: 22px;
+
+    // Spacing scale. Use these for padding, spacing and gaps.
+    out property <length> space-1: 4px;
+    out property <length> space-2: 8px;
+    out property <length> space-3: 12px;
+    out property <length> space-4: 16px;
+    out property <length> space-5: 24px;
+
+    // Radii
+    out property <length> radius-small: 7px;
+    out property <length> radius-control: 8px;
+    out property <length> radius-card: 10px;
+    out property <length> radius-round: 999px;
+
+    // Control sizes
+    out property <length> h-tab: 30px;
+    out property <length> h-control: 32px;
+    out property <length> h-nav: 40px;
+    out property <length> h-row: 56px;
+    out property <length> nav-width: 208px;
+    out property <length> hairline: 1px;
+    out property <length> toggle-w: 40px;
+    out property <length> toggle-h: 22px;
+    out property <length> knob: 16px;
+    out property <length> rail: 4px;
+    out property <length> handle: 16px;
+    out property <length> value-w: 56px;
+    out property <length> label-w: 220px;
+}

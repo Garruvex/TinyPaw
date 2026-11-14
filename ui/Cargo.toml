@@ -1,0 +1,16 @@
+# The Slint UI kit, templates, pages and gallery. Own workspace for now; the
+# main package will depend on it by path when Settings moves over (plan step 4).
+[package]
+name = "tinypaw-ui"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[workspace]
+
+[dependencies]
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software"] }
+
+[build-dependencies]
+slint-build = "=1.18.1"

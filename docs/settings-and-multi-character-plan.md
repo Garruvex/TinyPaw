@@ -173,7 +173,7 @@ Each instance has its own shown flag, changed from its menu or its row in Settin
 | Step | Work | Done when |
 |---|---|---|
 | 0 | Slint prototype: Characters page and the studio preview pane with one draggable layer, software renderer | Drag feel, window open time, memory and overlay alignment under zoom are recorded, and the framework is chosen. Done: Slint chosen; drag feel confirmed by hand |
-| 1 | Foundations: tokens, kit, templates, `docs/ui-guide.md`, the guard, and the typed boundary between core and UI | A sample page built only from the kit passes the guard |
+| 1 | Foundations: tokens, kit, templates, `docs/ui-guide.md`, the guard, and the typed boundary between core and UI | A sample page built only from the kit passes the guard. Done except the snapshot type: the licence, `ui/` kit, templates, gallery, `docs/ui-guide.md` and the guard test landed; `Set` and `Command` already exist in `src/registry`, and the read-only snapshot type is defined with the first page in step 4 |
 | 2 | Shared character renderer: the rig draws to a pixel buffer without Iced | The current desktop character and preview render from it with pixel checks unchanged |
 | 3 | Stage engine with one character | Same behaviour as today; no character traffic in the dispatcher; idle footprint within budget |
 | 4 | Settings in the new framework: registry, then Sound, Display & motion, Shortcuts, Ink & text, Spotlight & lens, Pointer, Music response; first-run window | The Iced settings views are deleted; every control saves at once |
@@ -253,7 +253,7 @@ Findings for the design system:
 
 The code is licensed GPL-3.0-or-later. This matches Slint's GPL option and is compatible with GPUI's Apache-2.0 licence, so it holds whichever framework step 0 chooses. The artwork under `assets/mascot/yohta` is not covered by the code licence and needs its own terms.
 
-To do in step 1: add the licence file and the `license` field in `Cargo.toml`, state the artwork terms, and check the full dependency list for compatibility.
+Done in step 1: `LICENSE` (GPL-3.0) and `license = "GPL-3.0-or-later"` are in place, and the dependency list was checked: every licence is permissive or MPL-2.0, which is compatible. The artwork has a placeholder notice at `assets/mascot/NOTICE.md` (all rights reserved) until the author picks terms; this is still open.
 
 ## Open questions
 

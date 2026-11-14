@@ -10,6 +10,9 @@ pub mod settings;
 pub mod theme;
 pub mod wheel;
 
+#[cfg(test)]
+mod ui_guard_tests;
+
 #[cfg(all(test, not(feature = "gpu")))]
 mod interaction_tests;
 

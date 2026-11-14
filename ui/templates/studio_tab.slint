@@ -1,0 +1,18 @@
+import { Tokens } from "../tokens.slint";
+import { Hint, SectionTitle } from "../kit.slint";
+
+// Template: one tab of the character studio's right-hand pane. A tab is a
+// short description followed by sections built from the kit.
+export component StudioTab inherits Rectangle {
+    in property <string> title;
+    in property <string> summary;
+    background: Tokens.surface;
+    VerticalLayout {
+        padding: Tokens.space-4;
+        spacing: Tokens.space-3;
+        alignment: start;
+        SectionTitle { text: root.title; }
+        if root.summary != "": Hint { text: root.summary; }
+        @children
+    }
+}

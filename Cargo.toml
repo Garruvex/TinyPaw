@@ -3,6 +3,7 @@ name = "tinypaw"
 version = "0.1.2"
 edition = "2024"
 default-run = "tinypaw"
+license = "GPL-3.0-or-later"
 
 [build-dependencies]
 winresource = "0.1"

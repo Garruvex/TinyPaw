@@ -1,0 +1,29 @@
+import { Page, Section, SettingRow, Toggle, Range, Segmented, Notice, Btn } from "../kit.slint";
+
+// The sample page: built only from the kit and tokens. It is the pattern new
+// pages copy, and the guard test keeps it free of raw sizes and colours.
+export component SamplePage inherits Page {
+    title: "Sample";
+    summary: "Shows how a page is assembled.";
+    in-out property <bool> enabled: true;
+    in-out property <float> volume: 60;
+    in-out property <int> mode: 0;
+    Section {
+        title: "Sound";
+        SettingRow {
+            label: "Play sounds";
+            hint: "Turns every character sound on or off.";
+            Toggle { checked <=> root.enabled; }
+        }
+        SettingRow {
+            label: "Volume";
+            Range { value <=> root.volume; enabled: root.enabled; }
+        }
+        SettingRow {
+            label: "Style";
+            Segmented { options: ["Quiet", "Normal", "Lively"]; current <=> root.mode; }
+        }
+    }
+    Notice { text: "Changes save as you make them."; }
+    Btn { text: "Reset"; }
+}

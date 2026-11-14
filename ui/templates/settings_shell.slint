@@ -1,0 +1,44 @@
+import { Tokens } from "../tokens.slint";
+import { NavItem, NavGroup } from "../kit.slint";
+
+// Template: the Settings window frame. A navigation column on the left and
+// one page on the right. Every Settings page is placed inside this shell.
+export struct NavEntry {
+    group: string,
+    name: string,
+}
+
+export component SettingsShell inherits Window {
+    in property <string> window-title: "TinyPaw Settings";
+    in property <[NavEntry]> entries;
+    in-out property <int> current;
+    callback navigate(int);
+    title: root.window-title;
+    background: Tokens.surface;
+    preferred-width: 1000px; // guard:allow window size
+    preferred-height: 680px; // guard:allow window size
+    HorizontalLayout {
+        Rectangle {
+            width: Tokens.nav-width;
+            background: Tokens.nav;
+            VerticalLayout {
+                padding: Tokens.space-4;
+                spacing: Tokens.space-1;
+                alignment: start;
+                for entry[i] in root.entries: VerticalLayout {
+                    spacing: Tokens.space-1;
+                    if i == 0 || root.entries[i - 1].group != entry.group: NavGroup { text: entry.group; }
+                    NavItem {
+                        text: entry.name;
+                        selected: i == root.current;
+                        clicked => {
+                            root.current = i;
+                            root.navigate(i);
+                        }
+                    }
+                }
+            }
+        }
+        @children
+    }
+}
