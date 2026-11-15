@@ -213,8 +213,8 @@ impl App {
         #[cfg(windows)]
         {
             let on = self.session.settings().bool(character::MUSIC);
-            let showing = self.mascot.as_ref().is_some_and(|m| !m.hidden);
-            let sleep_audio = self.mascot.as_ref().is_some_and(|m| m.sleep) && showing;
+            let showing = self.mascots.iter().any(|m| !m.hidden);
+            let sleep_audio = self.mascots.iter().any(|m| m.sleep && !m.hidden);
             // The Settings window's Music page shows the meter, too.
             let watched = self.studio.motion_preview.is_some() || self.settings_child.is_some();
             let wanted = (on && (showing || watched)) || sleep_audio;
@@ -271,13 +271,13 @@ impl App {
                 (None, Some(_)) => self.beat = None,
                 (None, None) => {}
             }
-            if on
-                && self.music.as_ref().is_some_and(|m| m.take_started())
-                && let Some(m) = &self.mascot
-            {
-                m.stage.send(crate::stage::Intent::Say(
-                    crate::mascot::lines::Trigger::MusicStart,
-                ));
+            if on && self.music.as_ref().is_some_and(|m| m.take_started()) {
+                // They take turns, so one of them says it.
+                for m in &self.mascots {
+                    m.stage.send(crate::stage::Intent::Say(
+                        crate::mascot::lines::Trigger::MusicStart,
+                    ));
+                }
             }
         }
     }

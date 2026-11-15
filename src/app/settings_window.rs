@@ -130,7 +130,23 @@ impl App {
                 "inputs": inputs,
             })
         };
+        let instances: Vec<_> = self
+            .instances
+            .list()
+            .iter()
+            .map(|i| {
+                serde_json::json!({
+                    "id": i.id,
+                    "character": i.character,
+                    "shown": i.shown,
+                    "height": i.height,
+                    "eyes": i.eyes,
+                    "idle": i.idle,
+                })
+            })
+            .collect();
         let state = serde_json::json!({
+            "instances": instances,
             "characters": characters,
             "music": music,
             "packs": packs,
@@ -182,6 +198,26 @@ impl App {
                 self.page = crate::view::settings::Page::Character;
                 tasks.push(self.open_classic_settings());
             }
+            "instance.add" => {
+                let selected =
+                    self.character_id(self.session.settings().choice_text(character::CHARACTER));
+                self.instances.add(selected, self.session.settings());
+                self.save_instances();
+                // Adding one means wanting to see it.
+                if !self.session.settings().bool(character::ENABLED) {
+                    out.sets.push((character::ENABLED, Value::Bool(true)));
+                }
+                tasks.push(self.reconcile_mascot());
+            }
+            name if name.starts_with("instance.remove.") => {
+                let Ok(id) = name["instance.remove.".len()..].parse::<u32>() else {
+                    return format!("error: bad instance in `{name}`");
+                };
+                if self.instances.remove(id) {
+                    self.save_instances();
+                    tasks.push(self.reconcile_mascot());
+                }
+            }
             "character.reset" => tasks.push(self.ui_message(UiMsg::ResetMascotPosition, now, out)),
             "music.reset-hand" => {
                 use crate::features::mascot as character;
@@ -207,6 +243,50 @@ impl App {
 }
 
 impl App {
+    /// `instance-set <id> <field> <value>` from the Settings window: one
+    /// setting of one character on the desktop.
+    pub(super) fn settings_instance(&mut self, rest: &str) -> String {
+        let mut parts = rest.split_whitespace();
+        let (Some(id), Some(field), Some(value)) = (
+            parts.next().and_then(|s| s.parse::<u32>().ok()),
+            parts.next(),
+            parts.next(),
+        ) else {
+            return "error: usage: instance-set <id> <shown|height|eyes|idle> <value>".into();
+        };
+        let range = crate::features::mascot::MIN_HEIGHT..=crate::features::mascot::MAX_HEIGHT;
+        let Some(instance) = self.instances.get_mut(id) else {
+            return format!("error: no character {id} on the desktop");
+        };
+        let flag = || match value {
+            "true" | "on" | "1" => Some(true),
+            "false" | "off" | "0" => Some(false),
+            _ => None,
+        };
+        match field {
+            "shown" => match flag() {
+                Some(on) => instance.shown = on,
+                None => return "error: shown takes true or false".into(),
+            },
+            "eyes" => match flag() {
+                Some(on) => instance.eyes = on,
+                None => return "error: eyes takes true or false".into(),
+            },
+            "idle" => match flag() {
+                Some(on) => instance.idle = on,
+                None => return "error: idle takes true or false".into(),
+            },
+            "height" => match value.parse::<f64>() {
+                Ok(h) if h.is_finite() => instance.height = h.clamp(*range.start(), *range.end()),
+                _ => return "error: height takes a number".into(),
+            },
+            _ => return format!("error: unknown field `{field}`"),
+        }
+        self.save_instances();
+        let _ = self.reconcile_mascot();
+        "ok".into()
+    }
+
     /// `shortcut-bind <command> <binding>` from the Settings window.
     pub(super) fn settings_bind(&mut self, rest: &str) -> String {
         let Some((id, binding)) = rest.split_once(char::is_whitespace) else {

@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use super::DisplayInfo;
-use super::link::{CharacterInfo, MusicInfo, PackInfo, ShortcutInfo, WindowInfo};
+use super::link::{CharacterInfo, InstanceInfo, MusicInfo, PackInfo, ShortcutInfo, WindowInfo};
 use super::model::{Extra, Item, Kind, Section, Thumb};
 use crate::features::{display, mascot, point, sound, spotlight, system, text, upcoming};
 use crate::registry::{Registry, SettingValues, Value};
@@ -63,6 +63,7 @@ pub struct Context<'a> {
     pub windows: &'a [WindowInfo],
     pub packs: &'a [PackInfo],
     pub characters: &'a [CharacterInfo],
+    pub instances: &'a [InstanceInfo],
     pub music: &'a MusicInfo,
     pub has_custom_sound: bool,
 }
@@ -656,30 +657,26 @@ fn characters_page(b: &mut Builder<'_>) {
         );
         b.action(s, "characters.edit", "Character studio", "Open the studio…");
     });
-    b.section("Visibility", |s, b| {
-        b.toggle(s, mascot::ENABLED, Some("Show on the desktop"));
+    b.section("On the desktop", |s, b| {
+        b.toggle(s, mascot::ENABLED, Some("Show characters"));
         b.note(
             s,
-            "Right-click for its menu, click to see it react, and drag to move it. It stays while annotation is off and steps aside while you draw.",
+            "Right-click a character for its menu, click it to see it react, and drag it to move it. Characters stay while annotation is off and step aside while you draw.",
             false,
         );
-        b.range(s, mascot::HEIGHT, Some("Size"), 4.0, |v| format!("{v:.0} px"));
-        b.action(s, "character.reset", "Position", "Reset position");
-    });
-    b.section("Liveliness", |s, b| {
-        b.toggle(s, mascot::EYES, Some("Eyes follow the cursor"));
-        b.note(
+        let selected = b
+            .cx
+            .characters
+            .iter()
+            .find(|c| c.id == settings.choice_text(mascot::CHARACTER))
+            .map_or("the selected character", |c| c.name.as_str());
+        b.action(
             s,
-            "Needs eyes made of separate white, pupil and mask art.",
-            false,
+            "instance.add",
+            "Another one",
+            &format!("Add {selected} to the desktop"),
         );
-        b.toggle(s, mascot::IDLE, Some("Idle motion and blinking"));
-        b.note(
-            s,
-            "Reduced motion also stops idle motion and blinking.",
-            false,
-        );
-        b.action(s, "page:display", "Motion", "Motion settings");
+        b.action(s, "character.reset", "Positions", "Reset positions");
         b.choice(
             s,
             mascot::FRAME_RATE,
@@ -688,10 +685,73 @@ fn characters_page(b: &mut Builder<'_>) {
         );
         b.note(
             s,
-            "Higher is smoother but uses more CPU while the character moves.",
+            "Higher is smoother but uses more CPU while characters move. Reduced motion (Display & motion) also stops idle motion and blinking.",
             false,
         );
     });
+    // One section per character on the desktop; the same character can be there
+    // more than once.
+    let name_of = |id: &str| {
+        b.cx.characters
+            .iter()
+            .find(|c| c.id == id)
+            .map_or(id.to_owned(), |c| c.name.clone())
+    };
+    let titles: Vec<String> =
+        b.cx.instances
+            .iter()
+            .map(|i| {
+                let name = name_of(&i.character);
+                let same: Vec<_> =
+                    b.cx.instances
+                        .iter()
+                        .filter(|o| o.character == i.character)
+                        .collect();
+                match same.iter().position(|o| o.id == i.id) {
+                    Some(n) if same.len() > 1 => format!("{name} \u{b7} {}", n + 1),
+                    _ => name,
+                }
+            })
+            .collect();
+    let range = b.cx.registry.range(mascot::HEIGHT);
+    for (instance, title) in b.cx.instances.iter().zip(titles) {
+        let key = |field: &str| format!("instance.{}.{field}", instance.id);
+        b.section(&title, |s, b| {
+            let mut shown = Item::new(&key("shown"), Kind::Toggle, "Shown");
+            shown.on = instance.shown;
+            s.items.push(shown);
+            let mut size = Item::new(&key("height"), Kind::Range, "Size");
+            size.value = instance.height as f32;
+            size.min = *range.start() as f32;
+            size.max = *range.end() as f32;
+            size.text = format!("{:.0} px", instance.height);
+            s.items.push(size);
+            b.extras.insert(
+                key("height"),
+                Extra {
+                    step: Some(4.0),
+                    choices: Vec::new(),
+                },
+            );
+            let mut eyes = Item::new(&key("eyes"), Kind::Toggle, "Eyes follow the cursor");
+            eyes.on = instance.eyes;
+            s.items.push(eyes);
+            let mut idle = Item::new(&key("idle"), Kind::Toggle, "Idle motion and blinking");
+            idle.on = instance.idle;
+            s.items.push(idle);
+            b.action(
+                s,
+                &format!("instance.remove.{}", instance.id),
+                "Remove from the desktop",
+                "Remove",
+            );
+        });
+    }
+    if b.cx.instances.is_empty() {
+        b.section("Nobody here yet", |s, b| {
+            b.note(s, "Add a character to the desktop above.", false);
+        });
+    }
 }
 
 fn music_page(b: &mut Builder<'_>) {
@@ -1015,6 +1075,14 @@ mod tests {
                 settings: &settings,
                 displays: &displays,
                 shortcuts: &shortcuts(),
+                instances: &[InstanceInfo {
+                    id: 1,
+                    character: "yohta".into(),
+                    shown: true,
+                    height: 146.0,
+                    eyes: true,
+                    idle: true,
+                }],
                 characters: &[CharacterInfo {
                     id: "yohta".into(),
                     name: "Yohta".into(),
@@ -1062,6 +1130,8 @@ mod tests {
             let built = build_page(page, true);
             for item in built.sections.iter().flat_map(|s| &s.items) {
                 match item.kind {
+                    // One character on the desktop is not a registered setting.
+                    Kind::Toggle | Kind::Range if item.id.starts_with("instance.") => {}
                     Kind::Toggle | Kind::Range | Kind::Choice => {
                         assert!(
                             registry.setting(&item.id).is_some(),
@@ -1114,6 +1184,26 @@ mod tests {
             .collect();
         assert!(ids.contains(&point::ANGLE));
         assert!(!ids.contains(&"pointer.reaim"));
+    }
+
+    #[test]
+    fn each_character_on_the_desktop_has_its_own_section_with_its_own_controls() {
+        let built = build_page(PageId::Characters, false);
+        let titles: Vec<_> = built.sections.iter().map(|s| s.title.as_str()).collect();
+        assert!(titles.contains(&"On the desktop") && titles.contains(&"Yohta"));
+        let section = built.sections.iter().find(|s| s.title == "Yohta").unwrap();
+        let ids: Vec<_> = section.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "instance.1.shown",
+                "instance.1.height",
+                "instance.1.eyes",
+                "instance.1.idle",
+                "instance.remove.1"
+            ]
+        );
+        assert_eq!(built.extras["instance.1.height"].step, Some(4.0));
     }
 
     #[test]

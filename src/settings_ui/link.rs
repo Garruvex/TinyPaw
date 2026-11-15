@@ -56,6 +56,17 @@ pub struct CharacterInfo {
     pub thumb: Thumb,
 }
 
+/// A character on the desktop.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstanceInfo {
+    pub id: u32,
+    pub character: String,
+    pub shown: bool,
+    pub height: f64,
+    pub eyes: bool,
+    pub idle: bool,
+}
+
 /// What music response is listening to and hearing.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct MusicInfo {
@@ -80,6 +91,7 @@ pub struct PackInfo {
 
 /// What the resident app reports.
 pub struct State {
+    pub instances: Vec<InstanceInfo>,
     pub characters: Vec<CharacterInfo>,
     pub music: MusicInfo,
     pub packs: Vec<PackInfo>,
@@ -215,7 +227,26 @@ pub fn parse_state(registry: &Registry, reply: &str) -> Option<State> {
             }
         })
         .unwrap_or_default();
+    let instances = json
+        .get("instances")
+        .and_then(Json::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|i| {
+                    Some(InstanceInfo {
+                        id: i.get("id")?.as_u64()? as u32,
+                        character: i.get("character")?.as_str()?.to_owned(),
+                        shown: i.get("shown")?.as_bool()?,
+                        height: i.get("height")?.as_f64()?,
+                        eyes: i.get("eyes")?.as_bool()?,
+                        idle: i.get("idle")?.as_bool()?,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     Some(State {
+        instances,
         characters,
         music,
         packs,
@@ -349,6 +380,7 @@ fn snapshot(registry: &Registry, state: &State, page: usize, notice: &str) -> Sn
         windows: &state.windows,
         packs: &state.packs,
         characters: &state.characters,
+        instances: &state.instances,
         music: &state.music,
         has_custom_sound: state.custom_sound,
     };
@@ -398,6 +430,28 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
     let mut failures = 0;
     loop {
         match rx.recv_timeout(REFRESH) {
+            Ok(Cmd::Set(id, value)) if id.starts_with("instance.") => {
+                // `instance.<id>.<field>`: one setting of one character.
+                let mut parts = id.splitn(3, '.');
+                if let (Some(n), Some(field)) = (
+                    parts.nth(1).and_then(|n| n.parse::<u32>().ok()),
+                    parts.next(),
+                ) {
+                    let text = value_text(&value);
+                    if let Some(i) = state.instances.iter_mut().find(|i| i.id == n) {
+                        match (field, &value) {
+                            ("shown", Value::Bool(b)) => i.shown = *b,
+                            ("eyes", Value::Bool(b)) => i.eyes = *b,
+                            ("idle", Value::Bool(b)) => i.idle = *b,
+                            ("height", Value::Float(h)) => i.height = *h,
+                            _ => {}
+                        }
+                    }
+                    notice.clear();
+                    super::show(snapshot(&registry, &state, page, &notice), false);
+                    let _ = ipc::request(&format!("instance-set {n} {field} {text}"));
+                }
+            }
             Ok(Cmd::Set(id, value)) => {
                 // Show it now; the resident app confirms on the next refresh.
                 let sets = expand(id, value);

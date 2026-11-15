@@ -10,6 +10,7 @@ mod app;
 mod audio;
 mod branding;
 mod features;
+mod instances;
 mod mascot;
 mod packs;
 mod platform;

@@ -113,19 +113,16 @@ impl App {
         let compress = p.visual(crate::mascot::reactions::Event::Click)
             == crate::mascot::reactions::Visual::Compress;
         let fall = p.falls();
+        let lines = p.lines.clone();
         self.notice = None;
         #[cfg(windows)]
-        if self.mascot.as_ref().is_some_and(|m| m.character == id) {
-            self.reaction_sounds = saved_sounds;
-            let lines = p.lines.clone();
-            let mut character = self.character_setup(id);
-            character.lines = lines;
-            character.click_compress = compress;
-            character.fall = fall;
-            if let Some(m) = &self.mascot {
-                m.stage
-                    .send(crate::stage::Intent::SetCharacter(Box::new(character)));
-            }
+        if self.character_on_desktop(id) {
+            self.reaction_sounds.insert(id, saved_sounds);
+            self.refresh_character_stages(id, |character| {
+                character.lines = lines.clone();
+                character.click_compress = compress;
+                character.fall = fall;
+            });
         }
         Ok(())
     }
@@ -171,6 +168,14 @@ impl App {
     /// The selected character, or bundled Yohta if it's gone.
     pub(super) fn current_character(&self) -> &Character {
         let id = self.session.settings().choice(character::CHARACTER);
+        self.characters
+            .iter()
+            .find(|c| c.id == id)
+            .unwrap_or(&self.characters[0])
+    }
+
+    /// The installed character with this ID, or bundled Yohta if it's gone.
+    pub(super) fn character_named(&self, id: &str) -> &Character {
         self.characters
             .iter()
             .find(|c| c.id == id)
@@ -395,12 +400,8 @@ impl App {
                     }
                     self.add_character(c.clone());
                     #[cfg(windows)]
-                    if self.mascot.as_ref().is_some_and(|m| m.character == c.id) {
-                        let character = self.character_setup(c.id);
-                        if let Some(m) = &self.mascot {
-                            m.stage
-                                .send(crate::stage::Intent::SetCharacter(Box::new(character)));
-                        }
+                    if self.character_on_desktop(c.id) {
+                        self.refresh_character_stages(c.id, |_| {});
                     }
                 }
                 if id == self.studio.character_request {
@@ -638,14 +639,15 @@ impl App {
                     };
                     for e in events {
                         if let Ok(play) = self.voice.accept(e, &sounds, quiet, now)
-                            && let Some(seconds) = self.play_reaction(&play)
+                            && let Some(seconds) =
+                                self.play_reaction(&play, self.current_character().id)
                         {
                             self.voice.started(now, seconds);
                             reacted = true;
                         }
                     }
                     if !reacted && let Some(sound) = line_sound {
-                        self.play_line_sound(&sound);
+                        self.play_line_sound(&sound, self.current_character().id);
                     }
                 }
                 let o = self.motion_options();
@@ -832,6 +834,10 @@ impl App {
                 match characters::remove(&c) {
                     Ok(()) => {
                         self.characters.retain(|x| x.id != c.id);
+                        // Instances of it show Yohta instead of vanishing.
+                        if self.instances.retarget(c.id, characters::BUILTIN) {
+                            self.save_instances();
+                        }
                         out.sets
                             .push((character::CHARACTER, Value::Choice(characters::BUILTIN)));
                         self.notice = None;
@@ -901,7 +907,7 @@ impl App {
                     .motion_preview
                     .as_mut()
                     .and_then(|p| p.take_sound())
-                    && let Some(seconds) = self.play_line_sound(&sound)
+                    && let Some(seconds) = self.play_line_sound(&sound, self.current_character().id)
                     && let Some(p) = &mut self.studio.motion_preview
                 {
                     p.hold_speech(seconds);

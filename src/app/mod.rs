@@ -158,7 +158,7 @@ pub struct App {
     /// The character voice: cooldowns, idle deadline, what's playing.
     voice: crate::mascot::reactions::Voice,
     /// The desktop character's reaction sounds.
-    reaction_sounds: crate::mascot::reactions::Sounds,
+    reaction_sounds: std::collections::HashMap<&'static str, crate::mascot::reactions::Sounds>,
     /// The voice's monotonic clock.
     voice_clock: Instant,
     /// The playback meter, while music response is on and needed.
@@ -183,8 +183,13 @@ pub struct App {
     spot_cursor: Option<(OutputId, Pt)>,
     /// The desktop character window, while enabled.
     #[cfg(windows)]
-    #[cfg(windows)]
-    mascot: Option<mascot::MascotStage>,
+    mascots: Vec<mascot::MascotStage>,
+    /// The characters on the desktop, each an instance with its own place and size.
+    instances: crate::instances::Instances,
+    /// What the characters share: where each stands and whose turn it is to speak.
+    crowd: Arc<crate::mascot::crowd::Crowd>,
+    /// Which free character gets the next idle sound.
+    idle_turn: usize,
     #[cfg(windows)]
     sources: Vec<platform::windows::WindowSource>,
     /// Why overlays cannot open on this desktop; settings stay usable.
@@ -393,6 +398,7 @@ impl App {
             Value::Bool(platform::autostart::enabled()),
         );
         let tool = registry.default_tool();
+        let instances = crate::instances::Instances::load(&loaded.values);
         let session = Session::new(tool.id, tool.factory, loaded.values);
         let hotkeys = match platform::hotkeys::register(&registry) {
             Ok(h) => {
@@ -454,7 +460,10 @@ impl App {
             spotlight_anywhere: HeldToggle::default(),
             spot_cursor: None,
             #[cfg(windows)]
-            mascot: None,
+            mascots: Vec::new(),
+            instances,
+            crowd: Arc::default(),
+            idle_turn: 0,
             #[cfg(windows)]
             sources: platform::windows::window_sources(),
             #[cfg(target_os = "linux")]
@@ -582,7 +591,7 @@ impl App {
             }
             Message::External(External::DisplaysChanged) => {
                 #[cfg(windows)]
-                if let Some(m) = &self.mascot {
+                for m in &self.mascots {
                     m.stage.send(crate::stage::Intent::DisplaysChanged);
                 }
                 let displays = displays::list();
@@ -648,6 +657,8 @@ impl App {
             Message::External(External::Cli { line, reply }) => {
                 if line.trim() == "settings-state" {
                     let _ = reply.send(self.settings_state());
+                } else if let Some(rest) = line.trim().strip_prefix("instance-set ") {
+                    let _ = reply.send(self.settings_instance(rest));
                 } else if let Some(rest) = line.trim().strip_prefix("shortcut-bind ") {
                     let _ = reply.send(self.settings_bind(rest));
                 } else if let Some(name) = line.trim().strip_prefix("settings-action ") {
@@ -665,13 +676,24 @@ impl App {
             }
             Message::Set(id, value) => out.sets.push((id, value)),
             #[cfg(windows)]
-            Message::External(External::Character(event)) => {
-                self.character_event(event, now, &mut out, &mut tasks)
+            Message::External(External::Character(instance, event)) => {
+                self.character_event(instance, event, now, &mut out, &mut tasks)
             }
             #[cfg(windows)]
             Message::MascotTick => {
                 self.sync_mascot_audio();
-                self.play_mascot_sound(Vec::new(), None);
+                // An idle sound for whichever free character is next in turn.
+                let free: Vec<u32> = self
+                    .mascots
+                    .iter()
+                    .filter(|m| m.free)
+                    .map(|m| m.id)
+                    .collect();
+                if !free.is_empty() {
+                    self.idle_turn = self.idle_turn.wrapping_add(1);
+                    let id = free[self.idle_turn % free.len()];
+                    self.play_mascot_sound(id, Vec::new(), None);
+                }
             }
             Message::Ui(ui) => tasks.push(self.ui_message(ui, now, &mut out)),
             Message::Key(key, modifiers, window) => {
@@ -1021,12 +1043,11 @@ impl App {
             }
             UiMsg::ResetMascotPosition => {
                 #[cfg(windows)]
-                if let Some(m) = &self.mascot {
+                for m in &self.mascots {
                     m.stage.send(crate::stage::Intent::ResetPosition);
                 }
-                let unplaced = Value::Float(character::UNPLACED);
-                out.sets.push((character::X, unplaced.clone()));
-                out.sets.push((character::Y, unplaced));
+                self.instances.unplace_all();
+                self.save_instances();
             }
             UiMsg::AddPressed => {
                 return Task::perform(
@@ -1429,7 +1450,7 @@ impl App {
             || self.spotlight_anywhere.on()
             || self.lens_anywhere.on()
             || self.studio.motion_preview.is_some()
-            || self.mascot.as_ref().is_some_and(|m| m.animating)
+            || self.mascots.iter().any(|m| m.animating)
     }
 
     fn sync_tray(&mut self) {
@@ -1669,7 +1690,7 @@ impl App {
         // The stage runs the character on its own clock. This slow tick (every five seconds) only
         // keeps what the app owns in step: what is playing, and idle sounds.
         #[cfg(windows)]
-        if self.mascot.is_some() {
+        if !self.mascots.is_empty() {
             subs.push(iced::time::every(Duration::from_secs(5)).map(|_| Message::MascotTick));
         }
         // The Motion tab's preview animates while it's open.

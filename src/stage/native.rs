@@ -26,6 +26,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use super::signals::Signals;
 use super::{Character, Event, Intent};
 use crate::mascot::Msg;
+use crate::mascot::crowd::Crowd;
 use crate::mascot::desktop::{Desktop, Effects, Item, Options, SceneKey};
 use crate::mascot::surface::{Raster, Surface};
 use crate::mascot::typeset::{IconCache, Typeset};
@@ -41,16 +42,17 @@ pub struct Stage {
 type Sink = Box<dyn Fn(Event) + Send>;
 
 impl Stage {
-    /// Starts the stage thread. `sink` is called on that thread with each
+    /// Starts the stage thread for the character instance `id`, among the
+    /// others sharing `crowd`. `sink` is called on that thread with each
     /// event, so it should only forward.
-    pub fn spawn(sink: impl Fn(Event) + Send + 'static) -> Self {
+    pub fn spawn(id: u32, crowd: Arc<Crowd>, sink: impl Fn(Event) + Send + 'static) -> Self {
         let (intents, intent_rx) = channel();
         let window = Arc::new(AtomicIsize::new(0));
         let shared = window.clone();
         let sink: Sink = Box::new(sink);
         let thread = std::thread::Builder::new()
-            .name("tinypaw-stage".into())
-            .spawn(move || run(intent_rx, sink, shared))
+            .name(format!("tinypaw-stage-{id}"))
+            .spawn(move || run(intent_rx, sink, shared, (id, crowd)))
             .expect("start the stage thread");
         Self {
             intents,
@@ -141,6 +143,8 @@ impl Drop for Dib {
 
 struct Window {
     hwnd: HWND,
+    /// This character's ID and the others it shares the desktop with.
+    crowd: (u32, Arc<Crowd>),
     desktop: Option<Desktop>,
     options: Option<Options>,
     raster: Option<Raster>,
@@ -180,7 +184,12 @@ fn with_window<R>(f: impl FnOnce(&mut Window) -> R) -> Option<R> {
     WINDOW.with(|w| w.try_borrow_mut().ok()?.as_mut().map(f))
 }
 
-fn run(intents: Receiver<Intent>, events: Sink, shared: Arc<AtomicIsize>) {
+fn run(
+    intents: Receiver<Intent>,
+    events: Sink,
+    shared: Arc<AtomicIsize>,
+    crowd: (u32, Arc<Crowd>),
+) {
     let class = wide("TinyPawStage");
     let hwnd = unsafe {
         let instance = GetModuleHandleW(null());
@@ -220,6 +229,7 @@ fn run(intents: Receiver<Intent>, events: Sink, shared: Arc<AtomicIsize>) {
     WINDOW.with(|w| {
         *w.borrow_mut() = Some(Window {
             hwnd,
+            crowd,
             desktop: None,
             options: None,
             raster: None,
@@ -252,6 +262,11 @@ fn run(intents: Receiver<Intent>, events: Sink, shared: Arc<AtomicIsize>) {
         }
         while let Ok(intent) = intents.try_recv() {
             if matches!(intent, Intent::Quit) {
+                with_window(|w| {
+                    if let Some(d) = &mut w.desktop {
+                        d.leave();
+                    }
+                });
                 unsafe { DestroyWindow(hwnd) };
                 return;
             }
@@ -293,6 +308,7 @@ impl Window {
                     fall,
                 } = *character;
                 let mut desktop = Desktop::new(id, rig, size, anchor, rows, hidden);
+                desktop.join(self.crowd.1.clone(), self.crowd.0);
                 desktop.set_lines(lines, &options);
                 desktop.set_click_compress(click_compress);
                 desktop.set_pictures(pictures);
@@ -624,7 +640,7 @@ pub fn probe() {
     // `quiet` turns off idle sway and eye tracking, to measure a resting character.
     let quiet = std::env::args().any(|a| a == "quiet");
     let (events, received) = std::sync::mpsc::channel();
-    let stage = Stage::spawn(move |event| {
+    let stage = Stage::spawn(1, Arc::default(), move |event| {
         let _ = events.send(event);
     });
     let mut lines = Lines::default();

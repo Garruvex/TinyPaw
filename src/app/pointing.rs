@@ -128,9 +128,7 @@ impl App {
                 .map(|o| o.hwnd)
                 .filter(|h| *h != 0)
                 .collect();
-            if let Some(m) = &self.mascot {
-                exclude.push(m.stage.hwnd());
-            }
+            exclude.extend(self.mascots.iter().map(|m| m.stage.hwnd()));
             exclude.extend(
                 self.helper_hwnds
                     .iter()

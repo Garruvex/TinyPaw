@@ -694,6 +694,8 @@ pub struct Desktop {
     shown: bool,
     left_down: bool,
     right_down: bool,
+    /// The other characters on the stage, and this one's ID among them.
+    crowd: Option<(std::sync::Arc<super::crowd::Crowd>, u32)>,
 }
 
 impl Desktop {
@@ -765,6 +767,19 @@ impl Desktop {
             shown: false,
             left_down: false,
             right_down: false,
+            crowd: None,
+        }
+    }
+
+    /// Joins the other characters: stand clear of them and take turns to speak.
+    pub fn join(&mut self, crowd: std::sync::Arc<super::crowd::Crowd>, id: u32) {
+        self.crowd = Some((crowd, id));
+    }
+
+    /// Leaves the others behind when this character goes.
+    pub fn leave(&mut self) {
+        if let Some((crowd, id)) = self.crowd.take() {
+            crowd.remove(id);
         }
     }
 
@@ -812,6 +827,15 @@ impl Desktop {
         if let Some(line) = self.picker.pick(&self.lines, t)
             && let Some(speech) = Speech::new(&line.text, self.now)
         {
+            // One bubble at a time: a line nobody asked for waits its turn,
+            // and one the user provoked takes it.
+            if let Some((crowd, id)) = &self.crowd {
+                let seconds = 2.0 + line.text.chars().count() as f32 * 0.06;
+                let prompted = !t.unprompted() && t != Trigger::AnnotationEnd;
+                if !crowd.claim_voice(*id, Instant::now(), seconds, prompted) {
+                    return;
+                }
+            }
             self.speech = Some(speech);
             self.speech_at = self.now;
             self.sound = line.sound.clone();
@@ -822,6 +846,9 @@ impl Desktop {
     pub fn hold_speech(&mut self, seconds: f32) {
         if let Some(s) = &mut self.speech {
             s.hold(self.now, seconds);
+            if let Some((crowd, id)) = &self.crowd {
+                crowd.claim_voice(*id, Instant::now(), seconds, true);
+            }
         }
     }
 
@@ -1273,8 +1300,16 @@ impl Desktop {
     fn step_speech(&mut self, o: &Options) {
         if let Some(s) = &mut self.speech {
             let part = s.index;
-            if !s.advance(self.now) {
+            let lost_turn = self
+                .crowd
+                .as_ref()
+                .is_some_and(|(crowd, id)| !crowd.has_voice(*id, Instant::now()));
+            if lost_turn || !s.advance(self.now) {
                 self.speech = None;
+                self.sound = None;
+                if let Some((crowd, id)) = &self.crowd {
+                    crowd.release_voice(*id);
+                }
             } else if s.index != part {
                 // Each part of a line pops in afresh.
                 self.speech_at = self.now;
@@ -1624,12 +1659,30 @@ impl Desktop {
         } else {
             self.layout.recover(self.anchor, k, work)
         };
+        self.settle(work, k);
         let (x, y) = self.layout.origin(self.anchor, k);
         let size = (
             (self.layout.window.width * k).round() as i32,
             (self.layout.window.height * k).round() as i32,
         );
         native::move_window(self.hwnd, x, y, Some(size));
+    }
+
+    /// Comes to rest clear of the other characters, within the work area,
+    /// and tells them where it stands.
+    fn settle(&mut self, work: (i32, i32, i32, i32), k: f32) {
+        let Some((crowd, id)) = &self.crowd else {
+            return;
+        };
+        let half = self.layout.character.width * k * 0.5;
+        let bounds = self.layout.range(k, work);
+        self.anchor.0 = crowd.clear_x(*id, self.anchor.0, self.anchor.1, half, bounds.0, bounds.2);
+        crowd.publish(super::crowd::Slot {
+            id: *id,
+            x: self.anchor.0,
+            y: self.anchor.1,
+            half,
+        });
     }
 
     /// Re-lays out for a new size or menu length, keeping the feet in place.
@@ -1677,6 +1730,10 @@ impl Desktop {
         }
         if flown.done {
             self.flight = None;
+            // Landed on a neighbour: step aside.
+            if self.crowd.is_some() {
+                self.place();
+            }
             return Some((self.anchor.0 as f64, self.anchor.1 as f64));
         }
         None

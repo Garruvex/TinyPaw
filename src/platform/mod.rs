@@ -61,7 +61,7 @@ pub enum External {
     DisplaysChanged,
     /// The desktop character's stage reported something.
     #[cfg(windows)]
-    Character(crate::stage::Event),
+    Character(u32, crate::stage::Event),
     MotionChanged,
     /// Settings caption-button hover or maximized state changed.
     FrameChanged,

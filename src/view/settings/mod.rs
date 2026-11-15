@@ -273,7 +273,9 @@ fn framed_header<'a>(
             space().width(14),
             logo.into(),
             space().width(10),
-            text("TinyPaw Character studio").font(theme::HEADING).size(14),
+            text("TinyPaw Character studio")
+                .font(theme::HEADING)
+                .size(14),
             space().width(Length::Fill),
             container(controls)
                 .width(CONTROLS_W)

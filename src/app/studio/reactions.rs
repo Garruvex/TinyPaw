@@ -170,7 +170,11 @@ impl App {
                         volume: (sounds.volume * t.gain).clamp(0.0, 1.0),
                         interrupt: true,
                     };
-                    if self.play_reaction(&play).is_none() && self.notice.is_none() {
+                    if self
+                        .play_reaction(&play, self.current_character().id)
+                        .is_none()
+                        && self.notice.is_none()
+                    {
                         self.notice = Some("That sound is missing or unreadable.".into());
                     }
                     self.audio.release_idle(self.session.is_enabled());
