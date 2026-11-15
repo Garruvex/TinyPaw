@@ -19,6 +19,22 @@ pub struct SceneKey {
     hover: Vec<f32>,
 }
 
+impl SceneKey {
+    /// Whether drawing `other` would give the same picture as this one.
+    pub fn looks_like(&self, other: &SceneKey) -> bool {
+        self.speech == other.speech
+            && self.menu == other.menu
+            && self.closing == other.closing
+            && self.hover.len() == other.hover.len()
+            && self
+                .hover
+                .iter()
+                .zip(&other.hover)
+                .all(|(a, b)| (a - b).abs() <= 0.01)
+            && self.pose.looks_like(&other.pose)
+    }
+}
+
 /// Quarter-circle corner from `p0` to `p2` around corner point `p1`.
 fn corner(b: &mut tiny_skia::PathBuilder, p0: Point, p1: Point, p2: Point) {
     let k = 0.4477;

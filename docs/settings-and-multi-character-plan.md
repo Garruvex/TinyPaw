@@ -1,6 +1,6 @@
 # Settings, character studio and multi-character plan
 
-Updated 14 November 2026. Planned work, on branch `refactor/settings-registry`. Nothing in this plan is implemented yet.
+Updated 15 November 2026. Work on branch `refactor/settings-registry`; steps 0 to 6 are implemented, step 7 is in progress.
 
 This plan replaces the single event loop with three, moves characters to a native stage, rebuilds Settings and the character editor in a UI framework with an enforced design system, and adds several characters on the desktop. The [character and editor improvement plan](character-editor-improvement-plan.md) still governs artwork, poses and editor content. This document governs architecture, windows and delivery order.
 
@@ -178,7 +178,7 @@ Each instance has its own shown flag, changed from its menu or its row in Settin
 | 3 | Stage engine with one character | Same behaviour as today; no character traffic in the dispatcher; idle footprint within budget. Done in code; waiting on a hands-on check of the live app (see [Step 3 progress](#step-3-progress)) |
 | 4 | Settings in the new framework: registry, then Sound, Display & motion, Shortcuts, Ink & text, Spotlight & lens, Pointer, Music response; first-run window | In progress: slice 4a landed (see [Step 4 progress](#step-4-progress)). The Iced settings views are deleted; every control saves at once |
 | 5 | Character studio window | Artwork, Reactions, Speech, Motion and Advanced work on one draft; Settings never shows the leave prompt Done as its own window; the editor content is still Iced (see [Step 5 results](#step-5-results)) |
-| 6 | Multi-character: scopes, instance store and migration, Characters page, several instances, coordinator tiers one to three | An existing installation opens unchanged; two instances of one character move and size independently; 1, 10 and 20 instances are measured |
+| 6 | Multi-character: scopes, instance store and migration, Characters page, several instances, coordinator tiers one to three | An existing installation opens unchanged; two instances of one character move and size independently; 1, 10 and 20 instances are measured Done (see [Step 6 results](#step-6-results)) |
 | 7 | Social awareness | Planned separately |
 
 Each step ends with tests, strict Clippy and a Windows release build passing.
@@ -282,6 +282,19 @@ Slice 3d results. The app now runs the desktop character on the stage and nothin
 - **Run for real** with an isolated copy of the app (own settings folder and command endpoint, so the running instance was left alone): enabling the character creates the stage window, disabling it removes the window, and the character logic, menu rows and saves take the new path. Release build, character on, idle motion, eyes and music off: the stage thread uses 0.6% of one core (about 0.6 ms per 100 ms poll); with idle sway on at 30 Hz, 1.7%. Memory, whole app with the character on: 38.8 MiB working set, 17 MiB private; with the character off 26 MiB and 7 MiB. When music response or sleep audio is on, the music meter thread adds about 2% of a core as it did before; that is unchanged by this step.
 - **Not checked by hand:** carrying and throwing the character, clicking the menu and watching a bubble, with the real mouse. Please run the app and try them.
 - **Known gaps:** a pressed menu row has no extra highlight, and per-poll cost (about 0.6 ms) is higher than it needs to be; trimming it is a later optimisation. Step 3's "within budget" has no number in this plan, so the figures above are the baseline to hold.
+
+## Step 6 results
+
+- **Instance store.** `instances.json` beside the preferences holds one entry per character on the desktop: ID, character, its own shown flag, position, size, eyes and idle. IDs are never reused. The first start of this version builds the list from the old single-character settings (`mascot.character`, `.x`, `.y`, `.height`, `.eyes`, `.idle`), so an existing installation opens unchanged, and saves it. An unreadable file is kept as `instances.json.bad` before starting over, and an entry that cannot be read is skipped without losing the rest.
+- **Scopes.** `mascot.enabled` is the master switch and a character shows when the master and its own flag are on, so turning the master back on restores what was showing. `mascot.character` is now only the character picked in the library (the studio and Add to the desktop use it). Music pose, the standing threshold, dance styles and hand tuning stay app settings for now; moving them into the character's overrides is not done.
+- **Stages.** One stage thread and one native window per instance. The app keeps a stage per visible instance and sends only what changed; a character's menu Hide hides that instance only; a character removed in the studio becomes Yohta on the desktop instead of vanishing. The voice is shared, so only one sound plays at a time, and each stage's idle sound takes its turn.
+- **Characters page.** Library cards, Show characters (master), Add the selected character to the desktop (a second Yohta is allowed), Reset positions, frame rate, and one section per character on the desktop with Shown, Size, Eyes, Idle and Remove. Changes go to the running app as `instance-set <id> <field> <value>` and `settings-action instance.add` or `instance.remove.<id>`.
+- **Coordinator, tiers one to three** (`mascot::crowd`, shared by every stage):
+  - Spatial: a character coming to rest (a drop, a throw's landing, a reset, a resize or a new display) asks for the nearest free spot on the ground and stands beside a neighbour instead of on it. Twelve characters asked for the same spot in a test and ended side by side.
+  - Turn-taking: one bubble at a time. A line nobody asked for waits for the current speaker; a click, drop or pickup takes the turn and the speaker puts its bubble away.
+  - Shared moments: one beat phase for all (the stages share the beat clock); annotation ending lets each character try its line, and they take turns.
+- **Measured** (see [measurements](measurements.md)): 1, 10 and 20 characters idle use 1.8%, 7.9% and 14.7% of a core and 14, 91 and 177 MiB private. Measuring found and fixed two idle redraw problems.
+- **Not done:** animating cost with many characters, a hands-on check of carrying and throwing with several on screen, and moving the remaining character-scoped settings.
 
 ## Step 5 results
 

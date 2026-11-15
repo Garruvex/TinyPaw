@@ -19,6 +19,7 @@ pub(super) struct MascotStage {
     /// Moving fast enough that timers need to be fine.
     pub animating: bool,
     options: crate::mascot::desktop::Options,
+    signals: Option<crate::stage::Signals>,
     menu: Vec<crate::mascot::desktop::Item>,
     audio: (crate::mascot::companionship::Audio, bool),
 }
@@ -291,6 +292,7 @@ impl App {
                                 free: false,
                                 animating: false,
                                 options,
+                                signals: None,
                                 menu: menu.clone(),
                                 audio: (crate::mascot::companionship::Audio::Unknown, false),
                             });
@@ -300,7 +302,10 @@ impl App {
                 let Some(m) = self.mascots.iter_mut().find(|m| m.id == instance.id) else {
                     continue;
                 };
-                m.stage.send(Intent::Signals(signals.clone()));
+                if m.signals.as_ref() != Some(&signals) {
+                    m.signals = Some(signals.clone());
+                    m.stage.send(Intent::Signals(signals.clone()));
+                }
                 if (size, rows) != (m.size, m.rows) {
                     m.size = size;
                     m.rows = rows;

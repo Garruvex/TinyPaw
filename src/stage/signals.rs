@@ -26,6 +26,17 @@ pub struct Signals {
     pub beat_offset: f32,
 }
 
+impl PartialEq for Signals {
+    fn eq(&self, other: &Self) -> bool {
+        self.meter.ptr_eq(&other.meter)
+            && self.follower.ptr_eq(&other.follower)
+            && Arc::ptr_eq(&self.clock, &other.clock)
+            && self.music_on == other.music_on
+            && self.strength == other.strength
+            && self.beat_offset == other.beat_offset
+    }
+}
+
 impl Signals {
     /// Playback loudness scaled by strength (0 when off or silent), the raw
     /// energy, and the followed beat's phase while music plays.

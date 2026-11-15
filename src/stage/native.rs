@@ -287,6 +287,11 @@ fn run(
 
 impl Window {
     fn apply(&mut self, intent: Intent) {
+        // The music handles are only read on the next step; nothing to redraw.
+        if let Intent::Signals(signals) = intent {
+            self.signals = Some(signals);
+            return;
+        }
         self.dirty = true;
         self.next_poll = Instant::now();
         match intent {
@@ -340,7 +345,7 @@ impl Window {
             }
             Intent::Options(options) => self.options = Some(options),
             Intent::Menu(items) => self.items = items,
-            Intent::Signals(signals) => self.signals = Some(signals),
+            Intent::Signals(_) => {}
             Intent::Say(trigger) => {
                 if let (Some(d), Some(options)) = (&mut self.desktop, self.options) {
                     d.say(trigger, &options);
@@ -434,7 +439,9 @@ impl Window {
                 animating: status.1,
             });
         }
-        self.draw(animating);
+        // Redraw every step only while moving fast; at the idle-sway pace a
+        // frame is drawn when the picture would look different.
+        self.draw(interval.is_some_and(|i| i < Duration::from_millis(20)));
         let wait = interval.unwrap_or(IDLE);
         self.next_poll = Instant::now() + wait;
         wait
@@ -465,7 +472,10 @@ impl Window {
             && !resized
             && !self.dirty
             && !d.has_overlay()
-            && self.drawn.as_ref() == Some(&key)
+            && self
+                .drawn
+                .as_ref()
+                .is_some_and(|drawn| drawn.looks_like(&key))
         {
             return;
         }

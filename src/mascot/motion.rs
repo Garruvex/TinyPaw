@@ -388,6 +388,51 @@ pub struct Pose {
     pub carry: Option<(iced::Point, f32)>,
 }
 
+impl Pose {
+    /// Whether `other` would draw the same picture, give or take less than a
+    /// pixel of movement. Slow idle sway changes the pose a little every step;
+    /// redrawing for each of those would cost a frame for nothing.
+    pub fn looks_like(&self, other: &Pose) -> bool {
+        // Radians; about a third of a pixel at the end of a 150 px character.
+        const ANGLE: f32 = 0.004;
+        const UNIT: f32 = 0.01;
+        let near = |a: f32, b: f32, eps: f32| (a - b).abs() <= eps;
+        self.angles.len() == other.angles.len()
+            && self
+                .angles
+                .iter()
+                .zip(&other.angles)
+                .all(|(a, b)| near(*a, *b, ANGLE))
+            && near(self.lean, other.lean, ANGLE)
+            && near(self.squash, other.squash, UNIT / 2.0)
+            && near(self.bounce, other.bounce, UNIT / 4.0)
+            && near(self.head_drop, other.head_drop, UNIT / 4.0)
+            && near(self.light_lift, other.light_lift, UNIT)
+            && near(self.light_swing, other.light_swing, ANGLE)
+            && self.light_phone == other.light_phone
+            && near(self.hand_offset.x, other.hand_offset.x, UNIT)
+            && near(self.hand_offset.y, other.hand_offset.y, UNIT)
+            && near(self.hand_angle, other.hand_angle, ANGLE)
+            && self.music_active == other.music_active
+            && self.music_mix.is_some() == other.music_mix.is_some()
+            && near(
+                self.music_mix.unwrap_or(0.0),
+                other.music_mix.unwrap_or(0.0),
+                UNIT,
+            )
+            && self.expression == other.expression
+            && near(self.gaze.x, other.gaze.x, UNIT * 2.0)
+            && near(self.gaze.y, other.gaze.y, UNIT * 2.0)
+            && match (self.carry, other.carry) {
+                (None, None) => true,
+                (Some((p, a)), Some((q, b))) => {
+                    near(p.x, q.x, UNIT) && near(p.y, q.y, UNIT) && near(a, b, ANGLE)
+                }
+                _ => false,
+            }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct Spring {
     angle: f32,
@@ -754,7 +799,13 @@ impl Animator {
             hand_angle: i.dance.hand_angle * self.light_lift,
             music_active,
             music_mix: Some(self.standing_mix),
-            light_swing: (beat.two * std::f32::consts::PI).cos() * i.dance.wave_range,
+            // The raised hand is invisible until it lifts, and a pose that
+            // changes every step would redraw a still character forever.
+            light_swing: if self.light_lift > 0.01 {
+                (beat.two * std::f32::consts::PI).cos() * i.dance.wave_range
+            } else {
+                0.0
+            },
             expression,
             gaze: Vector::ZERO,
             carry: None,
@@ -1084,6 +1135,42 @@ fn blinking(now: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pose_that_drifts_by_less_than_a_pixel_looks_the_same_and_a_real_move_does_not() {
+        let mut a = Pose {
+            angles: vec![0.0, 0.03],
+            ..Pose::default()
+        };
+        let mut b = a.clone();
+        b.angles[1] += 0.002;
+        b.gaze = Vector::new(0.01, 0.0);
+        assert!(a.looks_like(&b));
+        b.angles[1] += 0.01;
+        assert!(!a.looks_like(&b));
+        a.expression = Expression::Blink;
+        assert!(!a.looks_like(&Pose {
+            angles: vec![0.0, 0.03],
+            ..Pose::default()
+        }));
+    }
+
+    #[test]
+    fn a_resting_character_pose_does_not_change_from_step_to_step() {
+        // The raised hand's swing used to tick along with time even while the
+        // hand was hidden, so a still character redrew forever.
+        let mut animator = Animator::default();
+        let input = |now: f32| Inputs {
+            now,
+            dt: 0.1,
+            idle: true,
+            ..Inputs::default()
+        };
+        let first = animator.step(&[], &input(1.0));
+        let later = animator.step(&[], &input(1.3));
+        assert_eq!(first.light_swing, 0.0);
+        assert_eq!(later.light_swing, 0.0);
+    }
 
     #[test]
     fn standing_music_survives_beat_gaps_then_rests_and_respects_input() {
