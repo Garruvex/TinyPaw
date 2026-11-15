@@ -27,7 +27,7 @@ export component SettingsShell inherits Window {
                 alignment: start;
                 for entry[i] in root.entries: VerticalLayout {
                     spacing: Tokens.space-1;
-                    if i == 0 || root.entries[i - 1].group != entry.group: NavGroup { text: entry.group; }
+                    if entry.group != "" && (i == 0 || root.entries[i - 1].group != entry.group): NavGroup { text: entry.group; }
                     NavItem {
                         text: entry.name;
                         selected: i == root.current;

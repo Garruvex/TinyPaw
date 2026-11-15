@@ -13,6 +13,7 @@ use crate::registry::{Registry, SettingValues, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageId {
+    General,
     Pointer,
     Ink,
     Tools,
@@ -20,36 +21,37 @@ pub enum PageId {
     Music,
     Shortcuts,
     Sound,
-    Display,
 }
 
 /// The pointer cards, one of them chosen. Not a setting of its own: choosing a
 /// card sets the style and the pack together.
 pub const POINTER: &str = "point.pointer";
 
-/// Navigation order: group, name, page.
+/// Navigation order: group, name, page. Each page holds one scope (see
+/// docs/settings-ux.md): the app, an annotation tool, or the characters on
+/// the desktop. The first page has no group.
 pub const NAV: &[(&str, &str, PageId)] = &[
+    ("", "General", PageId::General),
     ("Annotate", "Pointer", PageId::Pointer),
     ("Annotate", "Ink & text", PageId::Ink),
     ("Annotate", "Spotlight & lens", PageId::Tools),
-    ("Desktop", "Characters", PageId::Characters),
-    ("Desktop", "Music response", PageId::Music),
-    ("App", "Shortcuts", PageId::Shortcuts),
-    ("App", "Sound", PageId::Sound),
-    ("App", "Display & motion", PageId::Display),
+    ("Characters", "On the desktop", PageId::Characters),
+    ("Characters", "Music & dance", PageId::Music),
+    ("System", "Shortcuts", PageId::Shortcuts),
+    ("System", "Sound", PageId::Sound),
 ];
 
 /// The page a name on the command line means, or the first.
 pub fn index_of(name: &str) -> usize {
     let id = match name {
+        "pointer" => PageId::Pointer,
         "ink" => PageId::Ink,
         "tools" | "spotlight" | "lens" => PageId::Tools,
         "characters" | "character" => PageId::Characters,
         "music" => PageId::Music,
         "shortcuts" => PageId::Shortcuts,
         "sound" => PageId::Sound,
-        "display" => PageId::Display,
-        _ => PageId::Pointer,
+        _ => PageId::General,
     };
     NAV.iter().position(|n| n.2 == id).unwrap_or(0)
 }
@@ -215,7 +217,7 @@ impl<'a> Builder<'a> {
         self.note(
             s,
             &format!(
-                "Anywhere: tap {key} to toggle, or hold it to show until release. While holding, Up/Down change the {size} and +/\u{2212} the {more}. In annotation, scroll for {size}, Shift+scroll for {more}."
+                "Anywhere: tap {key} to toggle, or hold it. While drawing, scroll changes the {size} and Shift+scroll the {more}."
             ),
             false,
         );
@@ -260,19 +262,16 @@ pub fn build(page: PageId, cx: &Context<'_>) -> Built {
             sound_page(&mut b);
             ("Sound", "Tap sounds and the master mute.")
         }
-        PageId::Display => {
-            display_page(&mut b);
+        PageId::General => {
+            general_page(&mut b);
             (
-                "Display & motion",
-                "Where TinyPaw draws, and how much it moves.",
+                "General",
+                "How TinyPaw starts, where it draws, and how much it moves.",
             )
         }
         PageId::Shortcuts => {
             shortcuts_page(&mut b);
-            (
-                "Shortcuts",
-                "How drawing starts, and the keys for each command.",
-            )
+            ("Shortcuts", "The keys for each command.")
         }
         PageId::Ink => {
             ink_page(&mut b);
@@ -294,16 +293,13 @@ pub fn build(page: PageId, cx: &Context<'_>) -> Built {
         }
         PageId::Characters => {
             characters_page(&mut b);
-            (
-                "Characters",
-                "The desktop character: who, where and how lively.",
-            )
+            ("On the desktop", "The characters standing on your desktop.")
         }
         PageId::Music => {
             music_page(&mut b);
             (
-                "Music response",
-                "Moves with what's playing on this PC. TinyPaw's own sounds are left out, and nothing is recorded.",
+                "Music & dance",
+                "Characters move with what's playing on this PC. Nothing is recorded.",
             )
         }
     };
@@ -323,7 +319,7 @@ fn sound_page(b: &mut Builder<'_>) {
             .map(|&id| (id, sound::label(id).to_owned()))
             .collect();
         b.choice(s, sound::TAP, None, options);
-        b.action(s, "sound.preview", "Preview", "Play");
+        b.action(s, "sound.preview", "Hear the tap sound", "Play");
         b.action(s, "sound.import", "Your own sound", "Import a WAV…");
         b.range(s, sound::VOLUME, None, 0.05, percent);
         b.toggle(s, sound::MUTE, Some("Mute tap sounds"));
@@ -335,11 +331,7 @@ fn sound_page(b: &mut Builder<'_>) {
     });
     b.section("All sounds", |s, b| {
         b.toggle(s, sound::MUTE_ALL, Some("Mute all sounds"));
-        b.note(
-            s,
-            "Also silences the desktop character's reactions and line sounds.",
-            false,
-        );
+        b.note(s, "Also silences the characters on the desktop.", false);
     });
 }
 
@@ -386,7 +378,6 @@ fn tools_page(b: &mut Builder<'_>) {
         });
         b.range(s, spotlight::DIM, Some("Darkness"), 0.05, percent);
         b.anywhere_note(s, spotlight::ANYWHERE, "size", "darkness");
-        b.action(s, "page:shortcuts", "Shortcuts", "Change shortcuts");
     });
     b.section("Lens", |s, b| {
         let zooms =
@@ -400,9 +391,16 @@ fn tools_page(b: &mut Builder<'_>) {
             format!("{v:.0} px")
         });
         b.anywhere_note(s, upcoming::ANYWHERE, "size", "zoom");
-        b.action(s, "page:shortcuts", "Shortcuts", "Change shortcuts");
     });
     b.section("Lens source", |s, b| lens_source(s, b));
+    b.section("", |s, b| {
+        b.action(
+            s,
+            "page:shortcuts",
+            "Spotlight and lens shortcuts",
+            "Change shortcuts",
+        );
+    });
 }
 
 #[cfg(windows)]
@@ -439,9 +437,9 @@ fn lens_source(s: &mut Section, b: &mut Builder<'_>) {
                 .collect(),
         },
     );
-    b.action(s, "lens.refresh", "Window list", "Refresh windows");
+    b.action(s, "lens.refresh", "Open windows", "Refresh list");
     let note = if current == upcoming::DESKTOP {
-        "Magnifies whatever app is under the paw. TinyPaw stays out of the lens but still shows in a screen share."
+        "Magnifies whatever is under the paw. TinyPaw stays out of the lens."
     } else {
         "Shows one window wherever the paw is. Use a borderless or windowed game."
     };
@@ -529,16 +527,10 @@ fn pointer_page(b: &mut Builder<'_>) {
             b.range(s, point::SIZE, None, 4.0, |v| format!("{v:.0} px"));
             if presentation == "furry" {
                 b.range(s, point::ANGLE, Some("Paw angle"), 5.0, |v| format!("{v:.0}\u{b0}"));
-                b.note(s, "Positive angles reach from the lower right.", false);
             }
         });
         if presentation == "stretch" && pack.is_none_or(|p| !p.forearm) {
             b.section("Forearm colour", |s, b| {
-                b.note(
-                    s,
-                    "Used by Stretch Paw when no forearm PNG is attached.",
-                    false,
-                );
                 b.toggle(s, point::FOREARM_AUTO_COLOR, Some("Use pointer colour"));
                 // With the automatic colour on, the swatch shown is the one in use.
                 let auto = settings.bool(point::FOREARM_AUTO_COLOR);
@@ -575,26 +567,22 @@ fn pointer_page(b: &mut Builder<'_>) {
                     ("dog", "Dog".to_owned()),
                 ],
             );
-            b.choice(
-                s,
-                system::INK_FADE,
-                Some("Fade"),
-                vec![
-                    ("keep", "Keep marks".to_owned()),
-                    ("3s", "Fade after 3 seconds".to_owned()),
-                ],
-            );
             b.note(
                 s,
-                "Each tap leaves a paw print in your ink colour. Fade is shared with ink.",
+                "Each tap leaves a paw print in your ink colour, and fades as ink does.",
                 false,
             );
-            b.action(s, "page:ink", "Ink", "Ink settings");
+            b.action(s, "page:ink", "Colour and fade", "Ink & text");
         });
     }
-    b.section("Custom pointers", |s, b| {
-        b.action(s, "pointer.add", "A transparent PNG", "Add pointer…");
-        b.action(s, "pointer.import", "A pointer pack folder", "Import folder…");
+    b.section("Your pointers", |s, b| {
+        b.action(s, "pointer.add", "From a transparent PNG", "Add pointer…");
+        b.action(
+            s,
+            "pointer.import",
+            "From a pointer pack folder",
+            "Import folder…",
+        );
         if !laser && let Some(p) = pack.filter(|p| p.custom) {
             b.action(
                 s,
@@ -609,14 +597,15 @@ fn pointer_page(b: &mut Builder<'_>) {
                 "Remove pointer",
             );
         }
+    });
+    b.section("Make artwork", |s, b| {
         b.note(
             s,
-            "To create matching artwork, share a prompt and your character reference with an artist or image tool.",
+            "Give a prompt and your character reference to an artist or image tool.",
             false,
         );
-        b.action(s, "pointer.prompt", "Pointer art", "Copy pointer prompt");
-        b.action(s, "pointer.arm-prompt", "Forearm art", "Copy forearm prompt");
-        b.action(s, "sound.preview", "Tap sound", "Preview");
+        b.action(s, "pointer.prompt", "Pointer art", "Copy prompt");
+        b.action(s, "pointer.arm-prompt", "Forearm art", "Copy prompt");
     });
 }
 
@@ -628,64 +617,11 @@ const FRAME_RATES: [(&str, &str); 3] = [
 
 fn characters_page(b: &mut Builder<'_>) {
     let settings = b.cx.settings;
-    b.section("Characters", |s, b| {
-        let current = settings.choice_text(mascot::CHARACTER);
-        let mut item = Item::new(mascot::CHARACTER, Kind::Cards, "");
-        let mut choices = Vec::new();
-        for c in b.cx.characters {
-            item.options.push(c.name.clone());
-            item.pictures.push(c.thumb.clone());
-            choices.push(Value::Choice(crate::platform::intern(&c.id)));
-        }
-        item.index =
-            b.cx.characters
-                .iter()
-                .position(|c| c.id == current)
-                .map_or(-1, |i| i as i32);
-        s.items.push(item);
-        b.extras.insert(
-            mascot::CHARACTER.to_owned(),
-            Extra {
-                step: None,
-                choices,
-            },
-        );
-        b.note(
-            s,
-            "Add, import, export, remove and customize characters in the Character studio.",
-            false,
-        );
-        b.action(s, "characters.edit", "Character studio", "Open the studio…");
-    });
-    b.section("On the desktop", |s, b| {
+    b.section("", |s, b| {
         b.toggle(s, mascot::ENABLED, Some("Show characters"));
         b.note(
             s,
-            "Right-click a character for its menu, click it to see it react, and drag it to move it. Characters stay while annotation is off and step aside while you draw.",
-            false,
-        );
-        let selected = b
-            .cx
-            .characters
-            .iter()
-            .find(|c| c.id == settings.choice_text(mascot::CHARACTER))
-            .map_or("the selected character", |c| c.name.as_str());
-        b.action(
-            s,
-            "instance.add",
-            "Another one",
-            &format!("Add {selected} to the desktop"),
-        );
-        b.action(s, "character.reset", "Positions", "Reset positions");
-        b.choice(
-            s,
-            mascot::FRAME_RATE,
-            Some("Frame rate"),
-            FRAME_RATES.map(|(v, l)| (v, l.to_owned())).to_vec(),
-        );
-        b.note(
-            s,
-            "Higher is smoother but uses more CPU while characters move. Reduced motion (Display & motion) also stops idle motion and blinking.",
+            "Drag a character to move it, click it to see it react, right-click for its menu.",
             false,
         );
     });
@@ -749,9 +685,63 @@ fn characters_page(b: &mut Builder<'_>) {
     }
     if b.cx.instances.is_empty() {
         b.section("Nobody here yet", |s, b| {
-            b.note(s, "Add a character to the desktop above.", false);
+            b.note(s, "Add a character to the desktop below.", false);
         });
     }
+    b.section("Add a character", |s, b| {
+        let current = settings.choice_text(mascot::CHARACTER);
+        let mut item = Item::new(mascot::CHARACTER, Kind::Cards, "");
+        let mut choices = Vec::new();
+        for c in b.cx.characters {
+            item.options.push(c.name.clone());
+            item.pictures.push(c.thumb.clone());
+            choices.push(Value::Choice(crate::platform::intern(&c.id)));
+        }
+        item.index =
+            b.cx.characters
+                .iter()
+                .position(|c| c.id == current)
+                .map_or(-1, |i| i as i32);
+        s.items.push(item);
+        b.extras.insert(
+            mascot::CHARACTER.to_owned(),
+            Extra {
+                step: None,
+                choices,
+            },
+        );
+        let selected =
+            b.cx.characters
+                .iter()
+                .find(|c| c.id == current)
+                .map_or("the selected character", |c| c.name.as_str());
+        b.action(
+            s,
+            "instance.add",
+            &format!("Put {selected} on the desktop"),
+            "Add",
+        );
+        b.action(
+            s,
+            "characters.edit",
+            "Create and edit characters",
+            "Open the studio…",
+        );
+    });
+    b.section("All characters", |s, b| {
+        b.choice(
+            s,
+            mascot::FRAME_RATE,
+            Some("Frame rate"),
+            FRAME_RATES.map(|(v, l)| (v, l.to_owned())).to_vec(),
+        );
+        b.note(
+            s,
+            "Higher is smoother but uses more CPU while characters move.",
+            false,
+        );
+        b.action(s, "character.reset", "Character positions", "Reset");
+    });
 }
 
 fn music_page(b: &mut Builder<'_>) {
@@ -811,11 +801,6 @@ fn music_page(b: &mut Builder<'_>) {
         meter.value = b.cx.music.level;
         meter.text = b.cx.music.status.clone();
         s.items.push(meter);
-        b.note(
-            s,
-            "Quiet sources are turned up automatically, so the character moves fully even with low volume or a microphone.",
-            false,
-        );
     });
     if !settings.bool(mascot::MUSIC) {
         return;
@@ -839,7 +824,7 @@ fn music_page(b: &mut Builder<'_>) {
         });
         b.note(
             s,
-            "Automatic keeps gentle bops seated, stands after sustained high activity, and sits again when the music calms. A higher threshold keeps it seated more often. Standing artwork is required. Bop style is set per character in the Character studio.",
+            "Automatic stands up when the music stays lively and sits when it calms. Standing needs standing artwork.",
             false,
         );
     });
@@ -875,29 +860,33 @@ fn music_page(b: &mut Builder<'_>) {
         }
         b.note(
             s,
-            "Random uses the checked styles and changes on a beat boundary. Light wave joins Random when the character has a holding arm and an item. An empty selection uses Nod. Interval, included styles and item apply to all characters.",
+            "Random picks among the checked styles. Light wave needs a holding arm and an item.",
             false,
         );
     });
     b.section("Waving hand", |s, b| {
-        b.range(s, mascot::WAVE_X, Some("Horizontal"), 1.0, |v| format!("{v:.0}%"));
-        b.range(s, mascot::WAVE_Y, Some("Vertical"), 1.0, |v| format!("{v:.0}%"));
-        b.range(s, mascot::WAVE_ANGLE, Some("Angle"), 1.0, |v| format!("{v:.0}\u{b0}"));
-        b.range(s, mascot::WAVE_RANGE, Some("Wave range"), 1.0, |v| format!("{v:.0}%"));
-        b.action(s, "music.reset-hand", "Hand", "Reset hand");
+        b.range(s, mascot::WAVE_X, Some("Horizontal"), 1.0, |v| {
+            format!("{v:.0}%")
+        });
+        b.range(s, mascot::WAVE_Y, Some("Vertical"), 1.0, |v| {
+            format!("{v:.0}%")
+        });
+        b.range(s, mascot::WAVE_ANGLE, Some("Angle"), 1.0, |v| {
+            format!("{v:.0}\u{b0}")
+        });
+        b.range(s, mascot::WAVE_RANGE, Some("Wave range"), 1.0, |v| {
+            format!("{v:.0}%")
+        });
+        b.action(s, "music.reset-hand", "Hand position", "Reset");
         b.note(
             s,
-            "Hand position moves the waving arm and item together. Positive horizontal moves right; positive vertical moves down. These apply across characters.",
+            "Moves the waving arm and its item together, for every character.",
             false,
         );
     });
     b.section("Follow beat (trial)", |s, b| {
         b.toggle(s, mascot::BEAT, Some("Follow beat"));
-        b.note(
-            s,
-            "Nods land on the beat instead of a steady bob. It listens to what's playing (TinyPaw's own sounds are held off while they play) and keeps nothing.",
-            false,
-        );
+        b.note(s, "Nods land on the beat instead of a steady bob.", false);
         if !settings.bool(mascot::BEAT) {
             return;
         }
@@ -937,37 +926,13 @@ fn music_page(b: &mut Builder<'_>) {
         );
         b.note(
             s,
-            "Classic: the original. Bass-weighted: kicks count more than hats. Sticky tempo: resists jumping to half or double time. Cumulative: carries the beat's phase forward between hits. Changing it restarts the search.",
+            "Try another engine if the nod drifts off the beat. Changing it restarts the search.",
             false,
         );
     });
 }
 
 fn shortcuts_page(b: &mut Builder<'_>) {
-    b.section("How drawing starts", |s, b| {
-        b.choice(
-            s,
-            system::ACTIVATION_STYLE,
-            Some("Activation style"),
-            vec![
-                ("toggle", "Toggle".to_owned()),
-                ("hold", "Hold to draw".to_owned()),
-            ],
-        );
-        b.note(
-            s,
-            "Toggle: the shortcut opens Point straight away. Press it again to give the game its mouse back.",
-            false,
-        );
-        b.note(
-            s,
-            "Hold to draw: the game keeps input. Hold the draw key to point and draw; let go and your marks stay.",
-            false,
-        );
-    });
-    b.section("Startup", |s, b| {
-        b.toggle(s, system::START_AT_SIGN_IN, None);
-    });
     for (global, title) in [(true, "Available everywhere"), (false, "While drawing")] {
         b.section(title, |s, b| {
             for shortcut in b.cx.shortcuts.iter().filter(|c| c.global == global) {
@@ -982,17 +947,34 @@ fn shortcuts_page(b: &mut Builder<'_>) {
         });
     }
     b.section("", |s, b| {
-        b.action(
-            s,
-            "shortcuts.reset",
-            "Defaults",
-            "Restore default shortcuts",
-        );
+        b.action(s, "shortcuts.reset", "All shortcuts", "Restore defaults");
     });
 }
 
-fn display_page(b: &mut Builder<'_>) {
-    b.section("Annotation display", |s, b| {
+fn general_page(b: &mut Builder<'_>) {
+    b.section("TinyPaw", |s, b| {
+        b.toggle(s, system::START_AT_SIGN_IN, None);
+    });
+    b.section("Drawing", |s, b| {
+        let hold = b.cx.settings.choice(system::ACTIVATION_STYLE) == "hold";
+        b.segment_choice(
+            s,
+            system::ACTIVATION_STYLE,
+            "Start drawing by",
+            vec![
+                ("toggle", "Toggle".to_owned()),
+                ("hold", "Hold to draw".to_owned()),
+            ],
+        );
+        b.note(
+            s,
+            if hold {
+                "The game keeps its input. Hold the draw key to point and draw; your marks stay when you let go."
+            } else {
+                "The shortcut opens Point straight away. Press it again to give the game its mouse back."
+            },
+            false,
+        );
         let mut options = vec![
             ("primary", "Primary display".to_owned()),
             ("all", "All displays".to_owned()),
@@ -1008,8 +990,14 @@ fn display_page(b: &mut Builder<'_>) {
         {
             b.note(s, &format!("{target} isn't connected right now."), true);
         }
+        b.toggle(s, display::HIDE_BAR, None);
+        b.note(
+            s,
+            "When streaming, share the monitor, not the game window, so viewers see the paw and ink.",
+            false,
+        );
     });
-    b.section("Animation preference", |s, b| {
+    b.section("Motion", |s, b| {
         b.choice(
             s,
             system::MOTION,
@@ -1020,19 +1008,14 @@ fn display_page(b: &mut Builder<'_>) {
                 ("reduced", "Reduced motion".to_owned()),
             ],
         );
+        b.note(
+            s,
+            "Reduced motion also stops the characters' idle motion and blinking.",
+            false,
+        );
     });
-    b.section("Streaming", |s, b| {
-        b.toggle(s, display::HIDE_BAR, None);
-        b.note(
-            s,
-            "Shortcuts and the tray keep working while the bar is hidden.",
-            false,
-        );
-        b.note(
-            s,
-            "Streaming on Discord? Share the game monitor, not the game window, so viewers see the paw and ink.",
-            false,
-        );
+    b.section("About", |s, b| {
+        b.note(s, concat!("TinyPaw ", env!("CARGO_PKG_VERSION")), false);
     });
 }
 
@@ -1121,7 +1104,7 @@ mod tests {
         for page in [
             PageId::Pointer,
             PageId::Sound,
-            PageId::Display,
+            PageId::General,
             PageId::Ink,
             PageId::Tools,
             PageId::Characters,
@@ -1190,7 +1173,7 @@ mod tests {
     fn each_character_on_the_desktop_has_its_own_section_with_its_own_controls() {
         let built = build_page(PageId::Characters, false);
         let titles: Vec<_> = built.sections.iter().map(|s| s.title.as_str()).collect();
-        assert!(titles.contains(&"On the desktop") && titles.contains(&"Yohta"));
+        assert!(titles.contains(&"Add a character") && titles.contains(&"Yohta"));
         let section = built.sections.iter().find(|s| s.title == "Yohta").unwrap();
         let ids: Vec<_> = section.items.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(
@@ -1280,6 +1263,43 @@ mod tests {
         assert!(!global.items[0].warning);
         assert_eq!(overlay.items[0].hint, "In use by another app");
         assert!(overlay.items[0].warning);
+    }
+
+    #[test]
+    fn settings_opens_on_general_which_holds_the_app_wide_settings_once() {
+        assert_eq!(NAV[0].2, PageId::General);
+        assert_eq!(index_of(""), 0);
+        assert_eq!(index_of("display"), 0);
+        let ids = |page| -> Vec<String> {
+            build_page(page, false)
+                .sections
+                .iter()
+                .flat_map(|s| &s.items)
+                .map(|i| i.id.clone())
+                .collect()
+        };
+        let general = ids(PageId::General);
+        for id in [
+            system::START_AT_SIGN_IN,
+            system::ACTIVATION_STYLE,
+            display::TARGET,
+            display::HIDE_BAR,
+            system::MOTION,
+        ] {
+            assert!(general.iter().any(|i| i == id), "{id} is not on General");
+        }
+        // One home each: no setting shows on two pages.
+        let mut seen: HashMap<String, &str> = HashMap::new();
+        for (_, name, page) in NAV {
+            for id in ids(*page) {
+                if id.is_empty() || id.starts_with("page:") {
+                    continue;
+                }
+                if let Some(other) = seen.insert(id.clone(), name) {
+                    assert_eq!(other, *name, "{id} is on {other} and {name}");
+                }
+            }
+        }
     }
 
     #[test]
