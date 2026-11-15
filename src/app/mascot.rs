@@ -106,7 +106,16 @@ impl App {
         match msg {
             // Hide on a character's menu hides that character, not all of them.
             Msg::Command(character::HIDE) => {
-                if let Some(i) = self.instances.get_mut(instance) {
+                // The last one showing turns the master off instead, as Hide
+                // always did, so the tray's Show characters brings it back.
+                let others = self
+                    .instances
+                    .list()
+                    .iter()
+                    .any(|i| i.shown && i.id != instance);
+                if !others {
+                    out.sets.push((character::ENABLED, Value::Bool(false)));
+                } else if let Some(i) = self.instances.get_mut(instance) {
                     i.shown = false;
                     self.save_instances();
                     tasks.push(self.reconcile_mascot());
