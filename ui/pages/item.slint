@@ -1,11 +1,12 @@
 import { Tokens } from "../tokens.slint";
-import { SettingRow, Toggle, Range, Select, Segmented, Swatches, Cards, Meter, Btn, Notice, Hint, Keycap } from "../kit.slint";
+import { SettingRow, EntryRow, Toggle, Range, Select, Segmented, Swatches, Cards, Meter, Btn, Notice, Hint, Keycap } from "../kit.slint";
 
 // One setting as the registry's page definitions describe it. The Rust side
 // fills these in; the control shown depends on `kind`.
 export struct ItemModel {
     id: string,
-    // 0 toggle, 1 range, 2 choice, 3 action button, 4 note
+    // 0 toggle, 1 range, 2 choice, 3 action button, 4 note, 5 shortcut,
+    // 6 segments, 7 swatches, 8 cards, 9 meter, 10 entry
     kind: int,
     label: string,
     hint: string,
@@ -21,6 +22,8 @@ export struct ItemModel {
     pictures: [image],
     enabled: bool,
     warning: bool,
+    // Belongs to the open entry above it.
+    nested: bool,
 }
 
 export struct SectionModel {
@@ -41,6 +44,7 @@ export component ItemView inherits VerticalLayout {
     in-out property <bool> on: item.on;
     in-out property <float> value: item.value;
     in-out property <int> index: item.index;
+    padding-left: root.item.nested ? Tokens.space-5 : 0px;
     changed item => {
         root.on = root.item.on;
         root.value = root.item.value;
@@ -60,7 +64,26 @@ export component ItemView inherits VerticalLayout {
             text: root.item.text;
         }
     }
-    if root.item.kind != 4: SettingRow {
+    if root.item.kind == 10: EntryRow {
+        picture: root.item.pictures[0];
+        label: root.item.label;
+        hint: root.item.hint;
+        open: root.item.index == 1;
+        checked <=> root.on;
+        toggled(c) => { root.toggled(c); }
+        clicked => { root.pressed(); }
+    }
+    // Cards fill the row from the left instead of sitting beside a label.
+    if root.item.kind == 8: HorizontalLayout {
+        padding: Tokens.space-3;
+        Cards {
+            pictures: root.item.pictures;
+            names: root.item.options;
+            current <=> root.index;
+            selected(i) => { root.chosen(i); }
+        }
+    }
+    if root.item.kind != 4 && root.item.kind != 8 && root.item.kind != 10: SettingRow {
         label: root.item.label;
         hint: root.item.hint;
         hint-warning: root.item.warning;
@@ -127,12 +150,6 @@ export component ItemView inherits VerticalLayout {
                 color: Tokens.muted;
                 vertical-alignment: center;
             }
-        }
-        if root.item.kind == 8: Cards {
-            pictures: root.item.pictures;
-            names: root.item.options;
-            current <=> root.index;
-            selected(i) => { root.chosen(i); }
         }
         if root.item.kind == 3: Btn {
             text: root.item.text;

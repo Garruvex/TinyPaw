@@ -315,6 +315,61 @@ export component Card inherits Rectangle {
     }
 }
 
+// One thing in a list that opens to show its settings (a character on the
+// desktop): its picture and name, a switch, and a mark for open or closed.
+// Clicking the row anywhere but the switch opens or closes it.
+export component EntryRow inherits Rectangle {
+    in property <image> picture;
+    in property <string> label;
+    in property <string> hint;
+    in property <bool> open;
+    in-out property <bool> checked;
+    callback toggled(bool);
+    callback clicked;
+    min-height: Tokens.h-row;
+    border-radius: Tokens.radius-control;
+    background: root.open ? Tokens.raised : (area.has-hover ? Tokens.hover : Tokens.none);
+    area := TouchArea {
+        clicked => { root.clicked(); }
+    }
+    HorizontalLayout {
+        padding: Tokens.space-3;
+        spacing: Tokens.space-3;
+        if root.picture.width > 0: VerticalLayout {
+            alignment: center;
+            Image {
+                source: root.picture;
+                width: Tokens.h-control;
+                height: Tokens.h-control;
+                image-fit: contain;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text { text: root.label; font-size: Tokens.font-body; color: Tokens.text; }
+            if root.hint != "": Hint { text: root.hint; }
+        }
+        VerticalLayout {
+            alignment: center;
+            Toggle {
+                checked <=> root.checked;
+                toggled(c) => { root.toggled(c); }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.open ? "Close" : "Edit";
+                font-size: Tokens.font-body;
+                color: Tokens.cyan-text;
+                width: Tokens.value-w;
+                horizontal-alignment: right;
+            }
+        }
+    }
+}
+
 // A row in a list of items (characters on the desktop, reactions, packs).
 export component ListRow inherits Rectangle {
     in property <bool> selected;
@@ -482,7 +537,7 @@ export component Cards inherits Rectangle {
     height: 104px;
     HorizontalLayout {
         spacing: Tokens.space-2;
-        alignment: end;
+        alignment: start;
         for name[i] in root.names: Rectangle {
             width: 92px;
             border-radius: Tokens.radius-card;

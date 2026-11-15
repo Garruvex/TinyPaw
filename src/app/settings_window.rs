@@ -198,9 +198,19 @@ impl App {
                 self.page = crate::view::settings::Page::Character;
                 tasks.push(self.open_classic_settings());
             }
-            "instance.add" => {
-                let selected =
-                    self.character_id(self.session.settings().choice_text(character::CHARACTER));
+            // `instance.add.<character>` adds that character; bare, the one
+            // selected in the library.
+            name if name == "instance.add" || name.starts_with("instance.add.") => {
+                let wanted = name.strip_prefix("instance.add.").map_or_else(
+                    || {
+                        self.session
+                            .settings()
+                            .choice_text(character::CHARACTER)
+                            .to_owned()
+                    },
+                    str::to_owned,
+                );
+                let selected = self.character_id(&wanted);
                 self.instances.add(selected, self.session.settings());
                 self.save_instances();
                 // Adding one means wanting to see it.

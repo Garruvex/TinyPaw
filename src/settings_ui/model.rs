@@ -22,6 +22,9 @@ pub enum Kind {
     Cards = 8,
     /// A live level from 0 to 1, with a line of status beside it.
     Meter = 9,
+    /// One thing in a list that opens to show its settings: its picture and
+    /// name, a switch (`on`), and whether it is open (`index` 1).
+    Entry = 10,
 }
 
 /// A small picture, as RGBA. Equal when it is the same buffer.
@@ -72,6 +75,8 @@ pub struct Item {
     pub pictures: Vec<Thumb>,
     pub enabled: bool,
     pub warning: bool,
+    /// Belongs to the open entry above it, and is drawn indented.
+    pub nested: bool,
 }
 
 impl Item {
@@ -92,6 +97,7 @@ impl Item {
             pictures: Vec::new(),
             enabled: true,
             warning: false,
+            nested: false,
         }
     }
 }

@@ -63,6 +63,9 @@ export component SettingsWindow inherits SettingsShell {
                                         root.capturing-id = item.id;
                                         scope.focus();
                                     }
+                                } else if (item.kind == 10) {
+                                    // An entry's ID is its switch; the row itself opens it.
+                                    root.pressed("open:" + item.id);
                                 } else {
                                     root.pressed(item.id);
                                 }

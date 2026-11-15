@@ -1,7 +1,7 @@
 # Settings: scope, hierarchy and flow
 
 A review of the Slint Settings window as it stands on `refactor/settings-registry`,
-and the structure it should move to. Step A (section 6) is done; B, C and D
+and the structure it should move to. Steps A and B (section 6) are done; C and D
 are not.
 
 ## 1. What is wrong today
@@ -185,3 +185,19 @@ label. Left for later because they need more than page data:
 - "Advanced" disclosure for Follow beat, and the hand and pose move (step C).
 
 A test now fails if any setting appears on two pages.
+
+### Step B, as built
+
+- On the desktop lists one row per character: picture, name, Shown switch and
+  Edit. The row opens to Size, Eyes, Idle and Remove; one row is open at a time.
+- "Add…" turns the page into the picker. Choosing a card adds that character
+  (`settings-action instance.add.<character>`), returns to the list and opens
+  the new row. The library selection (`mascot.character`) is no longer shown.
+- Cards now start from the left. They do not wrap yet (step D).
+- Which row is open and whether the picker is showing live in the Settings
+  process (`link::View`), not in the app.
+- Debug builds accept `TINYPAW_UI_CLICKS` so a page can be clicked through
+  without the mouse; that is how this step was checked.
+
+Not done: "Edit in the studio" on a row, and opening Settings on a given
+character from its right-click menu.

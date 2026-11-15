@@ -137,12 +137,45 @@ pub fn run(page: &str) -> ExitCode {
         eprintln!("tinypaw: could not show the Settings window: {e}");
         return ExitCode::FAILURE;
     }
+    #[cfg(debug_assertions)]
+    scripted_clicks(&window);
     match slint::run_event_loop() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("tinypaw: Settings window event loop: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Debug builds only: clicks listed in `TINYPAW_UI_CLICKS` ("x,y;x,y", in
+/// the window's own logical pixels) are delivered to the window one every two
+/// seconds, starting after eight. This lets a page be exercised and
+/// photographed without moving the user's mouse.
+#[cfg(debug_assertions)]
+fn scripted_clicks(window: &SettingsWindow) {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    let Ok(list) = std::env::var("TINYPAW_UI_CLICKS") else {
+        return;
+    };
+    for (n, at) in list.split(';').enumerate() {
+        let mut xy = at.split(',').filter_map(|v| v.trim().parse::<f32>().ok());
+        let (Some(x), Some(y)) = (xy.next(), xy.next()) else {
+            continue;
+        };
+        let weak = window.as_weak();
+        slint::Timer::single_shot(
+            std::time::Duration::from_millis(8000 + 2000 * n as u64),
+            move || {
+                let Some(window) = weak.upgrade() else { return };
+                let position = slint::LogicalPosition::new(x, y);
+                let button = PointerEventButton::Left;
+                let w = window.window();
+                w.dispatch_event(WindowEvent::PointerMoved { position });
+                w.dispatch_event(WindowEvent::PointerPressed { position, button });
+                w.dispatch_event(WindowEvent::PointerReleased { position, button });
+            },
+        );
     }
 }
 
@@ -414,6 +447,7 @@ fn to_slint(item: &Item) -> ItemModel {
         )),
         enabled: item.enabled,
         warning: item.warning,
+        nested: item.nested,
     }
 }
 

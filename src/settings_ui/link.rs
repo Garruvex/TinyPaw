@@ -369,7 +369,26 @@ fn thumb_from(handle: &iced::advanced::image::Handle) -> Thumb {
     }
 }
 
-fn snapshot(registry: &Registry, state: &State, page: usize, notice: &str) -> Snapshot {
+/// What the window is showing that is not a setting: which character's row
+/// is open, and whether the page is the picker for adding one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct View {
+    pub expanded: Option<u32>,
+    pub picking: bool,
+}
+
+/// Opens or closes a character's row: `open:instance.<id>.shown`.
+fn toggle_open(view: &mut View, name: &str) {
+    let id = name
+        .strip_prefix("open:instance.")
+        .and_then(|rest| rest.split('.').next())
+        .and_then(|n| n.parse::<u32>().ok());
+    if let Some(id) = id {
+        view.expanded = (view.expanded != Some(id)).then_some(id);
+    }
+}
+
+fn snapshot(registry: &Registry, state: &State, page: usize, notice: &str, view: View) -> Snapshot {
     let current = page.min(pages::NAV.len() - 1);
     let id: PageId = pages::NAV[current].2;
     let cx = Context {
@@ -383,6 +402,8 @@ fn snapshot(registry: &Registry, state: &State, page: usize, notice: &str) -> Sn
         instances: &state.instances,
         music: &state.music,
         has_custom_sound: state.custom_sound,
+        expanded: view.expanded,
+        picking: view.picking,
     };
     let built = pages::build(id, &cx);
     Snapshot {
@@ -426,10 +447,34 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
     prepare(&mut state, start_page, &mut thumbs);
     let mut page = start_page;
     let mut notice = String::new();
-    super::show(snapshot(&registry, &state, page, &notice), false);
+    let mut view = View::default();
+    // The characters on the desktop before one was added, to open the new row.
+    let mut before_add: Option<Vec<u32>> = None;
+    super::show(snapshot(&registry, &state, page, &notice, view), false);
     let mut failures = 0;
     loop {
         match rx.recv_timeout(REFRESH) {
+            Ok(Cmd::Set(pages::ADD, value)) => {
+                // A card in the picker: put that character on the desktop.
+                view.picking = false;
+                before_add = Some(state.instances.iter().map(|i| i.id).collect());
+                notice.clear();
+                let _ = ipc::request(&format!(
+                    "settings-action instance.add.{}",
+                    value_text(&value)
+                ));
+            }
+            Ok(Cmd::Action(name)) if name == pages::PICK || name == pages::PICK_CANCEL => {
+                view.picking = name == pages::PICK;
+                notice.clear();
+                super::show(snapshot(&registry, &state, page, &notice, view), false);
+                continue;
+            }
+            Ok(Cmd::Action(name)) if name.starts_with("open:") => {
+                toggle_open(&mut view, &name);
+                super::show(snapshot(&registry, &state, page, &notice, view), false);
+                continue;
+            }
             Ok(Cmd::Set(id, value)) if id.starts_with("instance.") => {
                 // `instance.<id>.<field>`: one setting of one character.
                 let mut parts = id.splitn(3, '.');
@@ -448,7 +493,7 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
                         }
                     }
                     notice.clear();
-                    super::show(snapshot(&registry, &state, page, &notice), false);
+                    super::show(snapshot(&registry, &state, page, &notice, view), false);
                     let _ = ipc::request(&format!("instance-set {n} {field} {text}"));
                 }
             }
@@ -459,16 +504,17 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
                     let _ = registry.set(&mut state.values, id, value.clone());
                 }
                 notice.clear();
-                super::show(snapshot(&registry, &state, page, &notice), false);
+                super::show(snapshot(&registry, &state, page, &notice, view), false);
                 for (id, value) in &sets {
                     let _ = ipc::request(&format!("set {id} {}", value_text(value)));
                 }
             }
             Ok(Cmd::Action(name)) if name.starts_with("page:") => {
                 page = pages::index_of(&name["page:".len()..]);
+                view.picking = false;
                 prepare(&mut state, page, &mut thumbs);
                 notice.clear();
-                super::show(snapshot(&registry, &state, page, &notice), false);
+                super::show(snapshot(&registry, &state, page, &notice, view), false);
                 continue;
             }
             Ok(Cmd::Action(name)) => {
@@ -486,9 +532,10 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
             }
             Ok(Cmd::Navigate(index)) => {
                 page = index;
+                view.picking = false;
                 prepare(&mut state, page, &mut thumbs);
                 notice.clear();
-                super::show(snapshot(&registry, &state, page, &notice), false);
+                super::show(snapshot(&registry, &state, page, &notice, view), false);
                 continue;
             }
             Err(RecvTimeoutError::Timeout) => {}
@@ -500,7 +547,12 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
                 let focus = next.focus;
                 prepare(&mut next, page, &mut thumbs);
                 state = next;
-                super::show(snapshot(&registry, &state, page, &notice), focus);
+                if let Some(before) = before_add.take()
+                    && let Some(new) = state.instances.iter().find(|i| !before.contains(&i.id))
+                {
+                    view.expanded = Some(new.id);
+                }
+                super::show(snapshot(&registry, &state, page, &notice, view), focus);
             }
             None => {
                 failures += 1;
