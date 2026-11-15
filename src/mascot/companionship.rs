@@ -209,13 +209,13 @@ impl Controller {
                 .motion_parts()
                 .iter()
                 .position(|p| p.kind == super::motion::PartType::Head)
-            {
-                if let Some(angle) = pose.angles.get_mut(index) {
-                    *angle += tilt;
-                }
-                pose.head_drop += amount * (0.008 + 0.006 * (now * 7.0).sin());
-                return;
+        {
+            if let Some(angle) = pose.angles.get_mut(index) {
+                *angle += tilt;
             }
+            pose.head_drop += amount * (0.008 + 0.006 * (now * 7.0).sin());
+            return;
+        }
         pose.lean += tilt * 0.35;
         pose.squash += amount * (0.08 + 0.06 * (now * 6.0).sin());
     }
@@ -453,9 +453,10 @@ impl Controller {
                 }
                 self.stirring = self.touch_since.is_some();
                 if let Some(at) = self.touch_since
-                    && (stroke || i.now - at >= self.touch_delay) {
-                        return self.wake(i.now);
-                    }
+                    && (stroke || i.now - at >= self.touch_delay)
+                {
+                    return self.wake(i.now);
+                }
             } else {
                 let left = *self.touch_left.get_or_insert(i.now);
                 if i.now - left > 0.3 {
@@ -904,7 +905,11 @@ impl Affection {
                     origin: i
                         .cursor
                         .unwrap_or(Point::new(i.height * 0.5, i.height * 0.25)),
-                    side: if self.serial.is_multiple_of(2) { -1.0 } else { 1.0 },
+                    side: if self.serial.is_multiple_of(2) {
+                        -1.0
+                    } else {
+                        1.0
+                    },
                 });
             }
             self.next_heart = i.now + 0.45;

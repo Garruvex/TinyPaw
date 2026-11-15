@@ -35,7 +35,9 @@ impl App {
                 }
             }
             UiMsg::ReferenceDance(on) => {
-                if let Some(r) = &mut self.studio.reference { r.dance = on; }
+                if let Some(r) = &mut self.studio.reference {
+                    r.dance = on;
+                }
             }
             UiMsg::ReferenceHead(on) => {
                 if let Some(r) = &mut self.studio.reference {

@@ -1,5 +1,11 @@
 fn main() {
-    for path in ["ui/app.slint", "ui/kit.slint", "ui/tokens.slint", "ui/pages", "ui/templates"] {
+    for path in [
+        "ui/app.slint",
+        "ui/kit.slint",
+        "ui/tokens.slint",
+        "ui/pages",
+        "ui/templates",
+    ] {
         println!("cargo:rerun-if-changed={path}");
     }
     let config = slint_build::CompilerConfiguration::new().with_style("fluent-dark".into());

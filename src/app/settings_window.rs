@@ -24,6 +24,11 @@ impl App {
             self.notice = Some("Could not start Settings.".into());
             return;
         };
+        #[cfg(windows)]
+        {
+            // The lens page lists the windows open now.
+            self.sources = platform::windows::window_sources();
+        }
         let mut command = std::process::Command::new(exe);
         command.arg("--settings");
         #[cfg(windows)]
@@ -65,7 +70,13 @@ impl App {
                 }));
             }
         }
+        let windows: Vec<_> = self
+            .sources
+            .iter()
+            .map(|w| serde_json::json!({ "id": w.id, "title": w.title }))
+            .collect();
         let state = serde_json::json!({
+            "windows": windows,
             "shortcuts": shortcuts,
             "values": crate::preferences::to_json(self.session.settings()),
             "displays": displays,
@@ -88,6 +99,12 @@ impl App {
             "sound.import" => tasks.push(self.ui_message(UiMsg::ImportWav, now, out)),
             "open-classic" => tasks.push(self.open_classic_settings()),
             "shortcuts.reset" => self.reset_shortcuts(),
+            "lens.refresh" => {
+                #[cfg(windows)]
+                {
+                    self.sources = platform::windows::window_sources();
+                }
+            }
             _ => return format!("error: unknown settings action `{name}`"),
         }
         "ok".into()

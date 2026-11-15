@@ -845,8 +845,7 @@ fn enlarged_held_art_keeps_room_to_swing() {
 fn authored_grips_keep_full_swing_clearance_for_rectangular_original_art() {
     for grip in [[0.0, 0.0], [1.0, 0.0], [0.15, 0.3], [0.5, 1.0]] {
         for height in [73.0, 292.0, 584.0] {
-            let mut desktop =
-                Desktop::new("yohta", Rig::load(), height, (500.0, 500.0), 5, false);
+            let mut desktop = Desktop::new("yohta", Rig::load(), height, (500.0, 500.0), 5, false);
             let stage = desktop.rig.size();
             let pixels = image::RgbaImage::from_pixel(100, 260, image::Rgba([120, 180, 220, 255]));
             let mut picture =
@@ -896,13 +895,18 @@ fn stage_paints_speech_bubble_and_menu() {
     };
     let mut d = Desktop::new("yohta", Rig::load(), 146.0, (500.0, 500.0), 3, false);
     let mut lines = Lines::default();
-    lines.get_mut(Trigger::Click).push(super::super::lines::Line {
-        text: "Hi! I'm Yohta. Click me again, or right-click for the menu.".into(),
-        sound: None,
-    });
+    lines
+        .get_mut(Trigger::Click)
+        .push(super::super::lines::Line {
+            text: "Hi! I'm Yohta. Click me again, or right-click for the menu.".into(),
+            sound: None,
+        });
     d.set_lines(lines, &o);
     d.reduced = true;
-    d.speech = Speech::new("Hi! I'm Yohta. Click me again, or right-click for the menu.", 0.0);
+    d.speech = Speech::new(
+        "Hi! I'm Yohta. Click me again, or right-click for the menu.",
+        0.0,
+    );
     d.menu = Some(Side::Right);
     d.hover = vec![0.0, 1.0, 0.0];
     let items = vec![
@@ -944,7 +948,10 @@ fn stage_paints_speech_bubble_and_menu() {
     });
     let after = raster.data().iter().filter(|b| **b != 0).count();
     assert!(drawn > before, "the character drew nothing");
-    assert!(after > drawn + 2000, "the menu and bubble drew almost nothing");
+    assert!(
+        after > drawn + 2000,
+        "the menu and bubble drew almost nothing"
+    );
     // The menu is where the layout says: its box has pixels, a far corner none.
     let m = d.layout.menu(Side::Right);
     let at = |x: f32, y: f32| {
@@ -953,7 +960,13 @@ fn stage_paints_speech_bubble_and_menu() {
     };
     assert!(at(m.x + m.width / 2.0, m.y + m.height / 2.0) > 200);
     if let Some(path) = std::env::var_os("TINYPAW_PAINT_PNG") {
-        image::save_buffer(path, &raster.to_straight_rgba(), w, h, image::ExtendedColorType::Rgba8)
-            .unwrap();
+        image::save_buffer(
+            path,
+            &raster.to_straight_rgba(),
+            w,
+            h,
+            image::ExtendedColorType::Rgba8,
+        )
+        .unwrap();
     }
 }

@@ -1260,17 +1260,17 @@ impl canvas::Program<Message> for MotionStage<'_> {
                 |action| canvas::Action::publish(Message::Ui(UiMsg::Align(action))).and_capture();
             if let canvas::Event::Mouse(Event::CursorMoved { .. }) = event
                 && state.gripping
-                    && let (Some(point), Some(picture)) = (point, self.preview.placement_picture())
-                    {
-                        let grip = picture.source_fraction(self.preview.rig().size(), point);
-                        return Some(
-                            canvas::Action::publish(Message::Ui(UiMsg::GripSet(Some([
-                                grip.x.clamp(0.0, 1.0),
-                                grip.y.clamp(0.0, 1.0),
-                            ]))))
-                            .and_capture(),
-                        );
-                    }
+                && let (Some(point), Some(picture)) = (point, self.preview.placement_picture())
+            {
+                let grip = picture.source_fraction(self.preview.rig().size(), point);
+                return Some(
+                    canvas::Action::publish(Message::Ui(UiMsg::GripSet(Some([
+                        grip.x.clamp(0.0, 1.0),
+                        grip.y.clamp(0.0, 1.0),
+                    ]))))
+                    .and_capture(),
+                );
+            }
             if let canvas::Event::Mouse(Event::ButtonPressed(Button::Left)) = event {
                 state.focused = point.is_some();
                 if let Some(point) = point {
@@ -1283,11 +1283,11 @@ impl canvas::Program<Message> for MotionStage<'_> {
                     }
                     if a.event == crate::mascot::reactions::Event::Pickup
                         && let Some(picture) = self.preview.placement_picture()
-                            && point.distance(picture.hold_in(self.preview.rig().size())) < 9.0 / k
-                            {
-                                state.gripping = true;
-                                return Some(canvas::Action::capture());
-                            }
+                        && point.distance(picture.hold_in(self.preview.rig().size())) < 9.0 / k
+                    {
+                        state.gripping = true;
+                        return Some(canvas::Action::capture());
+                    }
                     if !self.preview.placing_grip {
                         state.start = Some((point, a.art.place));
                         return Some(canvas::Action::capture());
@@ -1299,63 +1299,66 @@ impl canvas::Program<Message> for MotionStage<'_> {
                 state.gripping = false;
             }
             if let canvas::Event::Mouse(Event::CursorMoved { .. }) = event
-                && let (Some((start, original)), Some(point)) = (state.start, point) {
-                    let stage = self.preview.rig().size();
-                    return Some(publish(Action::Place([
-                        (original[0] + (point.x - start.x) / stage.width).clamp(-1.0, 1.0),
-                        (original[1] + (point.y - start.y) / stage.height).clamp(-1.0, 1.0),
-                        original[2],
-                    ])));
-                }
+                && let (Some((start, original)), Some(point)) = (state.start, point)
+            {
+                let stage = self.preview.rig().size();
+                return Some(publish(Action::Place([
+                    (original[0] + (point.x - start.x) / stage.width).clamp(-1.0, 1.0),
+                    (original[1] + (point.y - start.y) / stage.height).clamp(-1.0, 1.0),
+                    original[2],
+                ])));
+            }
             if state.focused
                 && let canvas::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                     key: iced::keyboard::Key::Named(key),
                     ..
                 }) = event
-                {
-                    use iced::keyboard::key::Named;
-                    let mut place = a.art.place;
-                    let size = self.preview.rig().size();
-                    match key {
-                        Named::ArrowLeft => place[0] -= 1.0 / size.width,
-                        Named::ArrowRight => place[0] += 1.0 / size.width,
-                        Named::ArrowUp => place[1] -= 1.0 / size.height,
-                        Named::ArrowDown => place[1] += 1.0 / size.height,
-                        _ => return None,
-                    }
-                    place[0] = place[0].clamp(-1.0, 1.0);
-                    place[1] = place[1].clamp(-1.0, 1.0);
-                    return Some(publish(Action::Place(place)));
+            {
+                use iced::keyboard::key::Named;
+                let mut place = a.art.place;
+                let size = self.preview.rig().size();
+                match key {
+                    Named::ArrowLeft => place[0] -= 1.0 / size.width,
+                    Named::ArrowRight => place[0] += 1.0 / size.width,
+                    Named::ArrowUp => place[1] -= 1.0 / size.height,
+                    Named::ArrowDown => place[1] += 1.0 / size.height,
+                    _ => return None,
                 }
+                place[0] = place[0].clamp(-1.0, 1.0);
+                place[1] = place[1].clamp(-1.0, 1.0);
+                return Some(publish(Action::Place(place)));
+            }
         }
         if self.preview.placing_grip {
             if let canvas::Event::Mouse(Event::ButtonPressed(Button::Left)) = event
-                && let (Some(point), Some(picture)) = (point, self.preview.placement_picture()) {
-                    let size = self.preview.rig().size();
-                    let fraction = picture.source_fraction(size, point);
-                    let grip = [fraction.x, fraction.y];
-                    if grip.iter().all(|v| (0.0..=1.0).contains(v)) {
-                        return Some(
-                            canvas::Action::publish(Message::Ui(UiMsg::GripSet(Some(grip))))
-                                .and_capture(),
-                        );
-                    }
+                && let (Some(point), Some(picture)) = (point, self.preview.placement_picture())
+            {
+                let size = self.preview.rig().size();
+                let fraction = picture.source_fraction(size, point);
+                let grip = [fraction.x, fraction.y];
+                if grip.iter().all(|v| (0.0..=1.0).contains(v)) {
+                    return Some(
+                        canvas::Action::publish(Message::Ui(UiMsg::GripSet(Some(grip))))
+                            .and_capture(),
+                    );
                 }
+            }
             return None;
         }
         if self.preview.placing_mouth
             && let canvas::Event::Mouse(Event::ButtonPressed(Button::Left)) = event
-                && let Some(p) = point {
-                    let size = self.preview.rig().size();
-                    let mut s = self.preview.companionship();
-                    s.mouth = [
-                        (p.x / size.width).clamp(0.0, 1.0),
-                        (p.y / size.height).clamp(0.0, 1.0),
-                    ];
-                    return Some(
-                        canvas::Action::publish(Message::Ui(UiMsg::Companionship(s))).and_capture(),
-                    );
-                }
+            && let Some(p) = point
+        {
+            let size = self.preview.rig().size();
+            let mut s = self.preview.companionship();
+            s.mouth = [
+                (p.x / size.width).clamp(0.0, 1.0),
+                (p.y / size.height).clamp(0.0, 1.0),
+            ];
+            return Some(
+                canvas::Action::publish(Message::Ui(UiMsg::Companionship(s))).and_capture(),
+            );
+        }
         if !self.preview.placing_bubble {
             return None;
         }

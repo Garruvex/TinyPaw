@@ -8,20 +8,25 @@ fn art_save_preserves_standing_music_assets() {
     let folder = root.join(character.id);
     std::fs::create_dir_all(folder.join("music")).unwrap();
     for name in ["body", "relaxed", "phone", "stick"] {
-        std::fs::copy(folder.join("sit/body.png"),folder.join(format!("music/{name}.png"))).unwrap();
+        std::fs::copy(
+            folder.join("sit/body.png"),
+            folder.join(format!("music/{name}.png")),
+        )
+        .unwrap();
     }
     let path = folder.join("character.json");
-    let mut manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     manifest["music"] = serde_json::json!({"bop":"light_wave","artwork":{
         "body":"music/body.png","relaxed_arm":"music/relaxed.png",
         "phone_arm":"music/phone.png","stick_arm":"music/stick.png","pivot":[0.5,0.6]}});
-    std::fs::write(&path,serde_json::to_string(&manifest).unwrap()).unwrap();
-    let editor = Editor::open_in(&root,&character).unwrap();
+    std::fs::write(&path, serde_json::to_string(&manifest).unwrap()).unwrap();
+    let editor = Editor::open_in(&root, &character).unwrap();
     let saved = editor.save_into(&root).unwrap();
-    assert_eq!(saved.rig().unwrap().music_items(),3);
+    assert_eq!(saved.rig().unwrap().music_items(), 3);
     let reopened = read_manifest(&folder).unwrap();
     reopened.validate_files(&folder).unwrap();
-    assert_eq!(reopened.music_art.unwrap().pivot,(0.5,0.6));
+    assert_eq!(reopened.music_art.unwrap().pivot, (0.5, 0.6));
     std::fs::remove_dir_all(dir).unwrap();
 }
 

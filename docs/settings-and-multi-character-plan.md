@@ -289,10 +289,18 @@ Slice 3d results. The app now runs the desktop character on the stage and nothin
 |---|---|---|
 | 4a | Slint in the main crate; the Settings window as its own process; page definitions that the registry mounts; Sound and Display & motion pages | Done; opt in with `TINYPAW_SLINT_SETTINGS=1` |
 | 4b | Shortcuts (rebinding is custom) | Done |
-| 4c | Ink & text, Spotlight & lens | Not started |
+| 4c | Ink & text, Spotlight & lens | Done |
 | 4d | Pointer | Not started |
 | 4e | Music response (moved out of the Character page) and the Characters page, with Customize opening the existing editor until step 5 | Not started |
 | 4f | First-run window; delete the Iced settings views | Not started |
+
+Slice 4c results. Ink & text and Spotlight & lens moved over:
+
+- **Ink & text:** ink colour (six swatches from the same list as the quick bar), width (2, 4, 6, 8 px as side-by-side buttons), fade, then text label size, colour (five swatches) and dark backing.
+- **Spotlight & lens:** spotlight size and darkness; lens magnification and size; each with the "anywhere" shortcut line showing the key as currently bound, and a Change shortcuts button that jumps to the Shortcuts page. Lens source is one list: Desktop under pointer, Window active before TinyPaw, then every open window (the list is read when Settings opens and again on Refresh windows). A locked window that is no longer open shows as "A window that is not open now".
+- **Kit additions:** a `Swatches` row (the current colour is ringed) and the existing `Segmented` is now an item kind. Both are choices, so they use the same set path as every other choice; a window ID goes through `set lens.source <id>` as the CLI does.
+- **Not moved:** the "match pointer" button beside the ink swatches depends on the pointer pack, so it arrives with the Pointer page (4d).
+- **Checked:** both pages in the real app, three more unit tests (the ink page marks the current colour and width, the lens list and its value, and every item still names a registered setting). 286 tests pass. Not checked by hand: clicking swatches and the lens list with a real mouse.
 
 Slice 4b results. The Shortcuts page moved over:
 

@@ -23,8 +23,8 @@ pub mod render;
 #[cfg(all(test, not(feature = "gpu")))]
 mod render_tests;
 pub mod rig;
-pub mod typeset;
 pub mod surface;
+pub mod typeset;
 mod yohta_pack;
 
 /// Messages from the desktop character window.

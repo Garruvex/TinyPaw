@@ -435,6 +435,29 @@ export component Select inherits Rectangle {
     }
 }
 
+// A row of colours to pick from; the current one is ringed.
+export component Swatches inherits HorizontalLayout {
+    in property <[color]> colors;
+    in-out property <int> current;
+    callback selected(int);
+    spacing: Tokens.space-2;
+    alignment: start;
+    for swatch[i] in root.colors: Rectangle {
+        width: Tokens.h-control;
+        height: Tokens.h-control;
+        border-radius: Tokens.radius-round;
+        background: swatch;
+        border-width: i == root.current ? Tokens.ring : Tokens.hairline;
+        border-color: i == root.current ? Tokens.text : Tokens.line-strong;
+        TouchArea {
+            clicked => {
+                root.current = i;
+                root.selected(i);
+            }
+        }
+    }
+}
+
 // A page body that scrolls when it is taller than the window.
 export component Scroller inherits Flickable {
     content-height: inner.preferred-height;

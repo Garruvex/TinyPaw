@@ -914,8 +914,6 @@ impl Desktop {
         self.audio = audio;
     }
 
-
-
     /// Shows another character, keeping its feet where these were.
     pub fn set_rig(&mut self, character: &'static str, rig: Rig) {
         self.character = character;
@@ -946,7 +944,6 @@ impl Desktop {
                     .with_held_room(held, self.rig.size(), self.rig.visible_rows().0);
         }
     }
-
 
     /// Closes the menu, letting it fade away.
     pub fn close_menu(&mut self) {
@@ -1726,7 +1723,6 @@ impl Desktop {
         self.shown = !hidden;
         Some(hidden)
     }
-
 
     /// How often to poll, or `None` when nothing needs watching. Anything
     /// under 100 ms means motion: the app then polls once per display frame.

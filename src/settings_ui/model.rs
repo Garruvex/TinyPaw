@@ -14,6 +14,10 @@ pub enum Kind {
     Note = 4,
     /// A command and its key combination, with a button to change it.
     Shortcut = 5,
+    /// A choice shown as a few side-by-side buttons.
+    Segments = 6,
+    /// A choice among colours.
+    Swatches = 7,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -31,6 +35,8 @@ pub struct Item {
     pub text: String,
     pub options: Vec<String>,
     pub index: i32,
+    /// A swatch row's colours, as RGBA.
+    pub colors: Vec<[u8; 4]>,
     pub enabled: bool,
     pub warning: bool,
 }
@@ -49,6 +55,7 @@ impl Item {
             text: String::new(),
             options: Vec::new(),
             index: 0,
+            colors: Vec::new(),
             enabled: true,
             warning: false,
         }

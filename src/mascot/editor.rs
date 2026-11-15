@@ -699,9 +699,10 @@ impl Editor {
         let held = self.held.take();
         let result = self.set_image(Target::Held, path);
         if result.is_ok()
-            && let Some(layer) = self.held.take() {
-                self.reference_art.push((event, layer));
-            }
+            && let Some(layer) = self.held.take()
+        {
+            self.reference_art.push((event, layer));
+        }
         self.held = held;
         result
     }
@@ -1301,7 +1302,9 @@ fn guess_kind(path: &Path, has_head: bool) -> PartType {
         .unwrap_or_default()
         .to_lowercase();
     for kind in PartType::ALL {
-        if name == kind.name() { return kind; }
+        if name == kind.name() {
+            return kind;
+        }
     }
     for (word, kind) in [
         ("tail", PartType::Tail),

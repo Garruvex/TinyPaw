@@ -15,7 +15,9 @@ fn ui_dir() -> PathBuf {
 }
 
 fn slint_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -38,7 +40,9 @@ fn violations(source: &str) -> Vec<String> {
         let line = raw.split("//").next().unwrap_or("");
         let at = index + 1;
         if line.contains("std-widgets.slint") {
-            found.push(format!("{at}: stock widgets ignore the tokens; use the kit"));
+            found.push(format!(
+                "{at}: stock widgets ignore the tokens; use the kit"
+            ));
         }
         let bytes = line.as_bytes();
         let mut i = 0;
@@ -73,7 +77,10 @@ fn is_word(b: u8) -> bool {
 fn scanner_flags_raw_values() {
     assert_eq!(violations("padding: 12px;").len(), 1);
     assert_eq!(violations("color: #FF00FF;").len(), 1);
-    assert_eq!(violations("import { Switch } from \"std-widgets.slint\";").len(), 1);
+    assert_eq!(
+        violations("import { Switch } from \"std-widgets.slint\";").len(),
+        1
+    );
     assert_eq!(violations("width: 1.5px;").len(), 1);
 }
 
@@ -100,18 +107,33 @@ fn pages_and_templates_use_only_the_kit_and_tokens() {
         checked += 1;
         let source = fs::read_to_string(&path).unwrap();
         for v in violations(&source) {
-            problems.push(format!("{}:{v}", path.strip_prefix(ui_dir()).unwrap().display()));
+            problems.push(format!(
+                "{}:{v}",
+                path.strip_prefix(ui_dir()).unwrap().display()
+            ));
         }
     }
-    assert!(checked >= 4, "expected pages and templates under ui/, found {checked}");
-    assert!(problems.is_empty(), "UI guard failed:\n{}", problems.join("\n"));
+    assert!(
+        checked >= 4,
+        "expected pages and templates under ui/, found {checked}"
+    );
+    assert!(
+        problems.is_empty(),
+        "UI guard failed:\n{}",
+        problems.join("\n")
+    );
 }
 
 /// `#RRGGBB` or `#RRGGBBAA` to RGBA bytes.
 fn hex(value: &str) -> [u8; 4] {
     let digits = value.trim_start_matches('#');
     let byte = |i: usize| u8::from_str_radix(&digits[i..i + 2], 16).unwrap();
-    [byte(0), byte(2), byte(4), if digits.len() == 8 { byte(6) } else { 255 }]
+    [
+        byte(0),
+        byte(2),
+        byte(4),
+        if digits.len() == 8 { byte(6) } else { 255 },
+    ]
 }
 
 fn token_colors(source: &str) -> BTreeMap<String, [u8; 4]> {
@@ -132,13 +154,21 @@ fn token_colors(source: &str) -> BTreeMap<String, [u8; 4]> {
 fn theme_colors(source: &str) -> BTreeMap<String, [u8; 4]> {
     let mut map = BTreeMap::new();
     for line in source.lines() {
-        let Some(rest) = line.trim().strip_prefix("pub const ") else { continue };
-        let Some((name, value)) = rest.split_once(": Color = Color::from_rgb") else { continue };
+        let Some(rest) = line.trim().strip_prefix("pub const ") else {
+            continue;
+        };
+        let Some((name, value)) = rest.split_once(": Color = Color::from_rgb") else {
+            continue;
+        };
         let (alpha, args) = match value.strip_prefix("a8(") {
             Some(args) => (true, args),
             None => (false, value.strip_prefix("8(").unwrap()),
         };
-        let parts: Vec<&str> = args.trim_end_matches(");").split(',').map(str::trim).collect();
+        let parts: Vec<&str> = args
+            .trim_end_matches(");")
+            .split(',')
+            .map(str::trim)
+            .collect();
         let channel = |s: &str| u8::from_str_radix(s.trim_start_matches("0x"), 16).unwrap();
         let a = if alpha {
             (parts[3].parse::<f32>().unwrap() * 255.0).round() as u8
@@ -162,8 +192,14 @@ fn slint_tokens_match_theme() {
         if let Some(expected) = theme.get(name) {
             shared += 1;
             let close = color.iter().zip(expected).all(|(a, b)| a.abs_diff(*b) <= 1);
-            assert!(close, "token `{name}` is {color:?} but theme.rs has {expected:?}");
+            assert!(
+                close,
+                "token `{name}` is {color:?} but theme.rs has {expected:?}"
+            );
         }
     }
-    assert!(shared >= 20, "expected most tokens to mirror theme.rs, found {shared}");
+    assert!(
+        shared >= 20,
+        "expected most tokens to mirror theme.rs, found {shared}"
+    );
 }

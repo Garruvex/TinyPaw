@@ -1,5 +1,5 @@
 import { Tokens } from "../tokens.slint";
-import { SettingRow, Toggle, Range, Select, Btn, Notice, Hint, Keycap } from "../kit.slint";
+import { SettingRow, Toggle, Range, Select, Segmented, Swatches, Btn, Notice, Hint, Keycap } from "../kit.slint";
 
 // One setting as the registry's page definitions describe it. The Rust side
 // fills these in; the control shown depends on `kind`.
@@ -17,6 +17,7 @@ export struct ItemModel {
     text: string,
     options: [string],
     index: int,
+    colors: [color],
     enabled: bool,
     warning: bool,
 }
@@ -100,6 +101,16 @@ export component ItemView inherits VerticalLayout {
             options: root.item.options;
             current <=> root.index;
             enabled: root.item.enabled;
+            selected(i) => { root.chosen(i); }
+        }
+        if root.item.kind == 6: Segmented {
+            options: root.item.options;
+            current <=> root.index;
+            selected(i) => { root.chosen(i); }
+        }
+        if root.item.kind == 7: Swatches {
+            colors: root.item.colors;
+            current <=> root.index;
             selected(i) => { root.chosen(i); }
         }
         if root.item.kind == 3: Btn {

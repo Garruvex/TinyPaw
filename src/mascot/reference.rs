@@ -624,13 +624,13 @@ impl Request {
                     .and_then(|e| e.art.as_ref())
                     .map(|a| &a.image)
                     != Some(&super::lines::SoundRef::Pack(role.file().into()))
-                {
-                    return Err(format!(
-                        "{} must map to the {} reaction",
-                        role.file(),
-                        event.key()
-                    ));
-                }
+            {
+                return Err(format!(
+                    "{} must map to the {} reaction",
+                    role.file(),
+                    event.key()
+                ));
+            }
         }
         manifest.validate_files(folder)
     }

@@ -39,8 +39,16 @@ pub struct ShortcutInfo {
     pub taken: bool,
 }
 
+/// A window the lens can be locked to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowInfo {
+    pub id: String,
+    pub title: String,
+}
+
 /// What the resident app reports.
 pub struct State {
+    pub windows: Vec<WindowInfo>,
     pub shortcuts: Vec<ShortcutInfo>,
     pub values: SettingValues,
     pub displays: Vec<DisplayInfo>,
@@ -83,7 +91,22 @@ pub fn parse_state(registry: &Registry, reply: &str) -> Option<State> {
                 .collect()
         })
         .unwrap_or_default();
+    let windows = json
+        .get("windows")
+        .and_then(Json::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|w| {
+                    Some(WindowInfo {
+                        id: w.get("id")?.as_str()?.to_owned(),
+                        title: w.get("title")?.as_str()?.to_owned(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     Some(State {
+        windows,
         shortcuts,
         values,
         displays,
@@ -111,6 +134,7 @@ fn snapshot(registry: &Registry, state: &State, page: usize, notice: &str) -> Sn
         settings: &state.values,
         displays: &state.displays,
         shortcuts: &state.shortcuts,
+        windows: &state.windows,
         has_custom_sound: state.custom_sound,
     };
     let built = pages::build(id, &cx);
@@ -163,6 +187,12 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
                 notice.clear();
                 super::show(snapshot(&registry, &state, page, &notice), false);
                 let _ = ipc::request(&format!("set {id} {}", value_text(&value)));
+            }
+            Ok(Cmd::Action(name)) if name.starts_with("page:") => {
+                page = pages::index_of(&name["page:".len()..]);
+                notice.clear();
+                super::show(snapshot(&registry, &state, page, &notice), false);
+                continue;
             }
             Ok(Cmd::Action(name)) => {
                 notice.clear();

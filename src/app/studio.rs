@@ -523,7 +523,8 @@ impl App {
                             if e == Event::Pickup {
                                 p.set_held(Some(art));
                                 p.placement_preview = Some(e);
-                            } else if e == Event::Sleep && std::mem::take(&mut p.adding_sleep_pose) {
+                            } else if e == Event::Sleep && std::mem::take(&mut p.adding_sleep_pose)
+                            {
                                 p.add_sleep_pose(art);
                             } else {
                                 p.set_art(e, Some(art));
@@ -536,7 +537,11 @@ impl App {
                     }
                 }
             }
-            Message::ReactionPicturePicked(_, None) => { if let Some(p) = &mut self.studio.motion_preview { p.adding_sleep_pose = false; } }
+            Message::ReactionPicturePicked(_, None) => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.adding_sleep_pose = false;
+                }
+            }
             Message::ReferencePicked(Some(path)) => {
                 // A thumbnail only; the reference stays where it is.
                 self.studio.reference_thumb = ::image::open(&path).ok().map(|img| {
@@ -633,22 +638,28 @@ impl App {
                     };
                     for e in events {
                         if let Ok(play) = self.voice.accept(e, &sounds, quiet, now)
-                            && let Some(seconds) = self.play_reaction(&play) {
-                                self.voice.started(now, seconds);
-                                reacted = true;
-                            }
-                    }
-                    if !reacted
-                        && let Some(sound) = line_sound {
-                            self.play_line_sound(&sound);
+                            && let Some(seconds) = self.play_reaction(&play)
+                        {
+                            self.voice.started(now, seconds);
+                            reacted = true;
                         }
+                    }
+                    if !reacted && let Some(sound) = line_sound {
+                        self.play_line_sound(&sound);
+                    }
                 }
                 let o = self.motion_options();
                 let beat = self.beat_phase();
                 let sampled = Instant::now();
                 // Use the clock speed directly. Wrapped phase differences
                 // alias after a delayed refresh and can falsely freeze a preview.
-                let beat_rate = self.beat_clock.lock().unwrap_or_else(|e| e.into_inner()).0.bpm() / 60.0;
+                let beat_rate = self
+                    .beat_clock
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .0
+                    .bpm()
+                    / 60.0;
                 let control = crate::mascot::preview::Control {
                     dance: self.dance_options(),
                     idle: o.0,

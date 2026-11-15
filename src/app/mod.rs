@@ -710,7 +710,6 @@ impl App {
                                 )
                             };
                             self.notice = self.rebind_shortcut(command, &binding).err();
-
                         }
                     }
                 } else if Some(window) == self.settings_window
@@ -1347,7 +1346,11 @@ impl App {
 
     /// Rebinds a command's shortcut, keeping the old one when the new one is
     /// taken or cannot be registered with the desktop.
-    pub(super) fn rebind_shortcut(&mut self, command: &'static str, binding: &str) -> Result<(), String> {
+    pub(super) fn rebind_shortcut(
+        &mut self,
+        command: &'static str,
+        binding: &str,
+    ) -> Result<(), String> {
         let old = self.registry.clone();
         self.registry.rebind(command, binding)?;
         self.hotkeys = None;
@@ -1432,7 +1435,11 @@ impl App {
             return (format!("ok: {}", self.status()), None);
         }
         if name == "set" {
-            let rest = line.trim_start().strip_prefix("set").unwrap_or("").trim_start();
+            let rest = line
+                .trim_start()
+                .strip_prefix("set")
+                .unwrap_or("")
+                .trim_start();
             let Some((id, text)) = rest.split_once(char::is_whitespace) else {
                 return ("error: usage: tinypaw set <setting> <value>".into(), None);
             };
@@ -1843,7 +1850,10 @@ fn character_pictures(c: &Character) -> crate::mascot::desktop::Pictures {
         click: picture(reactions::art(&pack, &user, Event::Click)),
         drop: picture(reactions::art(&pack, &user, Event::Drop)),
         headpat: picture(reactions::art(&pack, &user, Event::Headpat)),
-        sleep_poses: reactions::sleep_poses(&pack, &user).into_iter().filter_map(|p| Some((picture(Some(p.art))?, p.mouth))).collect(),
+        sleep_poses: reactions::sleep_poses(&pack, &user)
+            .into_iter()
+            .filter_map(|p| Some((picture(Some(p.art))?, p.mouth)))
+            .collect(),
         sleep: picture(reactions::art(&pack, &user, Event::Sleep)),
         wake: picture(reactions::art(&pack, &user, Event::Wake)),
         settings: reactions::companionship(&pack, &user),

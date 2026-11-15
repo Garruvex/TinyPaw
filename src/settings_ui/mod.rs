@@ -325,6 +325,12 @@ fn to_slint(item: &Item) -> ItemModel {
                 .collect::<Vec<_>>(),
         )),
         index: item.index,
+        colors: ModelRc::new(VecModel::from(
+            item.colors
+                .iter()
+                .map(|&[r, g, b, a]| slint::Color::from_argb_u8(a, r, g, b))
+                .collect::<Vec<_>>(),
+        )),
         enabled: item.enabled,
         warning: item.warning,
     }
