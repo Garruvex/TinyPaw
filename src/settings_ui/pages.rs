@@ -651,10 +651,10 @@ fn characters_page(b: &mut Builder<'_>) {
         );
         b.note(
             s,
-            "Add, import, export, remove and customize characters in the character editor.",
+            "Add, import, export, remove and customize characters in the Character studio.",
             false,
         );
-        b.action(s, "characters.edit", "Character editor", "Open the editor…");
+        b.action(s, "characters.edit", "Character studio", "Open the studio…");
     });
     b.section("Visibility", |s, b| {
         b.toggle(s, mascot::ENABLED, Some("Show on the desktop"));
@@ -779,7 +779,7 @@ fn music_page(b: &mut Builder<'_>) {
         });
         b.note(
             s,
-            "Automatic keeps gentle bops seated, stands after sustained high activity, and sits again when the music calms. A higher threshold keeps it seated more often. Standing artwork is required. Bop style is set per character in the character editor.",
+            "Automatic keeps gentle bops seated, stands after sustained high activity, and sits again when the music calms. A higher threshold keeps it seated more often. Standing artwork is required. Bop style is set per character in the Character studio.",
             false,
         );
     });

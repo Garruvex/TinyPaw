@@ -1,6 +1,6 @@
 //! Graphite design tokens and shared widget styles.
 
-use iced::widget::{button, container, pick_list, slider, toggler};
+use iced::widget::{button, container, pick_list, slider};
 use iced::{Background, Border, Color, Font, Shadow, Theme, font};
 
 pub const SURFACE: Color = Color::from_rgb8(0x17, 0x18, 0x1C);
@@ -239,30 +239,6 @@ pub fn swatch(color: Color, selected: bool) -> impl Fn(&Theme, button::Status) -
             if selected { TEXT } else { LINE_STRONG },
         ),
         ..button::Style::default()
-    }
-}
-
-pub fn master_toggler(_: &Theme, status: toggler::Status) -> toggler::Style {
-    let on = matches!(
-        status,
-        toggler::Status::Active { is_toggled: true }
-            | toggler::Status::Hovered { is_toggled: true }
-    );
-    toggler::Style {
-        background: (if on {
-            AMBER
-        } else {
-            Color::from_rgb8(0x3A, 0x3D, 0x45)
-        })
-        .into(),
-        background_border_width: 0.0,
-        background_border_color: Color::TRANSPARENT,
-        foreground: Color::WHITE.into(),
-        foreground_border_width: 0.0,
-        foreground_border_color: Color::TRANSPARENT,
-        text_color: Some(TEXT),
-        border_radius: None,
-        padding_ratio: 0.1,
     }
 }
 

@@ -177,7 +177,7 @@ Each instance has its own shown flag, changed from its menu or its row in Settin
 | 2 | Shared character renderer: the rig draws to a pixel buffer without Iced | The current desktop character and preview render from it with pixel checks unchanged. Done as a renderer with pixel parity tests; the live desktop and the studio switch to it in steps 3 and 5 (see [Step 2 results](#step-2-results)) |
 | 3 | Stage engine with one character | Same behaviour as today; no character traffic in the dispatcher; idle footprint within budget. Done in code; waiting on a hands-on check of the live app (see [Step 3 progress](#step-3-progress)) |
 | 4 | Settings in the new framework: registry, then Sound, Display & motion, Shortcuts, Ink & text, Spotlight & lens, Pointer, Music response; first-run window | In progress: slice 4a landed (see [Step 4 progress](#step-4-progress)). The Iced settings views are deleted; every control saves at once |
-| 5 | Character studio window | Artwork, Reactions, Speech, Motion and Advanced work on one draft; Settings never shows the leave prompt |
+| 5 | Character studio window | Artwork, Reactions, Speech, Motion and Advanced work on one draft; Settings never shows the leave prompt Done as its own window; the editor content is still Iced (see [Step 5 results](#step-5-results)) |
 | 6 | Multi-character: scopes, instance store and migration, Characters page, several instances, coordinator tiers one to three | An existing installation opens unchanged; two instances of one character move and size independently; 1, 10 and 20 instances are measured |
 | 7 | Social awareness | Planned separately |
 
@@ -282,6 +282,12 @@ Slice 3d results. The app now runs the desktop character on the stage and nothin
 - **Run for real** with an isolated copy of the app (own settings folder and command endpoint, so the running instance was left alone): enabling the character creates the stage window, disabling it removes the window, and the character logic, menu rows and saves take the new path. Release build, character on, idle motion, eyes and music off: the stage thread uses 0.6% of one core (about 0.6 ms per 100 ms poll); with idle sway on at 30 Hz, 1.7%. Memory, whole app with the character on: 38.8 MiB working set, 17 MiB private; with the character off 26 MiB and 7 MiB. When music response or sleep audio is on, the music meter thread adds about 2% of a core as it did before; that is unchanged by this step.
 - **Not checked by hand:** carrying and throwing the character, clicking the menu and watching a bubble, with the real mouse. Please run the app and try them.
 - **Known gaps:** a pressed menu row has no extra highlight, and per-poll cost (about 0.6 ms) is higher than it needs to be; trimming it is a later optimisation. Step 3's "within budget" has no number in this plan, so the figures above are the baseline to hold.
+
+## Step 5 results
+
+- **The studio is its own window.** The Iced window that remains after step 4 is now titled and headed "TinyPaw Character studio". It has no annotation switch, and its navigation is Character and the pointer editor. It opens from the Characters page ("Open the studio…"), from Add pointer and Re-aim, and from a character's menu. Settings is the Slint window and never shows the leave prompt; that prompt (Save, Discard, Stay) belongs to the studio, which asks it on close or when changing character with unsaved work.
+- **The editor content was not rewritten in Slint.** Artwork, Reactions, Speech, Motion and Advanced keep their Iced views on one draft with one Save. They are about 3,500 lines with a canvas, previews and drag handles, and rewriting them changes nothing the plan's outcome depends on. Porting them stays a candidate for later; it is not needed for steps 6 and 7.
+- **Removed with this:** the Annotation switch and its keycap in the studio header, the unused master toggler style and the registry field of the view.
 
 ## Step 4 progress
 

@@ -512,7 +512,7 @@ impl App {
 
     fn title(&self, window: window::Id) -> String {
         if Some(window) == self.settings_window {
-            "TinyPaw Settings".into()
+            "TinyPaw Character studio".into()
         } else {
             "TinyPaw".into()
         }
@@ -1559,7 +1559,6 @@ impl App {
         if Some(window) == self.settings_window {
             let built = std::time::Instant::now();
             let element = view::settings::view(view::settings::SettingsView {
-                registry: &self.registry,
                 session: &self.session,
                 #[cfg(windows)]
                 page: self.page,

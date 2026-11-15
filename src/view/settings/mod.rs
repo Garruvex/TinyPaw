@@ -1,6 +1,6 @@
-//! Settings window: header with the master switch, a left navigation column
-//! and one section at a time. Every control edits a registered setting through
-//! the same typed update path as the CLI and quick bar.
+//! The Character studio window: a header, a navigation column (Character and
+//! the pointer editor) and one page at a time. Settings itself is the Slint
+//! window in `settings_ui`; this window holds the editors that have not moved.
 
 use iced::widget::{
     Column, button, canvas, checkbox, column, container, pick_list, row, scrollable, slider, space,
@@ -11,7 +11,7 @@ use iced::{Alignment, Color, Element, Length, Theme};
 use super::icons::{Glyph, icon};
 use super::{UiMsg, theme};
 use crate::app::Message;
-use crate::features::{mascot, point, system};
+use crate::features::{mascot, point};
 use crate::packs::{Draft, Pack};
 use crate::registry::{Registry, Value};
 use crate::session::Session;
@@ -47,8 +47,8 @@ pub mod caption {
     /// Width of each caption button in logical pixels.
     pub const BUTTON_W: f32 = 46.0;
     /// Logical width left of the caption buttons that holds clickable
-    /// controls (the Annotation switch); the rest of the header drags.
-    pub const CONTROLS_W: f32 = 270.0;
+    /// controls; the rest of the header drags. The studio has none.
+    pub const CONTROLS_W: f32 = 0.0;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Button {
@@ -112,7 +112,6 @@ pub enum LeaveChoice {
 }
 
 pub struct SettingsView<'a> {
-    pub registry: &'a Registry,
     pub session: &'a Session,
     pub page: Page,
     pub character_tab: CharacterTab,
@@ -185,13 +184,6 @@ fn hint<'a>(label: impl text::IntoFragment<'a>) -> Element<'a, Message> {
     text(label).size(12).color(theme::MUTED).into()
 }
 
-fn keycap<'a>(label: String) -> Element<'a, Message> {
-    container(text(label.replace('+', " ")).size(12).color(theme::SUBTLE))
-        .padding([3, 8])
-        .style(theme::keycap)
-        .into()
-}
-
 fn section<'a>(children: Vec<Element<'a, Message>>) -> Element<'a, Message> {
     Column::with_children(children).spacing(10).into()
 }
@@ -220,7 +212,6 @@ pub fn view(v: SettingsView<'_>) -> Element<'_, Message> {
 }
 
 fn header<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
-    let on = v.session.is_enabled();
     let logo = container(
         iced::widget::image(crate::branding::logo())
             .width(30)
@@ -230,23 +221,7 @@ fn header<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     .height(30)
     .align_x(Alignment::Center)
     .align_y(Alignment::Center);
-    let switch = toggler(on)
-        .label("Annotation")
-        .text_size(14)
-        .size(22)
-        .spacing(10)
-        .font(theme::MEDIUM)
-        .style(theme::master_toggler)
-        .on_toggle(|_| Message::Command(system::MASTER_TOGGLE));
-    let mut right = row![].spacing(14).align_y(Alignment::Center);
-    if let Some(label) = v.registry.shortcut_label(system::MASTER_TOGGLE) {
-        right = right.push(keycap(label));
-    }
-    right = right.push(container(switch).padding([6, 12]).style(theme::outlined(
-        theme::CONTROL,
-        999.0,
-        theme::LINE,
-    )));
+    let right = row![].spacing(14).align_y(Alignment::Center);
     if let Some(frame) = v.frame {
         return framed_header(logo, right, frame);
     }
@@ -298,7 +273,7 @@ fn framed_header<'a>(
             space().width(14),
             logo.into(),
             space().width(10),
-            text("TinyPaw Settings").font(theme::HEADING).size(14),
+            text("TinyPaw Character studio").font(theme::HEADING).size(14),
             space().width(Length::Fill),
             container(controls)
                 .width(CONTROLS_W)

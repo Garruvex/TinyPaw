@@ -109,13 +109,12 @@ fn overlay_buttons_receive_complete_clicks_above_the_annotation_canvas() {
 }
 
 fn settings_view<'a>(
-    registry: &'a Registry,
+    _registry: &'a Registry,
     session: &'a Session,
     _packs: &'a [crate::packs::Pack],
     page: settings::Page,
 ) -> settings::SettingsView<'a> {
     settings::SettingsView {
-        registry,
         session,
         page,
         character_tab: Default::default(),
