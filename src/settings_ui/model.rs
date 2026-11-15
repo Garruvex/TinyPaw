@@ -20,6 +20,8 @@ pub enum Kind {
     Swatches = 7,
     /// A choice among pictures with names.
     Cards = 8,
+    /// A live level from 0 to 1, with a line of status beside it.
+    Meter = 9,
 }
 
 /// A small picture, as RGBA. Equal when it is the same buffer.

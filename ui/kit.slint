@@ -458,6 +458,20 @@ export component Swatches inherits HorizontalLayout {
     }
 }
 
+// A level from 0 to 1 as a bar.
+export component Meter inherits Rectangle {
+    in property <float> level;
+    height: Tokens.rail * 2;
+    border-radius: Tokens.radius-round;
+    background: Tokens.track;
+    Rectangle {
+        x: 0px;
+        width: parent.width * max(0, min(1, root.level));
+        border-radius: Tokens.radius-round;
+        background: Tokens.cyan-text;
+    }
+}
+
 // Pictures with a name under each, to pick one. A picture of no size is shown
 // as a round badge instead.
 export component Cards inherits Rectangle {

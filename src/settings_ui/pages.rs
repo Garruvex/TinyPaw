@@ -6,9 +6,9 @@
 use std::collections::HashMap;
 
 use super::DisplayInfo;
-use super::link::{PackInfo, ShortcutInfo, WindowInfo};
+use super::link::{CharacterInfo, MusicInfo, PackInfo, ShortcutInfo, WindowInfo};
 use super::model::{Extra, Item, Kind, Section, Thumb};
-use crate::features::{display, point, sound, spotlight, system, text, upcoming};
+use crate::features::{display, mascot, point, sound, spotlight, system, text, upcoming};
 use crate::registry::{Registry, SettingValues, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,6 +17,7 @@ pub enum PageId {
     Ink,
     Tools,
     Characters,
+    Music,
     Shortcuts,
     Sound,
     Display,
@@ -32,6 +33,7 @@ pub const NAV: &[(&str, &str, PageId)] = &[
     ("Annotate", "Ink & text", PageId::Ink),
     ("Annotate", "Spotlight & lens", PageId::Tools),
     ("Desktop", "Characters", PageId::Characters),
+    ("Desktop", "Music response", PageId::Music),
     ("App", "Shortcuts", PageId::Shortcuts),
     ("App", "Sound", PageId::Sound),
     ("App", "Display & motion", PageId::Display),
@@ -43,6 +45,7 @@ pub fn index_of(name: &str) -> usize {
         "ink" => PageId::Ink,
         "tools" | "spotlight" | "lens" => PageId::Tools,
         "characters" | "character" => PageId::Characters,
+        "music" => PageId::Music,
         "shortcuts" => PageId::Shortcuts,
         "sound" => PageId::Sound,
         "display" => PageId::Display,
@@ -59,6 +62,8 @@ pub struct Context<'a> {
     pub shortcuts: &'a [ShortcutInfo],
     pub windows: &'a [WindowInfo],
     pub packs: &'a [PackInfo],
+    pub characters: &'a [CharacterInfo],
+    pub music: &'a MusicInfo,
     pub has_custom_sound: bool,
 }
 
@@ -287,21 +292,18 @@ pub fn build(page: PageId, cx: &Context<'_>) -> Built {
             ("Pointer", "How the paw looks while you draw.")
         }
         PageId::Characters => {
-            b.section("Not moved yet", |s, b| {
-                b.note(
-                    s,
-                    "This page is still in the classic Settings window.",
-                    false,
-                );
-                b.action(
-                    s,
-                    "open-classic",
-                    "Classic Settings",
-                    "Open classic Settings",
-                );
-            });
-            let name = NAV.iter().find(|n| n.2 == page).map_or("", |n| n.1);
-            (name, "")
+            characters_page(&mut b);
+            (
+                "Characters",
+                "The desktop character: who, where and how lively.",
+            )
+        }
+        PageId::Music => {
+            music_page(&mut b);
+            (
+                "Music response",
+                "Moves with what's playing on this PC. TinyPaw's own sounds are left out, and nothing is recorded.",
+            )
         }
     };
     Built {
@@ -617,6 +619,270 @@ fn pointer_page(b: &mut Builder<'_>) {
     });
 }
 
+const FRAME_RATES: [(&str, &str); 3] = [
+    ("30", "30 fps"),
+    ("60", "60 fps"),
+    ("display", "Match display"),
+];
+
+fn characters_page(b: &mut Builder<'_>) {
+    let settings = b.cx.settings;
+    b.section("Characters", |s, b| {
+        let current = settings.choice_text(mascot::CHARACTER);
+        let mut item = Item::new(mascot::CHARACTER, Kind::Cards, "");
+        let mut choices = Vec::new();
+        for c in b.cx.characters {
+            item.options.push(c.name.clone());
+            item.pictures.push(c.thumb.clone());
+            choices.push(Value::Choice(crate::platform::intern(&c.id)));
+        }
+        item.index =
+            b.cx.characters
+                .iter()
+                .position(|c| c.id == current)
+                .map_or(-1, |i| i as i32);
+        s.items.push(item);
+        b.extras.insert(
+            mascot::CHARACTER.to_owned(),
+            Extra {
+                step: None,
+                choices,
+            },
+        );
+        b.note(
+            s,
+            "Add, import, export, remove and customize characters in the character editor.",
+            false,
+        );
+        b.action(s, "characters.edit", "Character editor", "Open the editor…");
+    });
+    b.section("Visibility", |s, b| {
+        b.toggle(s, mascot::ENABLED, Some("Show on the desktop"));
+        b.note(
+            s,
+            "Right-click for its menu, click to see it react, and drag to move it. It stays while annotation is off and steps aside while you draw.",
+            false,
+        );
+        b.range(s, mascot::HEIGHT, Some("Size"), 4.0, |v| format!("{v:.0} px"));
+        b.action(s, "character.reset", "Position", "Reset position");
+    });
+    b.section("Liveliness", |s, b| {
+        b.toggle(s, mascot::EYES, Some("Eyes follow the cursor"));
+        b.note(
+            s,
+            "Needs eyes made of separate white, pupil and mask art.",
+            false,
+        );
+        b.toggle(s, mascot::IDLE, Some("Idle motion and blinking"));
+        b.note(
+            s,
+            "Reduced motion also stops idle motion and blinking.",
+            false,
+        );
+        b.action(s, "page:display", "Motion", "Motion settings");
+        b.choice(
+            s,
+            mascot::FRAME_RATE,
+            Some("Frame rate"),
+            FRAME_RATES.map(|(v, l)| (v, l.to_owned())).to_vec(),
+        );
+        b.note(
+            s,
+            "Higher is smoother but uses more CPU while the character moves.",
+            false,
+        );
+    });
+}
+
+fn music_page(b: &mut Builder<'_>) {
+    let settings = b.cx.settings;
+    b.section("Listening", |s, b| {
+        b.toggle(s, mascot::MUSIC, Some("React to playback"));
+        if !settings.bool(mascot::MUSIC) {
+            return;
+        }
+        let current = settings.choice_text(mascot::MUSIC_SOURCE).to_owned();
+        let mut options: Vec<(String, String)> = b
+            .cx
+            .music
+            .sources
+            .iter()
+            .map(|(id, label, playing)| {
+                let label = if *playing || id == "all" || id.starts_with("in:") {
+                    label.clone()
+                } else {
+                    format!("{label} (not playing)")
+                };
+                (id.clone(), label)
+            })
+            .collect();
+        if !options.iter().any(|(id, _)| *id == current) {
+            options.push((current.clone(), current.clone()));
+        }
+        let mut item = Item::new(mascot::MUSIC_SOURCE, Kind::Choice, "Listen to");
+        item.index = options
+            .iter()
+            .position(|(id, _)| *id == current)
+            .map_or(-1, |i| i as i32);
+        item.options = options.iter().map(|(_, l)| l.clone()).collect();
+        s.items.push(item);
+        b.extras.insert(
+            mascot::MUSIC_SOURCE.to_owned(),
+            Extra {
+                step: None,
+                choices: options
+                    .iter()
+                    .map(|(id, _)| Value::Choice(crate::platform::intern(id)))
+                    .collect(),
+            },
+        );
+        b.note(
+            s,
+            if current == "all" {
+                "All apps together. Pick one app so a game or a call doesn't count; apps show up here while they make sound."
+            } else if current.starts_with("in:") {
+                "For music that doesn't play on this PC. This uses the input device (Windows shows the microphone in use) while listening; nothing is recorded."
+            } else {
+                "Only this app counts, and Follow beat hears only its sound."
+            },
+            false,
+        );
+        let mut meter = Item::new("music.level", Kind::Meter, "Hearing");
+        meter.value = b.cx.music.level;
+        meter.text = b.cx.music.status.clone();
+        s.items.push(meter);
+        b.note(
+            s,
+            "Quiet sources are turned up automatically, so the character moves fully even with low volume or a microphone.",
+            false,
+        );
+    });
+    if !settings.bool(mascot::MUSIC) {
+        return;
+    }
+    b.section("Movement", |s, b| {
+        b.range(s, mascot::MUSIC_STRENGTH, Some("Music strength"), 0.05, |v| {
+            format!("{v:.2}")
+        });
+        b.choice(
+            s,
+            mascot::MUSIC_POSE,
+            Some("Music pose"),
+            vec![
+                ("auto", "Automatic".to_owned()),
+                ("sit", "Sitting".to_owned()),
+                ("stand", "Standing".to_owned()),
+            ],
+        );
+        b.range(s, mascot::EXCITEMENT, Some("Stand at energy"), 1.0, |v| {
+            format!("{v:.0}%")
+        });
+        b.note(
+            s,
+            "Automatic keeps gentle bops seated, stands after sustained high activity, and sits again when the music calms. A higher threshold keeps it seated more often. Standing artwork is required. Bop style is set per character in the character editor.",
+            false,
+        );
+    });
+    b.section("Dancing", |s, b| {
+        b.choice(
+            s,
+            mascot::DANCE_EVERY,
+            Some("Change every"),
+            vec![
+                ("8", "8 beats".to_owned()),
+                ("16", "16 beats".to_owned()),
+                ("32", "32 beats".to_owned()),
+            ],
+        );
+        b.choice(
+            s,
+            mascot::DANCE_ITEM,
+            Some("Light-wave item"),
+            vec![
+                ("glow_stick", "Glow stick".to_owned()),
+                ("phone", "Phone".to_owned()),
+                ("random", "Random".to_owned()),
+            ],
+        );
+        for (id, label) in [
+            (mascot::DANCE_STYLES[0], "Random \u{b7} Nod"),
+            (mascot::DANCE_STYLES[1], "Random \u{b7} Groove"),
+            (mascot::DANCE_STYLES[2], "Random \u{b7} Rubber hose"),
+            (mascot::DANCE_STYLES[3], "Random \u{b7} Compress"),
+            (mascot::DANCE_STYLES[4], "Random \u{b7} Light wave"),
+        ] {
+            b.toggle(s, id, Some(label));
+        }
+        b.note(
+            s,
+            "Random uses the checked styles and changes on a beat boundary. Light wave joins Random when the character has a holding arm and an item. An empty selection uses Nod. Interval, included styles and item apply to all characters.",
+            false,
+        );
+    });
+    b.section("Waving hand", |s, b| {
+        b.range(s, mascot::WAVE_X, Some("Horizontal"), 1.0, |v| format!("{v:.0}%"));
+        b.range(s, mascot::WAVE_Y, Some("Vertical"), 1.0, |v| format!("{v:.0}%"));
+        b.range(s, mascot::WAVE_ANGLE, Some("Angle"), 1.0, |v| format!("{v:.0}\u{b0}"));
+        b.range(s, mascot::WAVE_RANGE, Some("Wave range"), 1.0, |v| format!("{v:.0}%"));
+        b.action(s, "music.reset-hand", "Hand", "Reset hand");
+        b.note(
+            s,
+            "Hand position moves the waving arm and item together. Positive horizontal moves right; positive vertical moves down. These apply across characters.",
+            false,
+        );
+    });
+    b.section("Follow beat (trial)", |s, b| {
+        b.toggle(s, mascot::BEAT, Some("Follow beat"));
+        b.note(
+            s,
+            "Nods land on the beat instead of a steady bob. It listens to what's playing (TinyPaw's own sounds are held off while they play) and keeps nothing.",
+            false,
+        );
+        if !settings.bool(mascot::BEAT) {
+            return;
+        }
+        if !b.cx.music.beat.is_empty() {
+            b.note(s, &format!("Beat: {}", b.cx.music.beat), false);
+        }
+        b.choice(
+            s,
+            mascot::BEAT_SENSITIVITY,
+            Some("Sensitivity"),
+            vec![
+                ("low", "Low".to_owned()),
+                ("normal", "Normal".to_owned()),
+                ("high", "High".to_owned()),
+            ],
+        );
+        b.choice(
+            s,
+            mascot::BEAT_TIMING,
+            Some("Timing"),
+            vec![
+                ("earlier", "Earlier".to_owned()),
+                ("default", "Default".to_owned()),
+                ("later", "Later".to_owned()),
+            ],
+        );
+        b.choice(
+            s,
+            mascot::BEAT_ENGINE,
+            Some("Engine"),
+            vec![
+                ("classic", "Classic".to_owned()),
+                ("bass", "Bass-weighted".to_owned()),
+                ("sticky", "Sticky tempo".to_owned()),
+                ("cumulative", "Cumulative".to_owned()),
+            ],
+        );
+        b.note(
+            s,
+            "Classic: the original. Bass-weighted: kicks count more than hats. Sticky tempo: resists jumping to half or double time. Cumulative: carries the beat's phase forward between hits. Changing it restarts the search.",
+            false,
+        );
+    });
+}
+
 fn shortcuts_page(b: &mut Builder<'_>) {
     b.section("How drawing starts", |s, b| {
         b.choice(
@@ -749,6 +1015,13 @@ mod tests {
                 settings: &settings,
                 displays: &displays,
                 shortcuts: &shortcuts(),
+                characters: &[CharacterInfo {
+                    id: "yohta".into(),
+                    name: "Yohta".into(),
+                    builtin: true,
+                    thumb: Thumb::none(),
+                }],
+                music: &MusicInfo::default(),
                 packs: &[PackInfo {
                     id: "yohta".into(),
                     name: "Yohta".into(),
@@ -783,6 +1056,8 @@ mod tests {
             PageId::Display,
             PageId::Ink,
             PageId::Tools,
+            PageId::Characters,
+            PageId::Music,
         ] {
             let built = build_page(page, true);
             for item in built.sections.iter().flat_map(|s| &s.items) {
@@ -795,7 +1070,7 @@ mod tests {
                         );
                     }
                     Kind::Action | Kind::Note | Kind::Shortcut => {}
-                    Kind::Cards => {}
+                    Kind::Cards | Kind::Meter => {}
                     Kind::Segments | Kind::Swatches => {
                         assert!(registry.setting(&item.id).is_some(), "{}", item.id);
                     }

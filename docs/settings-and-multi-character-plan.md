@@ -291,8 +291,16 @@ Slice 3d results. The app now runs the desktop character on the stage and nothin
 | 4b | Shortcuts (rebinding is custom) | Done |
 | 4c | Ink & text, Spotlight & lens | Done |
 | 4d | Pointer | Done, except the live preview and the pointer editor |
-| 4e | Music response (moved out of the Character page) and the Characters page, with Customize opening the existing editor until step 5 | Not started |
+| 4e | Music response (moved out of the Character page) and the Characters page, with Customize opening the existing editor until step 5 | Done |
 | 4f | First-run window; delete the Iced settings views | Not started |
+
+Slice 4e results. Characters and Music response are Slint pages; every page in the navigation is now on the new window:
+
+- **Characters:** character cards (pictures loaded by the Settings process the way the resident app loads them, only when this page is shown), then Visibility (show on desktop, size, reset position), Liveliness (eyes follow the cursor, idle motion, frame rate, link to Motion settings), and one "Open the editor…" button. Add, import, export, remove and Customize (artwork, behavior, advanced) still live in the classic character editor, which opens on its Character page; they move with the studio window in step 5.
+- **Music response (new page under Desktop):** React to playback; Listen to (all apps, each app making sound, input devices; the saved source stays listed while quiet or unplugged); a live Hearing meter with the status line; music strength, pose, stand-at-energy; change-every, light-wave item and the five random dance styles; the four waving-hand sliders with Reset hand; Follow beat with its status, sensitivity, timing and engine. Bop style stays per character in the editor.
+- **Meter runs while Settings is open.** The playback meter now also starts when the Settings process is open and music response is on, so the Hearing bar moves; it stops when Settings closes. The bar follows the 400 ms refresh, which is coarser than the classic meter.
+- **Kit additions:** a `Meter` and a `Meter` item kind. The "Not moved yet" placeholder page is gone.
+- **Checked:** both pages in the real app (music on; the meter stayed empty because the window was started by hand, not by the resident app, so the resident's meter had no reason to run). 286 tests pass, clippy clean. Not checked by hand: a moving meter with real playback, picking an app source, the editor hand-off.
 
 Slice 4d results. The Pointer page moved over:
 

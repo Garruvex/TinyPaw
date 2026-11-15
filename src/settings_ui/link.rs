@@ -47,6 +47,25 @@ pub struct WindowInfo {
     pub title: String,
 }
 
+/// A character the resident app has loaded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CharacterInfo {
+    pub id: String,
+    pub name: String,
+    pub builtin: bool,
+    pub thumb: Thumb,
+}
+
+/// What music response is listening to and hearing.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct MusicInfo {
+    pub status: String,
+    pub level: f32,
+    pub beat: String,
+    /// Sources to listen to: ID, label, playing now.
+    pub sources: Vec<(String, String, bool)>,
+}
+
 /// A pointer pack the resident app has loaded.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PackInfo {
@@ -61,6 +80,8 @@ pub struct PackInfo {
 
 /// What the resident app reports.
 pub struct State {
+    pub characters: Vec<CharacterInfo>,
+    pub music: MusicInfo,
     pub packs: Vec<PackInfo>,
     pub windows: Vec<WindowInfo>,
     pub shortcuts: Vec<ShortcutInfo>,
@@ -141,7 +162,62 @@ pub fn parse_state(registry: &Registry, reply: &str) -> Option<State> {
                 .collect()
         })
         .unwrap_or_default();
+    let characters = json
+        .get("characters")
+        .and_then(Json::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|c| {
+                    Some(CharacterInfo {
+                        id: c.get("id")?.as_str()?.to_owned(),
+                        name: c.get("name")?.as_str()?.to_owned(),
+                        builtin: c.get("builtin")?.as_bool()?,
+                        thumb: Thumb::none(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let music = json
+        .get("music")
+        .map(|m| {
+            let list = |key: &str, playing: bool| -> Vec<(String, String, bool)> {
+                m.get(key)
+                    .and_then(Json::as_array)
+                    .map(|l| {
+                        l.iter()
+                            .filter_map(|s| {
+                                Some((
+                                    s.get("id")?.as_str()?.to_owned(),
+                                    s.get("label")?.as_str()?.to_owned(),
+                                    s.get("playing").and_then(Json::as_bool).unwrap_or(playing),
+                                ))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            let mut sources = list("rows", true);
+            sources.extend(list("inputs", true));
+            MusicInfo {
+                status: m
+                    .get("status")
+                    .and_then(Json::as_str)
+                    .unwrap_or("")
+                    .to_owned(),
+                level: m.get("level").and_then(Json::as_f64).unwrap_or(0.0) as f32,
+                beat: m
+                    .get("beat")
+                    .and_then(Json::as_str)
+                    .unwrap_or("")
+                    .to_owned(),
+                sources,
+            }
+        })
+        .unwrap_or_default();
     Some(State {
+        characters,
+        music,
         packs,
         windows,
         shortcuts,
@@ -184,17 +260,46 @@ fn expand(id: &'static str, value: Value) -> Vec<(&'static str, Value)> {
 /// Card pictures of the packs, loaded once from disk the way the resident app
 /// loads them, and again when a pack it reports is not among them.
 #[derive(Default)]
-struct Thumbs(std::collections::HashMap<String, Thumb>);
+struct Thumbs {
+    packs: std::collections::HashMap<String, Thumb>,
+    characters: std::collections::HashMap<String, Thumb>,
+}
+
+/// Fills in the pictures the page about to be shown needs.
+fn prepare(state: &mut State, page: usize, thumbs: &mut Thumbs) {
+    fill_thumbs(&mut state.packs, thumbs);
+    if pages::NAV[page.min(pages::NAV.len() - 1)].2 == PageId::Characters {
+        fill_character_thumbs(&mut state.characters, thumbs);
+    }
+}
+
+fn fill_character_thumbs(characters: &mut [CharacterInfo], thumbs: &mut Thumbs) {
+    if characters
+        .iter()
+        .any(|c| !thumbs.characters.contains_key(&c.id))
+    {
+        let (loaded, _) = crate::mascot::pack::load_all();
+        for c in loaded {
+            let thumb = c.thumbnail().as_ref().map_or_else(Thumb::none, thumb_from);
+            thumbs.characters.insert(c.id.to_owned(), thumb);
+        }
+    }
+    for c in characters {
+        if let Some(thumb) = thumbs.characters.get(&c.id) {
+            c.thumb = thumb.clone();
+        }
+    }
+}
 
 fn fill_thumbs(packs: &mut [PackInfo], thumbs: &mut Thumbs) {
-    if packs.iter().any(|p| !thumbs.0.contains_key(&p.id)) {
+    if packs.iter().any(|p| !thumbs.packs.contains_key(&p.id)) {
         let (loaded, _) = crate::packs::load_all();
         for pack in loaded {
-            thumbs.0.insert(pack.id.to_owned(), thumb_of(&pack));
+            thumbs.packs.insert(pack.id.to_owned(), thumb_of(&pack));
         }
     }
     for pack in packs {
-        if let Some(thumb) = thumbs.0.get(&pack.id) {
+        if let Some(thumb) = thumbs.packs.get(&pack.id) {
             pack.thumb = thumb.clone();
         }
     }
@@ -202,13 +307,18 @@ fn fill_thumbs(packs: &mut [PackInfo], thumbs: &mut Thumbs) {
 
 /// The pack's picture at card size.
 fn thumb_of(pack: &crate::packs::Pack) -> Thumb {
+    thumb_from(&pack.image)
+}
+
+/// A picture at card size.
+fn thumb_from(handle: &iced::advanced::image::Handle) -> Thumb {
     use iced::advanced::image::Handle;
     let Handle::Rgba {
         width,
         height,
         pixels,
         ..
-    } = &pack.image
+    } = handle
     else {
         return Thumb::none();
     };
@@ -238,6 +348,8 @@ fn snapshot(registry: &Registry, state: &State, page: usize, notice: &str) -> Sn
         shortcuts: &state.shortcuts,
         windows: &state.windows,
         packs: &state.packs,
+        characters: &state.characters,
+        music: &state.music,
         has_custom_sound: state.custom_sound,
     };
     let built = pages::build(id, &cx);
@@ -279,7 +391,7 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
         return super::quit();
     };
     let mut thumbs = Thumbs::default();
-    fill_thumbs(&mut state.packs, &mut thumbs);
+    prepare(&mut state, start_page, &mut thumbs);
     let mut page = start_page;
     let mut notice = String::new();
     super::show(snapshot(&registry, &state, page, &notice), false);
@@ -300,6 +412,7 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
             }
             Ok(Cmd::Action(name)) if name.starts_with("page:") => {
                 page = pages::index_of(&name["page:".len()..]);
+                prepare(&mut state, page, &mut thumbs);
                 notice.clear();
                 super::show(snapshot(&registry, &state, page, &notice), false);
                 continue;
@@ -319,6 +432,7 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
             }
             Ok(Cmd::Navigate(index)) => {
                 page = index;
+                prepare(&mut state, page, &mut thumbs);
                 notice.clear();
                 super::show(snapshot(&registry, &state, page, &notice), false);
                 continue;
@@ -330,7 +444,7 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
             Some(mut next) => {
                 failures = 0;
                 let focus = next.focus;
-                fill_thumbs(&mut next.packs, &mut thumbs);
+                prepare(&mut next, page, &mut thumbs);
                 state = next;
                 super::show(snapshot(&registry, &state, page, &notice), focus);
             }

@@ -88,7 +88,33 @@ impl App {
                 })
             })
             .collect();
+        let characters: Vec<_> = self
+            .characters
+            .iter()
+            .map(|c| serde_json::json!({ "id": c.id, "name": c.name, "builtin": c.is_builtin() }))
+            .collect();
+        let music = {
+            let (status, level) = self.music_status();
+            let label = |s: &crate::mascot::music::Source| serde_json::json!({ "id": s.id(), "label": s.to_string() });
+            let rows: Vec<_> = self
+                .music_rows()
+                .iter()
+                .map(|(s, _, playing)| {
+                    serde_json::json!({ "id": s.id(), "label": s.to_string(), "playing": playing })
+                })
+                .collect();
+            let inputs: Vec<_> = self.music_inputs().iter().map(label).collect();
+            serde_json::json!({
+                "status": status,
+                "level": level,
+                "beat": self.beat_status(),
+                "rows": rows,
+                "inputs": inputs,
+            })
+        };
         let state = serde_json::json!({
+            "characters": characters,
+            "music": music,
             "packs": packs,
             "windows": windows,
             "shortcuts": shortcuts,
@@ -125,6 +151,22 @@ impl App {
             "pointer.remove" => tasks.push(self.ui_message(UiMsg::RemovePack, now, out)),
             "pointer.prompt" => tasks.push(self.ui_message(UiMsg::CopyPointerPrompt, now, out)),
             "pointer.arm-prompt" => tasks.push(self.ui_message(UiMsg::CopyForearmPrompt, now, out)),
+            "characters.edit" => {
+                self.page = crate::view::settings::Page::Character;
+                tasks.push(self.open_classic_settings());
+            }
+            "character.reset" => tasks.push(self.ui_message(UiMsg::ResetMascotPosition, now, out)),
+            "music.reset-hand" => {
+                use crate::features::mascot as character;
+                for (id, value) in [
+                    (character::WAVE_X, 0.0),
+                    (character::WAVE_Y, 0.0),
+                    (character::WAVE_ANGLE, 0.0),
+                    (character::WAVE_RANGE, 100.0),
+                ] {
+                    out.sets.push((id, Value::Float(value)));
+                }
+            }
             "lens.refresh" => {
                 #[cfg(windows)]
                 {

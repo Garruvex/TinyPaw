@@ -215,7 +215,9 @@ impl App {
             let on = self.session.settings().bool(character::MUSIC);
             let showing = self.mascot.as_ref().is_some_and(|m| !m.hidden);
             let sleep_audio = self.mascot.as_ref().is_some_and(|m| m.sleep) && showing;
-            let wanted = (on && (showing || self.studio.motion_preview.is_some())) || sleep_audio;
+            // The Settings window's Music page shows the meter, too.
+            let watched = self.studio.motion_preview.is_some() || self.settings_child.is_some();
+            let wanted = (on && (showing || watched)) || sleep_audio;
             use crate::mascot::music::Source;
             use platform::beat::Target;
             let source = if sleep_audio && !on {
