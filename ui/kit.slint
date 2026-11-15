@@ -180,6 +180,20 @@ export component Toggle inherits Rectangle {
     }
 }
 
+// A switch that follows a value it does not own: it shows `on` whenever that
+// changes, and reports a click without keeping the result itself.
+export component BoundToggle inherits Rectangle {
+    in property <bool> on;
+    callback toggled(bool);
+    width: Tokens.toggle-w;
+    height: Tokens.toggle-h;
+    changed on => { inner.checked = root.on; }
+    inner := Toggle {
+        checked: root.on;
+        toggled(c) => { root.toggled(c); }
+    }
+}
+
 // A slider that takes the app's tokens. The touch area covers the fixed rail,
 // never the handle, so a drag reports stable positions.
 export component Range inherits Rectangle {
@@ -240,12 +254,35 @@ export component Range inherits Rectangle {
 export component Page inherits Rectangle {
     in property <string> title;
     in property <string> summary;
+    // A switch for the whole page, beside its title; none without a label.
+    in property <string> switch-label;
+    in property <bool> switch-on;
+    callback switched(bool);
     background: Tokens.surface;
     VerticalLayout {
         padding: Tokens.space-5;
         spacing: Tokens.space-3;
         alignment: start;
-        PageTitle { text: root.title; }
+        HorizontalLayout {
+            spacing: Tokens.space-3;
+            PageTitle {
+                text: root.title;
+                horizontal-stretch: 1;
+            }
+            if root.switch-label != "": Text {
+                text: root.switch-label;
+                font-size: Tokens.font-body;
+                color: Tokens.muted;
+                vertical-alignment: center;
+            }
+            if root.switch-label != "": VerticalLayout {
+                alignment: center;
+                BoundToggle {
+                    on: root.switch-on;
+                    toggled(c) => { root.switched(c); }
+                }
+            }
+        }
         if root.summary != "": Hint { text: root.summary; }
         @children
     }
@@ -615,6 +652,66 @@ export component Meter inherits Rectangle {
         width: parent.width * max(0, min(1, root.level));
         border-radius: Tokens.radius-round;
         background: Tokens.cyan-text;
+    }
+}
+
+// One source to choose among (what music response listens to): an icon, its
+// name, how loud it is now, and whether it is the chosen one.
+export component SourceRow inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <float> level;
+    in property <string> status;
+    in property <bool> selected;
+    callback clicked;
+    min-height: Tokens.h-row;
+    border-radius: Tokens.radius-control;
+    background: area.has-hover ? Tokens.hover : Tokens.none;
+    area := TouchArea {
+        clicked => { root.clicked(); }
+    }
+    HorizontalLayout {
+        padding-left: Tokens.space-3;
+        padding-right: Tokens.space-3;
+        spacing: Tokens.space-3;
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                commands: root.icon;
+                ink: root.selected ? Tokens.cyan-text : Tokens.muted;
+            }
+        }
+        Text {
+            width: Tokens.label-w;
+            text: root.label;
+            font-size: Tokens.font-body;
+            color: Tokens.text;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Meter { level: root.level; }
+        }
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 2 * Tokens.value-w;
+                height: Tokens.toggle-h;
+                border-radius: Tokens.radius-small;
+                background: root.selected ? Tokens.cyan-bg : Tokens.none;
+                Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: root.status;
+                    font-size: Tokens.font-label;
+                    color: root.selected ? Tokens.cyan-text : Tokens.muted;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
     }
 }
 

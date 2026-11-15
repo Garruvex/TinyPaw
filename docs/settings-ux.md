@@ -257,3 +257,17 @@ while keeping the page structure:
 Not matched yet: which display a character is on, Hide all, a row per music
 source with its own meter, inline Follow beat dropdowns, Export, Import and
 Remove of library characters from Settings, and the Character studio layout.
+
+### Music & dance, toward the mockup
+
+- The page's master switch ("Characters move with playback") sits beside the
+  title. Off, the page is that switch and one line.
+- "Listen to" is one row per source with its own live level; the chosen one
+  is marked Selected, the others Playing or Not playing. Clicking a row
+  chooses it. `settings-state` now sends each source's level.
+- Follow beat's Sensitivity and Timing are side-by-side buttons and Engine a
+  dropdown, all visible; the Advanced fold from step C is gone.
+
+Differs from the mockup: Sensitivity, Timing and Engine are three rows, not
+three dropdowns on one line, and Stand at energy and the Dancing section are
+kept (the mockup left them out).

@@ -20,11 +20,12 @@ pub enum Kind {
     Swatches = 7,
     /// A choice among pictures with names.
     Cards = 8,
-    /// A live level from 0 to 1, with a line of status beside it.
-    Meter = 9,
     /// One thing in a list that opens to show its settings: its picture and
     /// name, a switch (`on`), and whether it is open (`index` 1).
     Entry = 10,
+    /// One of several sources to choose among, with its live level: `on` is
+    /// the chosen one, `index` its place among the choices.
+    Source = 11,
 }
 
 /// A small picture, as RGBA. Equal when it is the same buffer.
@@ -128,6 +129,8 @@ pub struct Snapshot {
     pub annotation: bool,
     pub title: String,
     pub summary: String,
+    /// The page's own master switch beside its title: setting, label, on.
+    pub switch: Option<(String, String, bool)>,
     /// Why a change was refused, shown above the page.
     pub notice: String,
     pub sections: Vec<Section>,

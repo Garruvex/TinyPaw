@@ -76,8 +76,8 @@ pub struct MusicInfo {
     pub status: String,
     pub level: f32,
     pub beat: String,
-    /// Sources to listen to: ID, label, playing now.
-    pub sources: Vec<(String, String, bool)>,
+    /// Sources to listen to: ID, label, playing now, and how loud.
+    pub sources: Vec<(String, String, bool, f32)>,
 }
 
 /// A pointer pack the resident app has loaded.
@@ -198,7 +198,7 @@ pub fn parse_state(registry: &Registry, reply: &str) -> Option<State> {
     let music = json
         .get("music")
         .map(|m| {
-            let list = |key: &str, playing: bool| -> Vec<(String, String, bool)> {
+            let list = |key: &str, playing: bool| -> Vec<(String, String, bool, f32)> {
                 m.get(key)
                     .and_then(Json::as_array)
                     .map(|l| {
@@ -208,6 +208,7 @@ pub fn parse_state(registry: &Registry, reply: &str) -> Option<State> {
                                     s.get("id")?.as_str()?.to_owned(),
                                     s.get("label")?.as_str()?.to_owned(),
                                     s.get("playing").and_then(Json::as_bool).unwrap_or(playing),
+                                    s.get("level").and_then(Json::as_f64).unwrap_or(0.0) as f32,
                                 ))
                             })
                             .collect()
@@ -383,8 +384,6 @@ fn thumb_from(handle: &iced::advanced::image::Handle) -> Thumb {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct View {
     pub expanded: Option<u32>,
-    /// A page's fine tuning is unfolded.
-    pub advanced: bool,
 }
 
 /// Opens or closes a character's row: `open:instance.<id>.shown`.
@@ -413,7 +412,6 @@ fn snapshot(registry: &Registry, state: &State, page: usize, notice: &str, view:
         music: &state.music,
         has_custom_sound: state.custom_sound,
         expanded: view.expanded,
-        advanced: view.advanced,
     };
     let built = pages::build(id, &cx);
     Snapshot {
@@ -425,6 +423,7 @@ fn snapshot(registry: &Registry, state: &State, page: usize, notice: &str, view:
         annotation: state.annotation,
         title: built.title.to_owned(),
         summary: built.summary,
+        switch: built.switch,
         notice: notice.to_owned(),
         sections: built.sections,
         extras: built.extras,
@@ -483,11 +482,6 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
                     "settings-action instance.add.{}",
                     value_text(&value)
                 ));
-            }
-            Ok(Cmd::Action(name)) if name == pages::ADVANCED => {
-                view.advanced = !view.advanced;
-                super::show(snapshot(&registry, &state, page, &notice, view), false);
-                continue;
             }
             Ok(Cmd::Action(name)) if name.starts_with("open:") => {
                 toggle_open(&mut view, &name);

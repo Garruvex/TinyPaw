@@ -366,6 +366,10 @@ fn apply(snapshot: Snapshot, focus: bool) {
         window.set_annotation_on(snapshot.annotation);
         window.set_page_title(snapshot.title.as_str().into());
         window.set_page_summary(snapshot.summary.as_str().into());
+        let (id, label, on) = snapshot.switch.clone().unwrap_or_default();
+        window.set_page_switch_id(id.into());
+        window.set_page_switch_label(label.into());
+        window.set_page_switch_on(on);
         window.set_notice(snapshot.notice.as_str().into());
         *state.extras.borrow_mut() = snapshot.extras.clone();
         if same_shape {

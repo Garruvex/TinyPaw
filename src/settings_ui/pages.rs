@@ -51,8 +51,6 @@ pub fn icon(page: PageId) -> &'static str {
         PageId::Sound => "M2 6 H4.5 L8 3 V13 L4.5 10 H2 Z M10.5 5.5 Q12.5 8 10.5 10.5",
     }
 }
-/// Shows or hides a page's fine tuning.
-pub const ADVANCED: &str = "ui:advanced";
 
 /// Navigation order: group, name, page. Each page holds one scope (see
 /// docs/settings-ux.md): the app, an annotation tool, or the characters on
@@ -97,13 +95,13 @@ pub struct Context<'a> {
     pub has_custom_sound: bool,
     /// The character on the desktop whose row is open.
     pub expanded: Option<u32>,
-    /// Fine tuning is unfolded.
-    pub advanced: bool,
 }
 
 pub struct Built {
     pub title: &'static str,
     pub summary: String,
+    /// The page's own master switch: setting, label, on.
+    pub switch: Option<(String, String, bool)>,
     pub sections: Vec<Section>,
     pub extras: HashMap<String, Extra>,
 }
@@ -112,6 +110,7 @@ struct Builder<'a> {
     cx: &'a Context<'a>,
     sections: Vec<Section>,
     extras: HashMap<String, Extra>,
+    switch: Option<(String, String, bool)>,
 }
 
 impl<'a> Builder<'a> {
@@ -120,6 +119,7 @@ impl<'a> Builder<'a> {
             cx,
             sections: Vec::new(),
             extras: HashMap::new(),
+            switch: None,
         }
     }
 
@@ -349,6 +349,7 @@ pub fn build(page: PageId, cx: &Context<'_>) -> Built {
     Built {
         title,
         summary: summary.to_owned(),
+        switch: b.switch,
         sections: b.sections,
         extras: b.extras,
     }
@@ -806,65 +807,82 @@ fn characters_page(b: &mut Builder<'_>) {
 
 fn music_page(b: &mut Builder<'_>) {
     let settings = b.cx.settings;
-    b.section("Listening", |s, b| {
-        b.toggle(s, mascot::MUSIC, Some("React to playback"));
-        if !settings.bool(mascot::MUSIC) {
-            return;
-        }
+    // The page's switch sits beside its title.
+    let on = settings.bool(mascot::MUSIC);
+    b.switch = Some((
+        mascot::MUSIC.to_owned(),
+        "Characters move with playback".to_owned(),
+        on,
+    ));
+    if !on {
+        b.section("", |s, b| {
+            b.note(
+                s,
+                "Turn this on and the characters move with what's playing on this PC.",
+                false,
+            );
+        });
+        return;
+    }
+    b.section("Listen to", |s, b| {
+        // One row per source, each with its own live level, so it is clear
+        // which one is making sound.
+        const SPEAKER: &str = "M2 6 H4.5 L8 3 V13 L4.5 10 H2 Z M10.5 5.5 Q12.5 8 10.5 10.5";
+        const MICROPHONE: &str =
+            "M6 3.5 A2 2 0 0 1 10 3.5 V7.5 A2 2 0 0 1 6 7.5 Z M3.8 7.5 A4.2 4.2 0 0 0 12.2 7.5 M8 11.7 V14";
         let current = settings.choice_text(mascot::MUSIC_SOURCE).to_owned();
-        let mut options: Vec<(String, String)> = b
-            .cx
-            .music
-            .sources
-            .iter()
-            .map(|(id, label, playing)| {
-                let label = if *playing || id == "all" || id.starts_with("in:") {
-                    label.clone()
-                } else {
-                    format!("{label} (not playing)")
-                };
-                (id.clone(), label)
-            })
-            .collect();
-        if !options.iter().any(|(id, _)| *id == current) {
-            options.push((current.clone(), current.clone()));
+        let mut rows = b.cx.music.sources.clone();
+        if !rows.iter().any(|row| row.0 == current) {
+            rows.push((current.clone(), current.clone(), false, 0.0));
         }
-        let mut item = Item::new(mascot::MUSIC_SOURCE, Kind::Choice, "Listen to");
-        item.index = options
-            .iter()
-            .position(|(id, _)| *id == current)
-            .map_or(-1, |i| i as i32);
-        item.options = options.iter().map(|(_, l)| l.clone()).collect();
-        s.items.push(item);
+        for (n, (id, label, playing, level)) in rows.iter().enumerate() {
+            let selected = *id == current;
+            let input = id.starts_with("in:");
+            let mut item = Item::new(mascot::MUSIC_SOURCE, Kind::Source, label);
+            item.index = n as i32;
+            item.on = selected;
+            // The chosen source shows what the characters actually hear.
+            item.value = if selected {
+                b.cx.music.level.max(*level)
+            } else {
+                *level
+            };
+            item.text = if selected {
+                "Selected"
+            } else if input {
+                ""
+            } else if *playing {
+                "Playing"
+            } else {
+                "Not playing"
+            }
+            .to_owned();
+            item.hint = if input { MICROPHONE } else { SPEAKER }.to_owned();
+            s.items.push(item);
+        }
         b.extras.insert(
             mascot::MUSIC_SOURCE.to_owned(),
             Extra {
                 step: None,
-                choices: options
+                choices: rows
                     .iter()
-                    .map(|(id, _)| Value::Choice(crate::platform::intern(id)))
+                    .map(|row| Value::Choice(crate::platform::intern(&row.0)))
                     .collect(),
             },
         );
-        b.note(
-            s,
-            if current == "all" {
-                "All apps together. Pick one app so a game or a call doesn't count; apps show up here while they make sound."
-            } else if current.starts_with("in:") {
-                "For music that doesn't play on this PC. This uses the input device (Windows shows the microphone in use) while listening; nothing is recorded."
-            } else {
-                "Only this app counts, and Follow beat hears only its sound."
-            },
-            false,
-        );
-        let mut meter = Item::new("music.level", Kind::Meter, "Hearing");
-        meter.value = b.cx.music.level;
-        meter.text = b.cx.music.status.clone();
-        s.items.push(meter);
+        let about = if current == "all" {
+            "All apps together. Pick one app so a game or a call doesn't count; apps show up here while they make sound."
+        } else if current.starts_with("in:") {
+            "For music that doesn't play on this PC. This uses the input device (Windows shows the microphone in use) while listening; nothing is recorded."
+        } else {
+            "Only this app counts, and Follow beat hears only its sound."
+        };
+        if b.cx.music.status.is_empty() {
+            b.note(s, about, false);
+        } else {
+            b.note_more(s, &format!("{}.", b.cx.music.status), about);
+        }
     });
-    if !settings.bool(mascot::MUSIC) {
-        return;
-    }
     b.section("Movement", |s, b| {
         b.range(
             s,
@@ -933,31 +951,20 @@ fn music_page(b: &mut Builder<'_>) {
         if !b.cx.music.beat.is_empty() {
             b.note(s, &format!("Beat: {}", b.cx.music.beat), false);
         }
-        // Fine tuning stays folded away until asked for.
-        b.action(
-            s,
-            ADVANCED,
-            "Advanced",
-            if b.cx.advanced { "Hide" } else { "Show" },
-        );
-        if !b.cx.advanced {
-            return;
-        }
-        let first = s.items.len();
-        b.choice(
+        b.segment_choice(
             s,
             mascot::BEAT_SENSITIVITY,
-            Some("Sensitivity"),
+            "Sensitivity",
             vec![
                 ("low", "Low".to_owned()),
                 ("normal", "Normal".to_owned()),
                 ("high", "High".to_owned()),
             ],
         );
-        b.choice(
+        b.segment_choice(
             s,
             mascot::BEAT_TIMING,
-            Some("Timing"),
+            "Timing",
             vec![
                 ("earlier", "Earlier".to_owned()),
                 ("default", "Default".to_owned()),
@@ -980,9 +987,6 @@ fn music_page(b: &mut Builder<'_>) {
             "Try another engine if the nod drifts off the beat. Changing it restarts the search.",
             "Classic is the original. Bass-weighted counts kicks more than hats. Sticky tempo resists jumping to half or double time. Cumulative carries the beat's phase forward between hits.",
         );
-        for item in &mut s.items[first..] {
-            item.nested = true;
-        }
     });
     if let Some(section) = b.sections.last_mut() {
         section.tag = "Trial".into();
@@ -1163,7 +1167,6 @@ mod tests {
                 }],
                 has_custom_sound: custom_sound,
                 expanded,
-                advanced: sets.is_some(),
             },
         )
     }
@@ -1201,14 +1204,34 @@ mod tests {
             assert!(shown.iter().any(|i| i == kept), "{kept} is missing");
         }
         assert!(shown.iter().any(|i| i == "characters.edit"));
-        // The beat's fine tuning is nested under Advanced.
-        let tuning = open
+        // The page's switch is beside its title, not a row.
+        assert!(!shown.iter().any(|i| i == mascot::MUSIC));
+        assert_eq!(
+            open.switch,
+            Some((
+                mascot::MUSIC.to_owned(),
+                "Characters move with playback".to_owned(),
+                true
+            ))
+        );
+        // Each source is its own row; the chosen one says so.
+        let sources: Vec<_> = open
             .sections
             .iter()
             .flat_map(|s| &s.items)
-            .find(|i| i.id == mascot::BEAT_ENGINE)
-            .unwrap();
-        assert!(tuning.nested);
+            .filter(|i| i.kind == Kind::Source)
+            .collect();
+        assert_eq!(sources.len(), 1);
+        assert!(sources[0].on);
+        assert_eq!(sources[0].text, "Selected");
+        assert_eq!(
+            open.extras[mascot::MUSIC_SOURCE].choices.len(),
+            sources.len()
+        );
+        // Off, the page is only its switch and one line.
+        let off = build_page(PageId::Music, false);
+        assert_eq!(off.switch.as_ref().map(|s| s.2), Some(false));
+        assert_eq!(off.sections.len(), 1);
     }
 
     #[test]
@@ -1246,7 +1269,7 @@ mod tests {
                         );
                     }
                     Kind::Action | Kind::Note | Kind::Shortcut => {}
-                    Kind::Cards | Kind::Meter => {}
+                    Kind::Cards | Kind::Source => {}
                     Kind::Segments | Kind::Swatches => {
                         assert!(registry.setting(&item.id).is_some(), "{}", item.id);
                     }

@@ -1,12 +1,12 @@
 import { Tokens } from "../tokens.slint";
-import { SettingRow, EntryRow, Toggle, Range, Select, Segmented, Swatches, Cards, Meter, Btn, Notice, Hint, Keycap } from "../kit.slint";
+import { SettingRow, EntryRow, SourceRow, Toggle, Range, Select, Segmented, Swatches, Cards, Btn, Notice, Hint, Keycap } from "../kit.slint";
 
 // One setting as the registry's page definitions describe it. The Rust side
 // fills these in; the control shown depends on `kind`.
 export struct ItemModel {
     id: string,
     // 0 toggle, 1 range, 2 choice, 3 action button, 4 note, 5 shortcut,
-    // 6 segments, 7 swatches, 8 cards, 9 meter, 10 entry
+    // 6 segments, 7 swatches, 8 cards, 10 entry, 11 source
     kind: int,
     label: string,
     hint: string,
@@ -100,6 +100,14 @@ export component ItemView inherits VerticalLayout {
         ranged(v) => { root.ranged(v); }
         clicked => { root.pressed(); }
     }
+    if root.item.kind == 11: SourceRow {
+        icon: root.item.hint;
+        label: root.item.label;
+        level: root.item.value;
+        status: root.item.text;
+        selected: root.item.on;
+        clicked => { root.chosen(root.item.index); }
+    }
     // Cards fill the row from the left instead of sitting beside a label.
     if root.item.kind == 8: HorizontalLayout {
         padding: Tokens.space-3;
@@ -111,7 +119,7 @@ export component ItemView inherits VerticalLayout {
             selected(i) => { root.chosen(i); }
         }
     }
-    if root.item.kind != 4 && root.item.kind != 8 && root.item.kind != 10: SettingRow {
+    if root.item.kind != 4 && root.item.kind != 8 && root.item.kind != 10 && root.item.kind != 11: SettingRow {
         label: root.item.label;
         hint: root.item.hint;
         hint-warning: root.item.warning;
@@ -164,20 +172,6 @@ export component ItemView inherits VerticalLayout {
             colors: root.item.colors;
             current <=> root.index;
             selected(i) => { root.chosen(i); }
-        }
-        if root.item.kind == 9: HorizontalLayout {
-            spacing: Tokens.space-3;
-            Meter {
-                level: root.item.value;
-                width: Tokens.label-w;
-                y: (parent.height - self.height) / 2;
-            }
-            Text {
-                text: root.item.text;
-                font-size: Tokens.font-body;
-                color: Tokens.muted;
-                vertical-alignment: center;
-            }
         }
         if root.item.kind == 3: Btn {
             text: root.item.text;

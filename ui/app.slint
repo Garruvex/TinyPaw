@@ -23,6 +23,10 @@ export component SettingsWindow inherits SettingsShell {
     toggle-annotation => { root.annotation-toggled(); }
     in property <string> page-title;
     in property <string> page-summary;
+    // The page's own master switch, when it has one: a setting's ID and label.
+    in property <string> page-switch-id;
+    in property <string> page-switch-label;
+    in property <bool> page-switch-on;
     in property <[SectionModel]> sections;
     // A message above the page: why a change was refused.
     in property <string> notice;
@@ -47,6 +51,9 @@ export component SettingsWindow inherits SettingsShell {
                 Page {
                     title: root.page-title;
                     summary: root.page-summary;
+                    switch-label: root.page-switch-label;
+                    switch-on: root.page-switch-on;
+                    switched(on) => { root.toggled(root.page-switch-id, on); }
                     if root.notice != "": Notice {
                         text: root.notice;
                         warning: true;

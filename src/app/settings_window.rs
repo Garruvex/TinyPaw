@@ -117,8 +117,8 @@ impl App {
             let rows: Vec<_> = self
                 .music_rows()
                 .iter()
-                .map(|(s, _, playing)| {
-                    serde_json::json!({ "id": s.id(), "label": s.to_string(), "playing": playing })
+                .map(|(s, level, playing)| {
+                    serde_json::json!({ "id": s.id(), "label": s.to_string(), "playing": playing, "level": level })
                 })
                 .collect();
             let inputs: Vec<_> = self.music_inputs().iter().map(label).collect();
