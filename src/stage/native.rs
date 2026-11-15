@@ -253,6 +253,11 @@ fn run(
         let mut msg: MSG = unsafe { zeroed() };
         while unsafe { PeekMessageW(&mut msg, null_mut(), 0, 0, PM_REMOVE) } != 0 {
             if msg.message == WM_QUIT {
+                with_window(|w| {
+                    if let Some(d) = &mut w.desktop {
+                        d.leave();
+                    }
+                });
                 return;
             }
             unsafe {

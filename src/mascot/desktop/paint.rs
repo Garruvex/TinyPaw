@@ -17,12 +17,16 @@ pub struct SceneKey {
     menu: Option<Side>,
     closing: bool,
     hover: Vec<f32>,
+    /// Which reaction picture shows (by address), 0 for the posed rig: a
+    /// click, drop or headpat picture changes the look without the pose.
+    picture: usize,
 }
 
 impl SceneKey {
     /// Whether drawing `other` would give the same picture as this one.
     pub fn looks_like(&self, other: &SceneKey) -> bool {
-        self.speech == other.speech
+        self.picture == other.picture
+            && self.speech == other.speech
             && self.menu == other.menu
             && self.closing == other.closing
             && self.hover.len() == other.hover.len()
@@ -151,6 +155,7 @@ impl Desktop {
             menu: self.menu,
             closing: self.closing.is_some(),
             hover: self.hover.clone(),
+            picture: self.picture().map_or(0, |p| p as *const _ as usize),
         }
     }
 

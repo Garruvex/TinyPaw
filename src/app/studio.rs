@@ -68,10 +68,14 @@ impl App {
                 .rig()
                 .map(|r| f64::from(r.visible_height() / r.size().height))
                 .unwrap_or(1.0);
-            sets.push((
-                character::HEIGHT,
-                Value::Float((old * ratio).clamp(character::MIN_HEIGHT, character::MAX_HEIGHT)),
-            ));
+            let height = (old * ratio).clamp(character::MIN_HEIGHT, character::MAX_HEIGHT);
+            sets.push((character::HEIGHT, Value::Float(height)));
+            // The instance list was built from the old settings before this
+            // ran, so the migrated size goes there too.
+            if let Some(first) = self.instances.get_mut(1) {
+                first.height = height;
+                self.save_instances();
+            }
         }
         let mut values = self.session.settings().clone();
         for (id, value) in sets {
