@@ -306,6 +306,7 @@ impl Window {
                 self.options = Some(options);
                 let Character {
                     id,
+                    name,
                     rig,
                     lines,
                     click_compress,
@@ -313,6 +314,7 @@ impl Window {
                     fall,
                 } = *character;
                 let mut desktop = Desktop::new(id, rig, size, anchor, rows, hidden);
+                desktop.set_name(&name);
                 desktop.join(self.crowd.1.clone(), self.crowd.0);
                 desktop.set_lines(lines, &options);
                 desktop.set_click_compress(click_compress);
@@ -330,12 +332,14 @@ impl Window {
                 if let Some(d) = &mut self.desktop {
                     let Character {
                         id,
+                        name,
                         rig,
                         lines,
                         click_compress,
                         pictures,
                         fall,
                     } = *character;
+                    d.set_name(&name);
                     d.set_rig(id, rig);
                     d.set_lines(lines, &options);
                     d.set_click_compress(click_compress);
@@ -683,6 +687,7 @@ pub fn probe() {
     stage.send(Intent::Open {
         character: Box::new(Character {
             id: "yohta",
+            name: "Yohta".into(),
             rig: Rig::load(),
             lines,
             click_compress: true,

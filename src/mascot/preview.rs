@@ -726,7 +726,7 @@ impl MotionPreview {
                     self.companion_test(super::companionship::State::Awake);
                     None
                 }
-                Trigger::Idle | Trigger::AnnotationEnd => None,
+                Trigger::Idle | Trigger::AnnotationEnd | Trigger::Neighbor => None,
             };
             if let Some(g) = gesture {
                 let live = self.live.get_mut();

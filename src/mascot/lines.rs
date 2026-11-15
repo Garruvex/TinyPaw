@@ -16,10 +16,13 @@ pub enum Trigger {
     Headpat,
     Sleep,
     Wake,
+    /// A neighbour was picked up or dropped nearby. `{other}` in the line is
+    /// that character's name.
+    Neighbor,
 }
 
 impl Trigger {
-    pub const ALL: [Trigger; 9] = [
+    pub const ALL: [Trigger; 10] = [
         Trigger::Click,
         Trigger::Pickup,
         Trigger::Drop,
@@ -29,6 +32,7 @@ impl Trigger {
         Trigger::Headpat,
         Trigger::Sleep,
         Trigger::Wake,
+        Trigger::Neighbor,
     ];
 
     pub fn key(self) -> &'static str {
@@ -42,6 +46,7 @@ impl Trigger {
             Trigger::Headpat => "headpat",
             Trigger::Sleep => "sleep",
             Trigger::Wake => "wake",
+            Trigger::Neighbor => "neighbor",
         }
     }
 
@@ -56,6 +61,7 @@ impl Trigger {
             Trigger::Headpat => "Headpat",
             Trigger::Sleep => "Sleep",
             Trigger::Wake => "Wake",
+            Trigger::Neighbor => "Neighbour",
         }
     }
 
@@ -70,7 +76,11 @@ impl Trigger {
     pub fn unprompted(self) -> bool {
         matches!(
             self,
-            Trigger::Idle | Trigger::MusicStart | Trigger::Sleep | Trigger::Wake
+            Trigger::Idle
+                | Trigger::MusicStart
+                | Trigger::Sleep
+                | Trigger::Wake
+                | Trigger::Neighbor
         )
     }
 }
@@ -259,7 +269,7 @@ pub const MAX_SOUND: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Lines {
-    by_trigger: [Vec<Line>; 9],
+    by_trigger: [Vec<Line>; Trigger::ALL.len()],
     pub bubble: Bubble,
     /// Where the menu sits; kept with the bubble as the character's layout.
     pub menu: MenuPlace,
@@ -490,6 +500,7 @@ pub fn template() -> Json {
         (Trigger::Headpat, "That feels nice."),
         (Trigger::Sleep, "Zzz…"),
         (Trigger::Wake, "Hmm?"),
+        (Trigger::Neighbor, "Look at {other} go!"),
     ];
     let mut lines = serde_json::Map::new();
     for (t, text) in examples {
@@ -579,14 +590,14 @@ pub fn reading_time(part: &str) -> f32 {
 #[derive(Debug, Clone)]
 pub struct Picker {
     state: u64,
-    last: [Option<usize>; 9],
+    last: [Option<usize>; Trigger::ALL.len()],
 }
 
 impl Picker {
     pub fn new(seed: u64) -> Self {
         Self {
             state: seed | 1,
-            last: [None; 9],
+            last: [None; Trigger::ALL.len()],
         }
     }
 

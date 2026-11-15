@@ -210,6 +210,7 @@ impl App {
         });
         crate::stage::Character {
             id,
+            name: c.map_or_else(|| id.to_owned(), |c| c.name.clone()),
             rig,
             lines,
             click_compress,

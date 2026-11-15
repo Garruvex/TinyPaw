@@ -258,7 +258,7 @@ fn bundled_yohta_is_an_ordinary_pack_that_exports_and_copies() {
     assert!(rig.eye_point().is_some(), "his eyes still track the cursor");
     assert!(Character::builtin().thumbnail().is_some());
     let lines = Character::builtin().pack_lines();
-    assert_eq!(lines.total(), 12, "Yohta has a few things to say");
+    assert_eq!(lines.total(), 15, "Yohta has a few things to say");
     assert!(lines.sounds().is_empty());
     // Export writes a folder Import folder accepts as another character.
     let out = dir.join("out");

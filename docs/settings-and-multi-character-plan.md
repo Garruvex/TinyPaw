@@ -1,6 +1,6 @@
 # Settings, character studio and multi-character plan
 
-Updated 15 November 2026. Work on branch `refactor/settings-registry`; steps 0 to 6 are implemented, step 7 is in progress.
+Updated 15 November 2026. Work on branch `refactor/settings-registry`; steps 0 to 7 are implemented.
 
 This plan replaces the single event loop with three, moves characters to a native stage, rebuilds Settings and the character editor in a UI framework with an enforced design system, and adds several characters on the desktop. The [character and editor improvement plan](character-editor-improvement-plan.md) still governs artwork, poses and editor content. This document governs architecture, windows and delivery order.
 
@@ -179,7 +179,7 @@ Each instance has its own shown flag, changed from its menu or its row in Settin
 | 4 | Settings in the new framework: registry, then Sound, Display & motion, Shortcuts, Ink & text, Spotlight & lens, Pointer, Music response; first-run window | In progress: slice 4a landed (see [Step 4 progress](#step-4-progress)). The Iced settings views are deleted; every control saves at once |
 | 5 | Character studio window | Artwork, Reactions, Speech, Motion and Advanced work on one draft; Settings never shows the leave prompt Done as its own window; the editor content is still Iced (see [Step 5 results](#step-5-results)) |
 | 6 | Multi-character: scopes, instance store and migration, Characters page, several instances, coordinator tiers one to three | An existing installation opens unchanged; two instances of one character move and size independently; 1, 10 and 20 instances are measured Done (see [Step 6 results](#step-6-results)) |
-| 7 | Social awareness | Planned separately |
+| 7 | Social awareness | Looking at each other, reacting to a neighbour, lines aimed at another character. Done (see [Step 7 results](#step-7-results)) |
 
 Each step ends with tests, strict Clippy and a Windows release build passing.
 
@@ -282,6 +282,14 @@ Slice 3d results. The app now runs the desktop character on the stage and nothin
 - **Run for real** with an isolated copy of the app (own settings folder and command endpoint, so the running instance was left alone): enabling the character creates the stage window, disabling it removes the window, and the character logic, menu rows and saves take the new path. Release build, character on, idle motion, eyes and music off: the stage thread uses 0.6% of one core (about 0.6 ms per 100 ms poll); with idle sway on at 30 Hz, 1.7%. Memory, whole app with the character on: 38.8 MiB working set, 17 MiB private; with the character off 26 MiB and 7 MiB. When music response or sleep audio is on, the music meter thread adds about 2% of a core as it did before; that is unchanged by this step.
 - **Not checked by hand:** carrying and throwing the character, clicking the menu and watching a bubble, with the real mouse. Please run the app and try them.
 - **Known gaps:** a pressed menu row has no extra highlight, and per-poll cost (about 0.6 ms) is higher than it needs to be; trimming it is a later optimisation. Step 3's "within budget" has no number in this plan, so the figures above are the baseline to hold.
+
+## Step 7 results
+
+- **Looking at each other.** While the user is not near a character and not pressing it, its eyes turn to the nearest neighbour within about four character heights, as long as the cursor is more than about two and a half heights away. Characters whose eyes do not track the cursor (the per-character Eyes switch, or art without eye pieces) do not.
+- **Reacting to a neighbour.** Picking a character up, dropping it and petting it are announced on the shared crowd. A neighbour within range looks at it for three seconds, and for a pick-up or a drop (not a pat) may say a line.
+- **Lines aimed at another character.** A new line trigger, Neighbour, in the Speech tab and in dialogue files (`neighbor`); `{other}` in a line becomes the other character's name, or "them" when it has none. It counts as unprompted, so Quiet lines silences it, and it waits for the current speaker like any other. Yohta has three: "Look at {other} go!", "{other}, are you okay?" and "Careful with {other}!". Existing packs have none until their author adds some, so they stay silent about neighbours and still look.
+- **Checked:** crowd logic (news is seen once, goes stale after three seconds, stays out of range, leaves with its character; nearest neighbour on the same ground), the line's name substitution, turn-taking between two stages, Quiet lines, and three live instances starting and standing apart. Not checked by hand: watching two characters on screen react to a real pick-up.
+- **Not done:** characters that walk to each other, lines that wait for a reply from the neighbour, and a per-character social on/off. The plan listed no more than the three behaviours above.
 
 ## Step 6 results
 

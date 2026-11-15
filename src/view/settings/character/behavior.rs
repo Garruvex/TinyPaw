@@ -1673,5 +1673,9 @@ fn companionship_section<'a>(
         event_row(m, crate::mascot::lines::Trigger::Wake),
         visual_row(m, Event::Wake),
         sound_row(m, Event::Wake, muted),
+        event_row(m, crate::mascot::lines::Trigger::Neighbor),
+        hint(
+            "Said when another character nearby is picked up or dropped. {other} becomes that character's name. Only used when several characters are on the desktop.",
+        ),
     ])
 }

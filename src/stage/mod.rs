@@ -30,6 +30,8 @@ use crate::mascot::rig::Rig;
 /// A character to show: its art, lines, reaction pictures and flags.
 pub struct Character {
     pub id: &'static str,
+    /// What neighbours call it in their lines.
+    pub name: String,
     pub rig: Rig,
     pub lines: Lines,
     /// A click plays Compress.

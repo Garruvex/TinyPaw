@@ -15,6 +15,7 @@ use iced::{Point, Rectangle, Size, Vector};
 
 use super::Msg;
 use super::companionship::{self, Controller, State};
+use super::crowd::Note;
 use super::lines::{BubbleSide, Lines, MenuAlign, MenuSide, Picker, SoundRef, Speech, Trigger};
 use super::motion::{Animator, Expression, Inputs, PartMotion, Pose};
 use super::reactions::Event;
@@ -696,6 +697,10 @@ pub struct Desktop {
     right_down: bool,
     /// The other characters on the stage, and this one's ID among them.
     crowd: Option<(std::sync::Arc<super::crowd::Crowd>, u32)>,
+    /// What a neighbour calls this character, and the newest news of a
+    /// neighbour it has already reacted to.
+    name: String,
+    seen_news: u64,
 }
 
 impl Desktop {
@@ -768,7 +773,14 @@ impl Desktop {
             left_down: false,
             right_down: false,
             crowd: None,
+            name: String::new(),
+            seen_news: 0,
         }
+    }
+
+    /// What neighbours call this character in their lines.
+    pub fn set_name(&mut self, name: &str) {
+        self.name = name.to_owned();
     }
 
     /// Joins the other characters: stand clear of them and take turns to speak.
@@ -816,6 +828,11 @@ impl Desktop {
     /// Says a line for `t`, unless lines are off, Quiet holds back an
     /// unprompted one, or the character is hidden.
     pub fn say(&mut self, t: Trigger, o: &Options) {
+        self.say_about(t, o, None);
+    }
+
+    /// As `say`, for a line that may name another character (`{other}`).
+    fn say_about(&mut self, t: Trigger, o: &Options, other: Option<&str>) {
         if !o.lines
             || self.hidden
             || (t.unprompted() && o.quiet)
@@ -825,7 +842,10 @@ impl Desktop {
             return;
         }
         if let Some(line) = self.picker.pick(&self.lines, t)
-            && let Some(speech) = Speech::new(&line.text, self.now)
+            && let Some(speech) = Speech::new(
+                &line.text.replace("{other}", other.unwrap_or("them")),
+                self.now,
+            )
         {
             // One bubble at a time: a line nobody asked for waits its turn,
             // and one the user provoked takes it.
@@ -1202,11 +1222,13 @@ impl Desktop {
             None
         };
 
+        // Looks at a neighbour when the user is not playing with this one.
+        let look_at = self.attention(cursor, rect, k, o).unwrap_or(local);
         self.target = match self.rig.eye_point() {
             Some(eye) if o.eyes => {
                 let eyes = self.layout.character.position()
                     + Vector::new(eye.x, eye.y) * self.layout.scale;
-                gaze_toward(local, eyes, GAZE_REACH * self.layout.character.height)
+                gaze_toward(look_at, eyes, GAZE_REACH * self.layout.character.height)
             }
             _ => Vector::ZERO,
         };
@@ -1272,6 +1294,9 @@ impl Desktop {
                 companionship::Event::Wake => Event::Wake,
             };
             self.events.push(e);
+            if e == Event::Headpat {
+                self.announce(Note::Petted);
+            }
             let trigger = match e {
                 Event::Headpat => Trigger::Headpat,
                 Event::Sleep => Trigger::Sleep,
@@ -1285,6 +1310,7 @@ impl Desktop {
         self.step_motion(o, k);
         if picked_up {
             self.events.push(Event::Pickup);
+            self.announce(Note::PickedUp);
             self.say(Trigger::Pickup, o);
         }
         self.step_speech(o);
@@ -1293,6 +1319,51 @@ impl Desktop {
             hide: None,
             save,
         }
+    }
+
+    /// Tells the neighbours what this character just did.
+    fn announce(&self, note: Note) {
+        if let Some((crowd, id)) = &self.crowd {
+            crowd.announce(*id, note, Instant::now());
+        }
+    }
+
+    /// Where to look instead of at the cursor, in window pixels: at a
+    /// neighbour that was just picked up, dropped or petted, which may also
+    /// draw a line, or else at the nearest neighbour while the cursor is
+    /// far away. Nothing while this character is being played with.
+    fn attention(
+        &mut self,
+        cursor: (i32, i32),
+        rect: (i32, i32, i32, i32),
+        k: f32,
+        o: &Options,
+    ) -> Option<Point> {
+        let (crowd, id) = self.crowd.as_ref()?;
+        if self.press.is_some() || self.nearby || !o.eyes {
+            return None;
+        }
+        let (id, crowd) = (*id, crowd.clone());
+        // About four character heights to either side.
+        let range = self.layout.character.height * k * 4.0;
+        let (x, y) = self.anchor;
+        let local = |eyes: (f32, f32)| {
+            Point::new((eyes.0 - rect.0 as f32) / k, (eyes.1 - rect.1 as f32) / k)
+        };
+        if let Some(news) = crowd.news_near(id, x, range, 0, Instant::now()) {
+            if news.seq > self.seen_news {
+                self.seen_news = news.seq;
+                if news.note != Note::Petted {
+                    self.say_about(Trigger::Neighbor, o, Some(&news.from.name));
+                }
+            }
+            return Some(local(news.from.eyes));
+        }
+        let away = (cursor.0 as f32 - x).hypot(cursor.1 as f32 - y) > range * 0.6;
+        if away {
+            return crowd.nearest(id, x, y, range).map(|n| local(n.eyes));
+        }
+        None
     }
 
     /// Moves a line along, and says an idle line when one is due and the
@@ -1600,6 +1671,7 @@ impl Desktop {
                 .is_some()
                 .then_some((self.now + ART_TIME, Event::Drop));
             self.events.push(Event::Drop);
+            self.announce(Note::Dropped);
             self.say(Trigger::Drop, o);
             return Some((self.anchor.0 as f64, self.anchor.1 as f64));
         }
@@ -1682,6 +1754,11 @@ impl Desktop {
             x: self.anchor.0,
             y: self.anchor.1,
             half,
+            eyes: (
+                self.anchor.0,
+                self.anchor.1 - self.layout.character.height * k * 0.75,
+            ),
+            name: self.name.clone(),
         });
     }
 

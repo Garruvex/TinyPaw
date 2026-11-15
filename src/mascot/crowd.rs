@@ -6,6 +6,9 @@
 //!   along the ground, so two never stand on each other.
 //! - **Turn-taking:** one bubble at a time. A line nobody asked for waits its
 //!   turn; one the user provoked (a click, a drop) takes the turn.
+//! - **Social:** a character glances at a neighbour when the user is not
+//!   playing with it, and notices when a neighbour is picked up or dropped:
+//!   it looks that way and may say a line about it.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -13,8 +16,19 @@ use std::time::{Duration, Instant};
 /// Gap kept between two characters, in physical pixels.
 const GAP: f32 = 6.0;
 
+/// How long a neighbour's doing counts as news.
+const NEWS_FOR: Duration = Duration::from_secs(3);
+
+/// What a character did that its neighbours may notice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Note {
+    PickedUp,
+    Dropped,
+    Petted,
+}
+
 /// Where one character stands.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Slot {
     pub id: u32,
     /// Feet, physical desktop pixels.
@@ -22,12 +36,27 @@ pub struct Slot {
     pub y: f32,
     /// Half the width it occupies on the ground.
     pub half: f32,
+    /// Its eyes, in the same pixels: where a neighbour looks.
+    pub eyes: (f32, f32),
+    /// What to call it in a neighbour's line.
+    pub name: String,
+}
+
+/// Something a neighbour did, as another character sees it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct News {
+    pub seq: u64,
+    pub note: Note,
+    pub from: Slot,
 }
 
 #[derive(Default)]
 struct Inner {
     slots: Vec<Slot>,
     speaker: Option<(u32, Instant)>,
+    /// The latest thing each character did.
+    news: Vec<(u32, u64, Note, Instant)>,
+    seq: u64,
 }
 
 #[derive(Default)]
@@ -38,6 +67,47 @@ pub struct Crowd {
 impl Crowd {
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Tells the others what a character just did.
+    pub fn announce(&self, id: u32, note: Note, now: Instant) {
+        let mut inner = self.lock();
+        inner.seq += 1;
+        let seq = inner.seq;
+        inner.news.retain(|(who, ..)| *who != id);
+        inner.news.push((id, seq, note, now));
+    }
+
+    /// The newest thing a neighbour of `me` within `range` did that is newer
+    /// than `since` and still fresh.
+    pub fn news_near(&self, me: u32, x: f32, range: f32, since: u64, now: Instant) -> Option<News> {
+        let inner = self.lock();
+        inner
+            .news
+            .iter()
+            .filter(|(who, seq, _, at)| {
+                *who != me && *seq > since && now.duration_since(*at) < NEWS_FOR
+            })
+            .filter_map(|(who, seq, note, _)| {
+                let slot = inner.slots.iter().find(|s| s.id == *who)?;
+                ((slot.x - x).abs() <= range).then(|| News {
+                    seq: *seq,
+                    note: *note,
+                    from: slot.clone(),
+                })
+            })
+            .max_by_key(|n| n.seq)
+    }
+
+    /// The closest neighbour of `me` within `range` along the ground.
+    pub fn nearest(&self, me: u32, x: f32, y: f32, range: f32) -> Option<Slot> {
+        let inner = self.lock();
+        inner
+            .slots
+            .iter()
+            .filter(|s| s.id != me && (s.y - y).abs() < range && (s.x - x).abs() <= range)
+            .min_by(|a, b| (a.x - x).abs().total_cmp(&(b.x - x).abs()))
+            .cloned()
     }
 
     /// Records where a character stands now.
@@ -53,6 +123,7 @@ impl Crowd {
     pub fn remove(&self, id: u32) {
         let mut inner = self.lock();
         inner.slots.retain(|s| s.id != id);
+        inner.news.retain(|(who, ..)| *who != id);
         if inner.speaker.is_some_and(|(speaker, _)| speaker == id) {
             inner.speaker = None;
         }
@@ -144,6 +215,8 @@ mod tests {
             x,
             y: 900.0,
             half: 50.0,
+            eyes: (x, 800.0),
+            name: format!("Pal {id}"),
         }
     }
 
@@ -194,6 +267,49 @@ mod tests {
         }
         crowd.remove(3);
         assert_eq!(crowd.count(), 11);
+    }
+
+    #[test]
+    fn a_character_hears_about_a_neighbour_nearby_once_and_only_while_it_is_fresh() {
+        let crowd = Crowd::default();
+        crowd.publish(slot(1, 500.0));
+        crowd.publish(slot(2, 700.0));
+        crowd.publish(slot(3, 5000.0));
+        let t0 = Instant::now();
+        crowd.announce(2, Note::PickedUp, t0);
+        crowd.announce(3, Note::Dropped, t0);
+        let news = crowd
+            .news_near(1, 500.0, 900.0, 0, t0)
+            .expect("a neighbour did something");
+        assert_eq!((news.note, news.from.id), (Note::PickedUp, 2));
+        assert_eq!(news.from.name, "Pal 2");
+        // Having seen it, only newer news counts; the far one is out of range.
+        assert!(crowd.news_near(1, 500.0, 900.0, news.seq, t0).is_none());
+        // Its own doing is not news to itself.
+        assert!(crowd.news_near(2, 700.0, 900.0, 0, t0).is_none());
+        // It goes stale.
+        let later = t0 + NEWS_FOR + Duration::from_millis(1);
+        assert!(crowd.news_near(1, 500.0, 900.0, 0, later).is_none());
+        // A character that left takes its news with it.
+        crowd.announce(2, Note::Dropped, later);
+        crowd.remove(2);
+        assert!(crowd.news_near(1, 500.0, 900.0, 0, later).is_none());
+    }
+
+    #[test]
+    fn the_nearest_neighbour_on_the_same_ground_is_found() {
+        let crowd = Crowd::default();
+        crowd.publish(slot(1, 500.0));
+        crowd.publish(slot(2, 900.0));
+        crowd.publish(slot(3, 650.0));
+        assert_eq!(crowd.nearest(1, 500.0, 900.0, 700.0).map(|s| s.id), Some(3));
+        assert!(crowd.nearest(1, 500.0, 900.0, 100.0).is_none());
+        // Another height is not a neighbour.
+        crowd.publish(Slot {
+            y: 100.0,
+            ..slot(4, 520.0)
+        });
+        assert_eq!(crowd.nearest(1, 500.0, 900.0, 700.0).map(|s| s.id), Some(3));
     }
 
     #[test]

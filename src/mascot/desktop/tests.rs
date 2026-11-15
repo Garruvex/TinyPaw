@@ -970,3 +970,93 @@ fn stage_paints_speech_bubble_and_menu() {
         .unwrap();
     }
 }
+
+fn neighbour_options() -> Options {
+    Options {
+        bop: None,
+        dance: Default::default(),
+        eyes: true,
+        idle: false,
+        reduced: true,
+        lines: true,
+        quiet: false,
+        idle_every: (60.0, 120.0),
+        music: 0.0,
+        energy: None,
+        beat: None,
+    }
+}
+
+fn desktop_with_a_neighbour_line(
+    crowd: &std::sync::Arc<crate::mascot::crowd::Crowd>,
+    id: u32,
+) -> Desktop {
+    let o = neighbour_options();
+    let mut d = Desktop::new("yohta", Rig::load(), 146.0, (500.0, 500.0), 3, false);
+    let mut lines = Lines::default();
+    lines
+        .get_mut(Trigger::Neighbor)
+        .push(super::super::lines::Line {
+            text: "Look at {other} go!".into(),
+            sound: None,
+        });
+    lines
+        .get_mut(Trigger::Click)
+        .push(super::super::lines::Line {
+            text: "Hey!".into(),
+            sound: None,
+        });
+    d.set_lines(lines, &o);
+    d.join(crowd.clone(), id);
+    d
+}
+
+#[test]
+fn a_line_about_a_neighbour_names_it() {
+    let crowd = std::sync::Arc::new(crate::mascot::crowd::Crowd::default());
+    let mut d = desktop_with_a_neighbour_line(&crowd, 1);
+    d.say_about(Trigger::Neighbor, &neighbour_options(), Some("Moro"));
+    assert_eq!(
+        d.speech.as_ref().map(|s| s.text()),
+        Some("Look at Moro go!")
+    );
+    // With no name to give it still reads naturally.
+    let mut d = desktop_with_a_neighbour_line(&crowd, 2);
+    crowd.release_voice(1);
+    d.say_about(Trigger::Neighbor, &neighbour_options(), None);
+    assert_eq!(
+        d.speech.as_ref().map(|s| s.text()),
+        Some("Look at them go!")
+    );
+}
+
+#[test]
+fn two_characters_never_have_a_bubble_up_at_once_unless_the_user_asked() {
+    let crowd = std::sync::Arc::new(crate::mascot::crowd::Crowd::default());
+    let o = neighbour_options();
+    let mut first = desktop_with_a_neighbour_line(&crowd, 1);
+    let mut second = desktop_with_a_neighbour_line(&crowd, 2);
+    first.say_about(Trigger::Neighbor, &o, Some("Moro"));
+    assert!(first.speech.is_some());
+    // A neighbour comment nobody asked for waits for the first to finish.
+    second.say_about(Trigger::Neighbor, &o, Some("Moro"));
+    assert!(second.speech.is_none());
+    // The user clicking the second takes the turn.
+    second.say(Trigger::Click, &o);
+    assert_eq!(second.speech.as_ref().map(|s| s.text()), Some("Hey!"));
+    // The first notices it lost the turn on its next step and puts its bubble away.
+    first.step_speech(&o);
+    assert!(first.speech.is_none());
+}
+
+#[test]
+fn quiet_lines_silence_what_a_neighbour_prompts() {
+    let crowd = std::sync::Arc::new(crate::mascot::crowd::Crowd::default());
+    let mut d = desktop_with_a_neighbour_line(&crowd, 1);
+    let quiet = Options {
+        quiet: true,
+        ..neighbour_options()
+    };
+    d.say_about(Trigger::Neighbor, &quiet, Some("Moro"));
+    assert!(d.speech.is_none());
+}
