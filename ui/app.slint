@@ -49,6 +49,7 @@ export component SettingsWindow inherits SettingsShell {
                     }
                     for section in root.sections: Section {
                         title: section.title;
+                        tag: section.tag;
                         for item in section.items: ItemView {
                             item: item;
                             capturing: root.capturing-id == item.id;

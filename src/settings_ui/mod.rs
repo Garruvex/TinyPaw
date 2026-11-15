@@ -385,6 +385,7 @@ fn apply(snapshot: Snapshot, focus: bool) {
                     state.items.push(items.clone());
                     SectionModel {
                         title: section.title.as_str().into(),
+                        tag: section.tag.as_str().into(),
                         items: ModelRc::from(items),
                     }
                 })

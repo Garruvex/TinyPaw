@@ -109,6 +109,7 @@ impl<'a> Builder<'a> {
     fn section(&mut self, title: &str, items: impl FnOnce(&mut Section, &mut Self)) {
         let mut section = Section {
             title: title.to_owned(),
+            tag: String::new(),
             items: Vec::new(),
         };
         items(&mut section, self);
@@ -228,12 +229,12 @@ impl<'a> Builder<'a> {
             .iter()
             .find(|c| c.id == id)
             .map_or("its shortcut", |c| c.binding.as_str());
-        self.note(
+        self.note_more(
             s,
+            &format!("Anywhere: tap {key} to toggle, or hold it to show until you let go."),
             &format!(
-                "Anywhere: tap {key} to toggle, or hold it. While drawing, scroll changes the {size} and Shift+scroll the {more}."
+                "While holding, Up and Down change the {size} and + and \u{2212} the {more}. While drawing, scroll changes the {size} and Shift+scroll the {more}."
             ),
-            false,
         );
     }
 
@@ -255,6 +256,14 @@ impl<'a> Builder<'a> {
         let mut item = Item::new(id, Kind::Action, label);
         item.text = caption.to_owned();
         s.items.push(item);
+    }
+
+    /// A one-line note with longer help folded behind "More".
+    fn note_more(&self, s: &mut Section, text: &str, more: &str) {
+        self.note(s, text, false);
+        if let Some(item) = s.items.last_mut() {
+            item.hint = more.to_owned();
+        }
     }
 
     fn note(&self, s: &mut Section, text: &str, warning: bool) {
@@ -858,10 +867,10 @@ fn music_page(b: &mut Builder<'_>) {
         b.range(s, mascot::EXCITEMENT, Some("Stand at energy"), 1.0, |v| {
             format!("{v:.0}%")
         });
-        b.note(
+        b.note_more(
             s,
             "A character on Automatic stands up above this energy and sits when the music calms.",
-            false,
+            "It stands after the music stays lively for a while, not on one loud moment. A higher value keeps it seated more often. Standing needs standing artwork.",
         );
         b.action(
             s,
@@ -900,13 +909,13 @@ fn music_page(b: &mut Builder<'_>) {
         ] {
             b.toggle(s, id, Some(label));
         }
-        b.note(
+        b.note_more(
             s,
             "Random picks among the checked styles. Light wave needs a holding arm and an item.",
-            false,
+            "The style changes on a beat boundary. With nothing checked, Random uses Nod. Characters without gesture artwork use the built-in glow stick. These apply to every character.",
         );
     });
-    b.section("Follow beat (trial)", |s, b| {
+    b.section("Follow beat", |s, b| {
         b.toggle(s, mascot::BEAT, Some("Follow beat"));
         b.note(s, "Nods land on the beat instead of a steady bob.", false);
         if !settings.bool(mascot::BEAT) {
@@ -957,15 +966,18 @@ fn music_page(b: &mut Builder<'_>) {
                 ("cumulative", "Cumulative".to_owned()),
             ],
         );
-        b.note(
+        b.note_more(
             s,
             "Try another engine if the nod drifts off the beat. Changing it restarts the search.",
-            false,
+            "Classic is the original. Bass-weighted counts kicks more than hats. Sticky tempo resists jumping to half or double time. Cumulative carries the beat's phase forward between hits.",
         );
         for item in &mut s.items[first..] {
             item.nested = true;
         }
     });
+    if let Some(section) = b.sections.last_mut() {
+        section.tag = "Trial".into();
+    }
 }
 
 fn shortcuts_page(b: &mut Builder<'_>) {
@@ -1449,6 +1461,44 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn long_help_folds_behind_more_and_the_trial_is_tagged() {
+        let on = [
+            (mascot::MUSIC, Value::Bool(true)),
+            (mascot::BEAT, Value::Bool(true)),
+        ];
+        let music = build_with(PageId::Music, false, None, false, Some(&on));
+        let beat = music.sections.last().expect("follow beat");
+        assert_eq!(
+            (beat.title.as_str(), beat.tag.as_str()),
+            ("Follow beat", "Trial")
+        );
+        assert!(music.sections.iter().filter(|s| !s.tag.is_empty()).count() == 1);
+        // A note shows one line; the rest waits behind More.
+        for page in NAV.iter().map(|n| n.2) {
+            let built = build_with(page, false, None, false, Some(&on));
+            for note in built
+                .sections
+                .iter()
+                .flat_map(|s| &s.items)
+                .filter(|i| i.kind == Kind::Note)
+            {
+                assert!(
+                    note.text.chars().count() <= 150,
+                    "a note is too long to scan: {}",
+                    note.text
+                );
+            }
+        }
+        let folded = music
+            .sections
+            .iter()
+            .flat_map(|s| &s.items)
+            .filter(|i| i.kind == Kind::Note && !i.hint.is_empty())
+            .count();
+        assert!(folded >= 3);
     }
 
     #[test]

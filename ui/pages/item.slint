@@ -28,6 +28,8 @@ export struct ItemModel {
 
 export struct SectionModel {
     title: string,
+    // A small label beside the title, such as "Trial".
+    tag: string,
     items: [ItemModel],
 }
 
@@ -44,6 +46,8 @@ export component ItemView inherits VerticalLayout {
     in-out property <bool> on: item.on;
     in-out property <float> value: item.value;
     in-out property <int> index: item.index;
+    // A note's longer help is showing.
+    property <bool> more;
     padding-left: root.item.nested ? Tokens.space-5 : 0px;
     changed item => {
         root.on = root.item.on;
@@ -55,13 +59,25 @@ export component ItemView inherits VerticalLayout {
         text: root.item.text;
         warning: true;
     }
-    if root.item.kind == 4 && !root.item.warning: Rectangle {
-        min-height: note.preferred-height + Tokens.space-2;
-        note := Hint {
-            x: Tokens.space-3;
-            y: Tokens.space-1;
-            width: parent.width - 2 * Tokens.space-3;
-            text: root.item.text;
+    // A note's `hint` is longer help, folded behind More.
+    if root.item.kind == 4 && !root.item.warning: VerticalLayout {
+        padding-left: Tokens.space-3;
+        padding-right: Tokens.space-3;
+        padding-top: Tokens.space-1;
+        padding-bottom: Tokens.space-1;
+        spacing: Tokens.space-1;
+        Hint { text: root.item.text; }
+        if root.item.hint != "" && root.more: Hint { text: root.item.hint; }
+        if root.item.hint != "": HorizontalLayout {
+            alignment: start;
+            Text {
+                text: root.more ? "Less" : "More";
+                font-size: Tokens.font-label;
+                color: Tokens.cyan-text;
+                TouchArea {
+                    clicked => { root.more = !root.more; }
+                }
+            }
         }
     }
     if root.item.kind == 10: EntryRow {

@@ -105,6 +105,8 @@ impl Item {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Section {
     pub title: String,
+    /// A small label beside the title, such as "Trial".
+    pub tag: String,
     pub items: Vec<Item>,
 }
 

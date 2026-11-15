@@ -1,8 +1,7 @@
 # Settings: scope, hierarchy and flow
 
 A review of the Slint Settings window as it stands on `refactor/settings-registry`,
-and the structure it should move to. Steps A, B and C (section 6) are done; D
-are not.
+and the structure it should move to. All four steps in section 6 are done; what each left out is listed at the end.
 
 ## 1. What is wrong today
 
@@ -219,3 +218,21 @@ character from its right-click menu.
 Not done: an exported pack does not carry the character's music pose and
 hand; they stay with the user's overrides. Setting a character back to the
 app-wide values drops its own, so it follows them again.
+
+### Step D, as built
+
+- Cards wrap onto further rows when they do not fit one (pointers, the Add
+  picker).
+- Navigation group labels line up with the entries under them, with space
+  above each group.
+- A section can carry a tag; Follow beat shows "Trial" instead of having it in
+  its title.
+- A note can fold longer help behind "More" (`note_more` in `pages.rs`). The
+  shortcut notes on Spotlight & lens and the Movement, Dancing and beat engine
+  notes on Music & dance use it. A test fails if any note's visible line is
+  longer than 150 characters.
+
+Still open from the whole plan: "Annotation on" on General, the data folder
+and licences under About, "Edit in the studio" on a character's row, opening
+Settings on one character from its menu, and carrying a character's music
+pose and hand in an exported pack.

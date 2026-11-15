@@ -232,10 +232,35 @@ export component Page inherits Rectangle {
 }
 
 // A titled group of rows on a card.
+// A small label beside a title: "Trial" for something still being tried out.
+export component Tag inherits Rectangle {
+    in property <string> text;
+    height: label.preferred-height + Tokens.space-1;
+    width: label.preferred-width + 2 * Tokens.space-2;
+    border-radius: Tokens.radius-round;
+    background: Tokens.amber-bg;
+    label := Text {
+        x: Tokens.space-2;
+        y: (parent.height - self.height) / 2;
+        text: root.text;
+        font-size: Tokens.font-label;
+        color: Tokens.amber-text;
+    }
+}
+
 export component Section inherits VerticalLayout {
     in property <string> title;
+    in property <string> tag;
     spacing: Tokens.space-2;
-    SectionTitle { text: root.title; }
+    HorizontalLayout {
+        alignment: start;
+        spacing: Tokens.space-2;
+        SectionTitle { text: root.title; }
+        if root.tag != "": VerticalLayout {
+            alignment: center;
+            Tag { text: root.tag; }
+        }
+    }
     Rectangle {
         background: Tokens.well;
         border-radius: Tokens.radius-card;
@@ -534,12 +559,18 @@ export component Cards inherits Rectangle {
     in property <[string]> names;
     in-out property <int> current;
     callback selected(int);
-    height: 104px;
-    HorizontalLayout {
-        spacing: Tokens.space-2;
-        alignment: start;
+    // As many to a row as fit; the rest wrap onto further rows.
+    property <int> columns: max(1, floor((root.width + Tokens.space-2) / (Tokens.card-w + Tokens.space-2)));
+    property <int> rows: max(1, ceil(root.names.length / root.columns));
+    horizontal-stretch: 1;
+    min-width: Tokens.card-w;
+    height: root.rows * Tokens.card-h + (root.rows - 1) * Tokens.space-2;
+    Rectangle {
         for name[i] in root.names: Rectangle {
-            width: 92px;
+            x: mod(i, root.columns) * (Tokens.card-w + Tokens.space-2);
+            y: floor(i / root.columns) * (Tokens.card-h + Tokens.space-2);
+            width: Tokens.card-w;
+            height: Tokens.card-h;
             border-radius: Tokens.radius-card;
             border-width: i == root.current ? Tokens.ring : Tokens.hairline;
             border-color: i == root.current ? Tokens.cyan-text : Tokens.line-strong;
