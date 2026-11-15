@@ -688,6 +688,8 @@ impl App {
                     self.editing_pack = None;
                     self.page = Page::Pointer;
                     self.notice = None;
+                    // The editor is still a classic Settings view.
+                    tasks.push(self.open_classic_settings());
                 }
                 Err(e) => self.notice = Some(format!("Could not use that image: {e}")),
             },

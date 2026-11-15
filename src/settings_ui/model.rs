@@ -18,6 +18,35 @@ pub enum Kind {
     Segments = 6,
     /// A choice among colours.
     Swatches = 7,
+    /// A choice among pictures with names.
+    Cards = 8,
+}
+
+/// A small picture, as RGBA. Equal when it is the same buffer.
+#[derive(Debug, Clone)]
+pub struct Thumb {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: std::sync::Arc<Vec<u8>>,
+}
+
+impl PartialEq for Thumb {
+    fn eq(&self, other: &Self) -> bool {
+        self.width == other.width
+            && self.height == other.height
+            && std::sync::Arc::ptr_eq(&self.rgba, &other.rgba)
+    }
+}
+
+impl Thumb {
+    /// No picture; shown as a badge.
+    pub fn none() -> Self {
+        Self {
+            width: 0,
+            height: 0,
+            rgba: std::sync::Arc::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -37,6 +66,8 @@ pub struct Item {
     pub index: i32,
     /// A swatch row's colours, as RGBA.
     pub colors: Vec<[u8; 4]>,
+    /// A card row's pictures.
+    pub pictures: Vec<Thumb>,
     pub enabled: bool,
     pub warning: bool,
 }
@@ -56,6 +87,7 @@ impl Item {
             options: Vec::new(),
             index: 0,
             colors: Vec::new(),
+            pictures: Vec::new(),
             enabled: true,
             warning: false,
         }

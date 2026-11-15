@@ -331,6 +331,20 @@ fn to_slint(item: &Item) -> ItemModel {
                 .map(|&[r, g, b, a]| slint::Color::from_argb_u8(a, r, g, b))
                 .collect::<Vec<_>>(),
         )),
+        pictures: ModelRc::new(VecModel::from(
+            item.pictures
+                .iter()
+                .map(|t| {
+                    if t.width == 0 {
+                        return slint::Image::default();
+                    }
+                    let mut buffer =
+                        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(t.width, t.height);
+                    buffer.make_mut_bytes().copy_from_slice(&t.rgba);
+                    slint::Image::from_rgba8(buffer)
+                })
+                .collect::<Vec<_>>(),
+        )),
         enabled: item.enabled,
         warning: item.warning,
     }

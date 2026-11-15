@@ -107,7 +107,7 @@ export component Segmented inherits Rectangle {
     in-out property <int> current;
     callback selected(int);
     height: Tokens.h-control;
-    preferred-width: Tokens.label-w;
+    preferred-width: max(Tokens.label-w, root.options.length * 96px);
     background: Tokens.well;
     border-radius: Tokens.radius-control;
     HorizontalLayout {
@@ -453,6 +453,66 @@ export component Swatches inherits HorizontalLayout {
             clicked => {
                 root.current = i;
                 root.selected(i);
+            }
+        }
+    }
+}
+
+// Pictures with a name under each, to pick one. A picture of no size is shown
+// as a round badge instead.
+export component Cards inherits Rectangle {
+    in property <[image]> pictures;
+    in property <[string]> names;
+    in-out property <int> current;
+    callback selected(int);
+    height: 104px;
+    HorizontalLayout {
+        spacing: Tokens.space-2;
+        alignment: end;
+        for name[i] in root.names: Rectangle {
+            width: 92px;
+            border-radius: Tokens.radius-card;
+            border-width: i == root.current ? Tokens.ring : Tokens.hairline;
+            border-color: i == root.current ? Tokens.cyan-text : Tokens.line-strong;
+            background: card.has-hover ? Tokens.hover : Tokens.control;
+            if root.pictures[i].width > 0: Image {
+                source: root.pictures[i];
+                x: (parent.width - self.width) / 2;
+                y: Tokens.space-3;
+                width: 64px;
+                height: 52px;
+                image-fit: contain;
+            }
+            if root.pictures[i].width == 0: Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: Tokens.space-3 + 6px;
+                width: 40px;
+                height: 40px;
+                border-radius: Tokens.radius-round;
+                background: Tokens.danger-bg;
+                Text {
+                    text: "◎";
+                    font-size: Tokens.font-body;
+                    color: Tokens.danger;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+            Text {
+                x: Tokens.space-1;
+                y: parent.height - self.height - Tokens.space-3;
+                width: parent.width - 2 * Tokens.space-1;
+                text: name;
+                font-size: Tokens.font-label;
+                color: i == root.current ? Tokens.text : Tokens.muted;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+            card := TouchArea {
+                clicked => {
+                    root.current = i;
+                    root.selected(i);
+                }
             }
         }
     }

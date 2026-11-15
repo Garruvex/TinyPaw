@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use serde_json::Value as Json;
 
+use super::model::Thumb;
 use super::pages::{self, Context, PageId};
 use super::{Cmd, Snapshot};
 use crate::features;
@@ -46,8 +47,21 @@ pub struct WindowInfo {
     pub title: String,
 }
 
+/// A pointer pack the resident app has loaded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PackInfo {
+    pub id: String,
+    pub name: String,
+    pub accent: Option<[u8; 4]>,
+    /// Imported by the user, so it can be re-aimed and removed.
+    pub custom: bool,
+    pub forearm: bool,
+    pub thumb: Thumb,
+}
+
 /// What the resident app reports.
 pub struct State {
+    pub packs: Vec<PackInfo>,
     pub windows: Vec<WindowInfo>,
     pub shortcuts: Vec<ShortcutInfo>,
     pub values: SettingValues,
@@ -105,7 +119,30 @@ pub fn parse_state(registry: &Registry, reply: &str) -> Option<State> {
                 .collect()
         })
         .unwrap_or_default();
+    let packs = json
+        .get("packs")
+        .and_then(Json::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|p| {
+                    let accent = p.get("accent").and_then(Json::as_str).and_then(|hex| {
+                        let n = u32::from_str_radix(hex.trim_start_matches('#'), 16).ok()?;
+                        Some([(n >> 16) as u8, (n >> 8) as u8, n as u8, 255])
+                    });
+                    Some(PackInfo {
+                        id: p.get("id")?.as_str()?.to_owned(),
+                        name: p.get("name")?.as_str()?.to_owned(),
+                        accent,
+                        custom: p.get("custom")?.as_bool()?,
+                        forearm: p.get("forearm")?.as_bool()?,
+                        thumb: Thumb::none(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     Some(State {
+        packs,
         windows,
         shortcuts,
         values,
@@ -126,6 +163,71 @@ pub fn value_text(value: &Value) -> String {
     }
 }
 
+/// One change on a page can be several settings: choosing a pack also means
+/// drawing with the paw, and picking a forearm colour means not using the
+/// automatic one.
+fn expand(id: &'static str, value: Value) -> Vec<(&'static str, Value)> {
+    use crate::features::point;
+    match (id, value) {
+        (pages::POINTER, Value::Choice("laser")) => {
+            vec![(point::STYLE, Value::Choice("laser"))]
+        }
+        (pages::POINTER, pack) => vec![(point::STYLE, Value::Choice("paw")), (point::PACK, pack)],
+        (point::FOREARM_COLOR, color) => vec![
+            (point::FOREARM_COLOR, color),
+            (point::FOREARM_AUTO_COLOR, Value::Bool(false)),
+        ],
+        (id, value) => vec![(id, value)],
+    }
+}
+
+/// Card pictures of the packs, loaded once from disk the way the resident app
+/// loads them, and again when a pack it reports is not among them.
+#[derive(Default)]
+struct Thumbs(std::collections::HashMap<String, Thumb>);
+
+fn fill_thumbs(packs: &mut [PackInfo], thumbs: &mut Thumbs) {
+    if packs.iter().any(|p| !thumbs.0.contains_key(&p.id)) {
+        let (loaded, _) = crate::packs::load_all();
+        for pack in loaded {
+            thumbs.0.insert(pack.id.to_owned(), thumb_of(&pack));
+        }
+    }
+    for pack in packs {
+        if let Some(thumb) = thumbs.0.get(&pack.id) {
+            pack.thumb = thumb.clone();
+        }
+    }
+}
+
+/// The pack's picture at card size.
+fn thumb_of(pack: &crate::packs::Pack) -> Thumb {
+    use iced::advanced::image::Handle;
+    let Handle::Rgba {
+        width,
+        height,
+        pixels,
+        ..
+    } = &pack.image
+    else {
+        return Thumb::none();
+    };
+    let Some(source) = image::RgbaImage::from_raw(*width, *height, pixels.to_vec()) else {
+        return Thumb::none();
+    };
+    let scale = (128.0 / *height as f32).min(1.0);
+    let (w, h) = (
+        ((*width as f32 * scale) as u32).max(1),
+        ((*height as f32 * scale) as u32).max(1),
+    );
+    let small = image::imageops::resize(&source, w, h, image::imageops::FilterType::Triangle);
+    Thumb {
+        width: w,
+        height: h,
+        rgba: std::sync::Arc::new(small.into_raw()),
+    }
+}
+
 fn snapshot(registry: &Registry, state: &State, page: usize, notice: &str) -> Snapshot {
     let current = page.min(pages::NAV.len() - 1);
     let id: PageId = pages::NAV[current].2;
@@ -135,6 +237,7 @@ fn snapshot(registry: &Registry, state: &State, page: usize, notice: &str) -> Sn
         displays: &state.displays,
         shortcuts: &state.shortcuts,
         windows: &state.windows,
+        packs: &state.packs,
         has_custom_sound: state.custom_sound,
     };
     let built = pages::build(id, &cx);
@@ -175,6 +278,8 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
         eprintln!("tinypaw: Settings needs the running TinyPaw. Start it with `tinypaw`.");
         return super::quit();
     };
+    let mut thumbs = Thumbs::default();
+    fill_thumbs(&mut state.packs, &mut thumbs);
     let mut page = start_page;
     let mut notice = String::new();
     super::show(snapshot(&registry, &state, page, &notice), false);
@@ -183,10 +288,15 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
         match rx.recv_timeout(REFRESH) {
             Ok(Cmd::Set(id, value)) => {
                 // Show it now; the resident app confirms on the next refresh.
-                let _ = registry.set(&mut state.values, id, value.clone());
+                let sets = expand(id, value);
+                for (id, value) in &sets {
+                    let _ = registry.set(&mut state.values, id, value.clone());
+                }
                 notice.clear();
                 super::show(snapshot(&registry, &state, page, &notice), false);
-                let _ = ipc::request(&format!("set {id} {}", value_text(&value)));
+                for (id, value) in &sets {
+                    let _ = ipc::request(&format!("set {id} {}", value_text(value)));
+                }
             }
             Ok(Cmd::Action(name)) if name.starts_with("page:") => {
                 page = pages::index_of(&name["page:".len()..]);
@@ -217,9 +327,10 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
             Err(RecvTimeoutError::Disconnected) => return,
         }
         match fetch() {
-            Some(next) => {
+            Some(mut next) => {
                 failures = 0;
                 let focus = next.focus;
+                fill_thumbs(&mut next.packs, &mut thumbs);
                 state = next;
                 super::show(snapshot(&registry, &state, page, &notice), focus);
             }

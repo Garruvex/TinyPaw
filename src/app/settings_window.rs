@@ -75,7 +75,21 @@ impl App {
             .iter()
             .map(|w| serde_json::json!({ "id": w.id, "title": w.title }))
             .collect();
+        let packs: Vec<_> = self
+            .packs
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "id": p.id,
+                    "name": p.name,
+                    "accent": p.accent.map(|[r, g, b, _]| format!("#{r:02x}{g:02x}{b:02x}")),
+                    "custom": p.folder.is_some(),
+                    "forearm": p.forearm.is_some(),
+                })
+            })
+            .collect();
         let state = serde_json::json!({
+            "packs": packs,
             "windows": windows,
             "shortcuts": shortcuts,
             "values": crate::preferences::to_json(self.session.settings()),
@@ -99,6 +113,18 @@ impl App {
             "sound.import" => tasks.push(self.ui_message(UiMsg::ImportWav, now, out)),
             "open-classic" => tasks.push(self.open_classic_settings()),
             "shortcuts.reset" => self.reset_shortcuts(),
+            "pointer.add" => tasks.push(self.ui_message(UiMsg::AddPointer, now, out)),
+            "pointer.import" => tasks.push(self.ui_message(UiMsg::ImportPack, now, out)),
+            "pointer.reaim" => {
+                tasks.push(self.ui_message(UiMsg::EditPack, now, out));
+                if self.pointer_draft.is_some() {
+                    self.page = crate::view::settings::Page::Pointer;
+                    tasks.push(self.open_classic_settings());
+                }
+            }
+            "pointer.remove" => tasks.push(self.ui_message(UiMsg::RemovePack, now, out)),
+            "pointer.prompt" => tasks.push(self.ui_message(UiMsg::CopyPointerPrompt, now, out)),
+            "pointer.arm-prompt" => tasks.push(self.ui_message(UiMsg::CopyForearmPrompt, now, out)),
             "lens.refresh" => {
                 #[cfg(windows)]
                 {

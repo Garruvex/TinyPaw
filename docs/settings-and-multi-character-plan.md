@@ -290,9 +290,19 @@ Slice 3d results. The app now runs the desktop character on the stage and nothin
 | 4a | Slint in the main crate; the Settings window as its own process; page definitions that the registry mounts; Sound and Display & motion pages | Done; opt in with `TINYPAW_SLINT_SETTINGS=1` |
 | 4b | Shortcuts (rebinding is custom) | Done |
 | 4c | Ink & text, Spotlight & lens | Done |
-| 4d | Pointer | Not started |
+| 4d | Pointer | Done, except the live preview and the pointer editor |
 | 4e | Music response (moved out of the Character page) and the Characters page, with Customize opening the existing editor until step 5 | Not started |
 | 4f | First-run window; delete the Iced settings views | Not started |
+
+Slice 4d results. The Pointer page moved over:
+
+- **Page:** a row of pointer cards (each pack's picture, then Laser), then, unless Laser is chosen, Paw appearance (Furry Paw, Stretch Paw or Classic Stick with a line for each, size, and paw angle for Furry Paw), Forearm colour (only for Stretch Paw on a pack with no forearm art: use pointer colour, and ten swatches), Tap stamp (Off, Cat, Dog; fade; a link to Ink), and Custom pointers (Add pointer, Import folder, Re-aim and Remove for an imported pack, the two prompt copies, Preview tap sound).
+- **Choosing a card sets two settings.** A pack card sets the style to paw and the pack; Laser sets the style. A forearm swatch also turns off the automatic colour. The window expands these into the same `set` commands the CLI uses, so there is still one write path.
+- **Pictures:** the resident app reports each pack's name, accent, whether it is imported and whether it has a forearm; the Settings process loads the pack pictures itself the same way the resident app does, shrinks them to card size, and reloads only when a pack it has not seen appears.
+- **Kit additions:** a `Cards` row (picture or badge, name, ringed when chosen) and the segmented choice grows with its number of options.
+- **Still in the classic window for now:** the pointer editor (click the exact tip, name, save; Re-aim). Add pointer and Re-aim open the classic Settings on its Pointer page once a draft exists; it goes in step 5 with the other editors. The live preview tiles and the forearm red/green/blue sliders are not on the new page; the swatches cover the common case.
+- **Checked:** the page in the real app with all four bundled packs; 11 settings tests, 286 in all, clippy clean. Not checked by hand: clicking a card, Add pointer's file dialog and the hand-off to the classic editor.
+- **Note for screenshots:** a Settings window started from this tool's shell opens minimized; restore it and capture it with PrintWindow.
 
 Slice 4c results. Ink & text and Spotlight & lens moved over:
 

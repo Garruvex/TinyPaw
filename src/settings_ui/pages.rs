@@ -6,9 +6,9 @@
 use std::collections::HashMap;
 
 use super::DisplayInfo;
-use super::link::{ShortcutInfo, WindowInfo};
-use super::model::{Extra, Item, Kind, Section};
-use crate::features::{display, sound, spotlight, system, text, upcoming};
+use super::link::{PackInfo, ShortcutInfo, WindowInfo};
+use super::model::{Extra, Item, Kind, Section, Thumb};
+use crate::features::{display, point, sound, spotlight, system, text, upcoming};
 use crate::registry::{Registry, SettingValues, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +21,10 @@ pub enum PageId {
     Sound,
     Display,
 }
+
+/// The pointer cards, one of them chosen. Not a setting of its own: choosing a
+/// card sets the style and the pack together.
+pub const POINTER: &str = "point.pointer";
 
 /// Navigation order: group, name, page.
 pub const NAV: &[(&str, &str, PageId)] = &[
@@ -54,6 +58,7 @@ pub struct Context<'a> {
     pub displays: &'a [DisplayInfo],
     pub shortcuts: &'a [ShortcutInfo],
     pub windows: &'a [WindowInfo],
+    pub packs: &'a [PackInfo],
     pub has_custom_sound: bool,
 }
 
@@ -210,6 +215,20 @@ impl<'a> Builder<'a> {
         );
     }
 
+    /// A choice shown as side-by-side buttons.
+    fn segment_choice(
+        &mut self,
+        s: &mut Section,
+        id: &'static str,
+        label: &str,
+        options: Vec<(&'static str, String)>,
+    ) {
+        self.choice(s, id, Some(label), options);
+        if let Some(item) = s.items.last_mut() {
+            item.kind = Kind::Segments;
+        }
+    }
+
     fn action(&self, s: &mut Section, id: &str, label: &str, caption: &str) {
         let mut item = Item::new(id, Kind::Action, label);
         item.text = caption.to_owned();
@@ -263,7 +282,11 @@ pub fn build(page: PageId, cx: &Context<'_>) -> Built {
                 "In annotation from the quick bar, or anywhere by shortcut.",
             )
         }
-        PageId::Pointer | PageId::Characters => {
+        PageId::Pointer => {
+            pointer_page(&mut b);
+            ("Pointer", "How the paw looks while you draw.")
+        }
+        PageId::Characters => {
             b.section("Not moved yet", |s, b| {
                 b.note(
                     s,
@@ -427,6 +450,173 @@ fn lens_source(s: &mut Section, b: &mut Builder<'_>) {
     b.note(s, "Lens capture is available on Windows.", false);
 }
 
+/// Colours for the generated forearm.
+const FOREARM_COLORS: [[u8; 4]; 10] = [
+    [36, 39, 60, 255],
+    [52, 54, 130, 255],
+    [91, 155, 255, 255],
+    [255, 255, 255, 255],
+    [90, 90, 98, 255],
+    [242, 166, 90, 255],
+    [170, 100, 64, 255],
+    [244, 154, 168, 255],
+    [164, 112, 220, 255],
+    [104, 184, 128, 255],
+];
+
+fn pointer_page(b: &mut Builder<'_>) {
+    let settings = b.cx.settings;
+    let laser = settings.choice(point::STYLE) == "laser";
+    let current = settings.choice(point::PACK);
+    let pack =
+        b.cx.packs
+            .iter()
+            .find(|p| p.id == current)
+            .or_else(|| b.cx.packs.first());
+    b.section("Choose a pointer", |s, b| {
+        let mut item = Item::new(POINTER, Kind::Cards, "");
+        let mut choices: Vec<Value> = Vec::new();
+        for p in b.cx.packs {
+            item.options.push(p.name.clone());
+            item.pictures.push(p.thumb.clone());
+            choices.push(Value::Choice(crate::platform::intern(&p.id)));
+        }
+        item.options.push("Laser".into());
+        item.pictures.push(Thumb::none());
+        choices.push(Value::Choice("laser"));
+        item.index = if laser {
+            choices.len() as i32 - 1
+        } else {
+            pack.and_then(|p| b.cx.packs.iter().position(|q| q.id == p.id))
+                .map_or(-1, |i| i as i32)
+        };
+        s.items.push(item);
+        b.extras.insert(
+            POINTER.to_owned(),
+            Extra {
+                step: None,
+                choices,
+            },
+        );
+    });
+    if !laser {
+        let presentation = settings.choice(point::PRESENTATION);
+        b.section("Paw appearance", |s, b| {
+            b.segment_choice(
+                s,
+                point::PRESENTATION,
+                "Style",
+                vec![
+                    ("furry", "Furry Paw".to_owned()),
+                    ("stretch", "Stretch Paw".to_owned()),
+                    ("stick", "Classic Stick".to_owned()),
+                ],
+            );
+            b.note(
+                s,
+                match presentation {
+                    "stick" => "The paw on a slim rod from an off-screen grip, lower right.",
+                    "stretch" => {
+                        "A curved forearm follows the paw. Packs without forearm art use their accent colour."
+                    }
+                    _ => "A compact paw at the pointer.",
+                },
+                false,
+            );
+            b.range(s, point::SIZE, None, 4.0, |v| format!("{v:.0} px"));
+            if presentation == "furry" {
+                b.range(s, point::ANGLE, Some("Paw angle"), 5.0, |v| format!("{v:.0}\u{b0}"));
+                b.note(s, "Positive angles reach from the lower right.", false);
+            }
+        });
+        if presentation == "stretch" && pack.is_none_or(|p| !p.forearm) {
+            b.section("Forearm colour", |s, b| {
+                b.note(
+                    s,
+                    "Used by Stretch Paw when no forearm PNG is attached.",
+                    false,
+                );
+                b.toggle(s, point::FOREARM_AUTO_COLOR, Some("Use pointer colour"));
+                // With the automatic colour on, the swatch shown is the one in use.
+                let auto = settings.bool(point::FOREARM_AUTO_COLOR);
+                let shown = if auto {
+                    pack.and_then(|p| p.accent)
+                        .unwrap_or([0xF2, 0xA6, 0x5A, 255])
+                } else {
+                    settings.color(point::FOREARM_COLOR)
+                };
+                let mut item = Item::new(point::FOREARM_COLOR, Kind::Swatches, "Colour");
+                item.colors = FOREARM_COLORS.to_vec();
+                item.index = FOREARM_COLORS
+                    .iter()
+                    .position(|c| *c == shown)
+                    .map_or(-1, |i| i as i32);
+                s.items.push(item);
+                b.extras.insert(
+                    point::FOREARM_COLOR.to_owned(),
+                    Extra {
+                        step: None,
+                        choices: FOREARM_COLORS.iter().map(|c| Value::Color(*c)).collect(),
+                    },
+                );
+            });
+        }
+        b.section("Tap stamp", |s, b| {
+            b.segment_choice(
+                s,
+                point::TAP_STAMP,
+                "Stamp",
+                vec![
+                    ("off", "Off".to_owned()),
+                    ("cat", "Cat".to_owned()),
+                    ("dog", "Dog".to_owned()),
+                ],
+            );
+            b.choice(
+                s,
+                system::INK_FADE,
+                Some("Fade"),
+                vec![
+                    ("keep", "Keep marks".to_owned()),
+                    ("3s", "Fade after 3 seconds".to_owned()),
+                ],
+            );
+            b.note(
+                s,
+                "Each tap leaves a paw print in your ink colour. Fade is shared with ink.",
+                false,
+            );
+            b.action(s, "page:ink", "Ink", "Ink settings");
+        });
+    }
+    b.section("Custom pointers", |s, b| {
+        b.action(s, "pointer.add", "A transparent PNG", "Add pointer…");
+        b.action(s, "pointer.import", "A pointer pack folder", "Import folder…");
+        if !laser && let Some(p) = pack.filter(|p| p.custom) {
+            b.action(
+                s,
+                "pointer.reaim",
+                &format!("Aim {}", p.name),
+                "Re-aim pointer",
+            );
+            b.action(
+                s,
+                "pointer.remove",
+                &format!("Delete {}", p.name),
+                "Remove pointer",
+            );
+        }
+        b.note(
+            s,
+            "To create matching artwork, share a prompt and your character reference with an artist or image tool.",
+            false,
+        );
+        b.action(s, "pointer.prompt", "Pointer art", "Copy pointer prompt");
+        b.action(s, "pointer.arm-prompt", "Forearm art", "Copy forearm prompt");
+        b.action(s, "sound.preview", "Tap sound", "Preview");
+    });
+}
+
 fn shortcuts_page(b: &mut Builder<'_>) {
     b.section("How drawing starts", |s, b| {
         b.choice(
@@ -559,6 +749,14 @@ mod tests {
                 settings: &settings,
                 displays: &displays,
                 shortcuts: &shortcuts(),
+                packs: &[PackInfo {
+                    id: "yohta".into(),
+                    name: "Yohta".into(),
+                    accent: Some([1, 2, 3, 255]),
+                    custom: false,
+                    forearm: false,
+                    thumb: Thumb::none(),
+                }],
                 windows: &[WindowInfo {
                     id: "w1".into(),
                     title: "Notepad".into(),
@@ -579,7 +777,13 @@ mod tests {
     #[test]
     fn page_items_name_registered_settings_and_carry_how_to_set_them() {
         let registry = Registry::build(features::BUILTINS).expect("valid built-ins");
-        for page in [PageId::Sound, PageId::Display, PageId::Ink, PageId::Tools] {
+        for page in [
+            PageId::Pointer,
+            PageId::Sound,
+            PageId::Display,
+            PageId::Ink,
+            PageId::Tools,
+        ] {
             let built = build_page(page, true);
             for item in built.sections.iter().flat_map(|s| &s.items) {
                 match item.kind {
@@ -591,11 +795,15 @@ mod tests {
                         );
                     }
                     Kind::Action | Kind::Note | Kind::Shortcut => {}
+                    Kind::Cards => {}
                     Kind::Segments | Kind::Swatches => {
                         assert!(registry.setting(&item.id).is_some(), "{}", item.id);
                     }
                 }
-                if matches!(item.kind, Kind::Choice | Kind::Segments | Kind::Swatches) {
+                if matches!(
+                    item.kind,
+                    Kind::Choice | Kind::Segments | Kind::Swatches | Kind::Cards
+                ) {
                     let extra = &built.extras[&item.id];
                     let shown = if item.kind == Kind::Swatches {
                         item.colors.len()
@@ -611,6 +819,26 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_pointer_page_offers_each_pack_and_the_laser_and_hides_paw_settings_for_the_laser() {
+        let built = build_page(PageId::Pointer, false);
+        let cards = &built.sections[0].items[0];
+        assert_eq!(cards.kind, Kind::Cards);
+        assert_eq!(cards.options, ["Yohta", "Laser"]);
+        assert_eq!(cards.index, 0);
+        let titles: Vec<_> = built.sections.iter().map(|s| s.title.as_str()).collect();
+        assert!(titles.contains(&"Paw appearance") && titles.contains(&"Tap stamp"));
+        // The default presentation shows the paw angle; the default pack is not custom.
+        let ids: Vec<_> = built
+            .sections
+            .iter()
+            .flat_map(|s| &s.items)
+            .map(|i| i.id.as_str())
+            .collect();
+        assert!(ids.contains(&point::ANGLE));
+        assert!(!ids.contains(&"pointer.reaim"));
     }
 
     #[test]
