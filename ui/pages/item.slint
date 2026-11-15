@@ -37,6 +37,8 @@ export struct SectionModel {
 // item from the app replaces it.
 export component ItemView inherits VerticalLayout {
     in property <ItemModel> item;
+    // Draw a hairline above this row.
+    in property <bool> divider;
     // A shortcut row is waiting for the new key combination.
     in property <bool> capturing;
     callback toggled(bool);
@@ -80,13 +82,22 @@ export component ItemView inherits VerticalLayout {
             }
         }
     }
+    if root.divider: Rectangle {
+        height: Tokens.hairline;
+        background: Tokens.line;
+    }
     if root.item.kind == 10: EntryRow {
         picture: root.item.pictures[0];
         label: root.item.label;
         hint: root.item.hint;
         open: root.item.index == 1;
         checked <=> root.on;
+        value <=> root.value;
+        minimum: root.item.min;
+        maximum: root.item.max;
+        value-text: root.item.text;
         toggled(c) => { root.toggled(c); }
+        ranged(v) => { root.ranged(v); }
         clicked => { root.pressed(); }
     }
     // Cards fill the row from the left instead of sitting beside a label.
@@ -95,6 +106,7 @@ export component ItemView inherits VerticalLayout {
         Cards {
             pictures: root.item.pictures;
             names: root.item.options;
+            last-adds: root.item.warning;
             current <=> root.index;
             selected(i) => { root.chosen(i); }
         }

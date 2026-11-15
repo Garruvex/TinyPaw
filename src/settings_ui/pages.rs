@@ -27,11 +27,30 @@ pub enum PageId {
 /// card sets the style and the pack together.
 pub const POINTER: &str = "point.pointer";
 
-/// The picker's cards: choosing one puts that character on the desktop.
+/// The library's cards: choosing one puts that character on the desktop.
 pub const ADD: &str = "instance.add";
-/// Opens the picker, and leaves it without adding.
-pub const PICK: &str = "ui:pick";
-pub const PICK_CANCEL: &str = "ui:cancel";
+/// The library's last card: make a new character.
+pub const NEW: &str = "+new";
+
+/// A page's navigation icon, as SVG path commands on a 16 by 16 grid.
+pub fn icon(page: PageId) -> &'static str {
+    match page {
+        PageId::General => "M2 4 H14 M2 8 H14 M2 12 H14 M5 2.5 V5.5 M11 6.5 V9.5 M7 10.5 V13.5",
+        PageId::Pointer => "M3 2 L3 12 L6 9.5 L8 14 L9.8 13.2 L7.8 8.8 L11.5 8.8 Z",
+        PageId::Ink => "M2.5 13.5 L3.2 10.5 L10.5 3.2 L12.8 5.5 L5.5 12.8 Z M9.2 4.5 L11.5 6.8",
+        PageId::Tools => "M11 7 A4 4 0 1 1 3 7 A4 4 0 1 1 11 7 M10 10 L14 14",
+        PageId::Characters => {
+            "M14 8 A6 6 0 1 1 2 8 A6 6 0 1 1 14 8 M5.5 9.5 Q8 12 10.5 9.5 M6 6.2 V7 M10 6.2 V7"
+        }
+        PageId::Music => {
+            "M6 12.5 V3.5 L12.5 2.5 V11 M6 12.5 A1.8 1.8 0 1 1 2.4 12.5 A1.8 1.8 0 1 1 6 12.5 M12.5 11 A1.8 1.8 0 1 1 8.9 11 A1.8 1.8 0 1 1 12.5 11"
+        }
+        PageId::Shortcuts => {
+            "M1.5 4 H14.5 V12 H1.5 Z M4 6.5 H5 M7.5 6.5 H8.5 M11 6.5 H12 M4.5 9.5 H11.5"
+        }
+        PageId::Sound => "M2 6 H4.5 L8 3 V13 L4.5 10 H2 Z M10.5 5.5 Q12.5 8 10.5 10.5",
+    }
+}
 /// Shows or hides a page's fine tuning.
 pub const ADVANCED: &str = "ui:advanced";
 
@@ -43,8 +62,8 @@ pub const NAV: &[(&str, &str, PageId)] = &[
     ("Annotate", "Pointer", PageId::Pointer),
     ("Annotate", "Ink & text", PageId::Ink),
     ("Annotate", "Spotlight & lens", PageId::Tools),
-    ("Characters", "On the desktop", PageId::Characters),
-    ("Characters", "Music & dance", PageId::Music),
+    ("Desktop", "Characters", PageId::Characters),
+    ("Desktop", "Music & dance", PageId::Music),
     ("System", "Shortcuts", PageId::Shortcuts),
     ("System", "Sound", PageId::Sound),
 ];
@@ -78,8 +97,6 @@ pub struct Context<'a> {
     pub has_custom_sound: bool,
     /// The character on the desktop whose row is open.
     pub expanded: Option<u32>,
-    /// The page shows the picker for adding a character.
-    pub picking: bool,
     /// Fine tuning is unfolded.
     pub advanced: bool,
 }
@@ -314,16 +331,12 @@ pub fn build(page: PageId, cx: &Context<'_>) -> Built {
             pointer_page(&mut b);
             ("Pointer", "How the paw looks while you draw.")
         }
-        PageId::Characters if cx.picking => {
-            picker_page(&mut b);
-            (
-                "Add a character",
-                "Choose who to put on the desktop. The same character can be there more than once.",
-            )
-        }
         PageId::Characters => {
             characters_page(&mut b);
-            ("On the desktop", "The characters standing on your desktop.")
+            (
+                "Characters",
+                "Who stands on your desktop, and the library they come from.",
+            )
         }
         PageId::Music => {
             music_page(&mut b);
@@ -646,12 +659,6 @@ const FRAME_RATES: [(&str, &str); 3] = [
 ];
 
 fn characters_page(b: &mut Builder<'_>) {
-    b.section("", |s, b| {
-        b.toggle(s, mascot::ENABLED, Some("Show characters"));
-        b.action(s, PICK, "Add a character", "Add\u{2026}");
-    });
-    // One row per character on the desktop; the same character can be there
-    // more than once. The open row is followed by its settings.
     let thumb_of = |id: &str| {
         b.cx.characters
             .iter()
@@ -664,6 +671,7 @@ fn characters_page(b: &mut Builder<'_>) {
             .find(|c| c.id == id)
             .map_or(id.to_owned(), |c| c.name.clone())
     };
+    // The same character can be there more than once; those are numbered.
     let titles: Vec<String> =
         b.cx.instances
             .iter()
@@ -675,69 +683,111 @@ fn characters_page(b: &mut Builder<'_>) {
                         .filter(|o| o.character == i.character)
                         .collect();
                 match same.iter().position(|o| o.id == i.id) {
-                    Some(n) if same.len() > 1 => format!("{name} \u{b7} {}", n + 1),
+                    Some(n) if same.len() > 1 => format!("{name} {}", n + 1),
                     _ => name,
                 }
             })
             .collect();
     let range = b.cx.registry.range(mascot::HEIGHT);
-    if b.cx.instances.is_empty() {
-        b.section("Nobody here yet", |s, b| {
-            b.note(s, "Add a character to put it on the desktop.", false);
-        });
+    let count = b.cx.instances.len();
+    let title = if count == 0 {
+        "On the desktop".to_owned()
     } else {
-        b.section("Characters", |s, b| {
-            for (instance, title) in b.cx.instances.iter().zip(titles) {
-                let key = |field: &str| format!("instance.{}.{field}", instance.id);
-                let open = b.cx.expanded == Some(instance.id);
-                let mut entry = Item::new(&key("shown"), Kind::Entry, &title);
-                entry.on = instance.shown;
-                entry.index = i32::from(open);
-                entry.pictures.push(thumb_of(&instance.character));
-                if !instance.shown {
-                    entry.hint = "Hidden".into();
-                }
-                s.items.push(entry);
-                if !open {
-                    continue;
-                }
-                let first = s.items.len();
-                let mut size = Item::new(&key("height"), Kind::Range, "Size");
-                size.value = instance.height as f32;
-                size.min = *range.start() as f32;
-                size.max = *range.end() as f32;
-                size.text = format!("{:.0} px", instance.height);
-                s.items.push(size);
-                b.extras.insert(
-                    key("height"),
-                    Extra {
-                        step: Some(4.0),
-                        choices: Vec::new(),
-                    },
-                );
-                let mut eyes = Item::new(&key("eyes"), Kind::Toggle, "Eyes follow the cursor");
-                eyes.on = instance.eyes;
-                s.items.push(eyes);
-                let mut idle = Item::new(&key("idle"), Kind::Toggle, "Idle motion and blinking");
-                idle.on = instance.idle;
-                s.items.push(idle);
-                b.action(
-                    s,
-                    &format!("instance.remove.{}", instance.id),
-                    "Take it off the desktop",
-                    "Remove",
-                );
-                for item in &mut s.items[first..] {
-                    item.nested = true;
-                }
+        format!("On the desktop \u{b7} {count}")
+    };
+    b.section(&title, |s, b| {
+        b.toggle(s, mascot::ENABLED, Some("Show characters"));
+        // One row per character: its size and whether it is shown. The dots
+        // open the rest.
+        for (instance, title) in b.cx.instances.iter().zip(titles) {
+            let key = |field: &str| format!("instance.{}.{field}", instance.id);
+            let open = b.cx.expanded == Some(instance.id);
+            let mut entry = Item::new(&key("shown"), Kind::Entry, &title);
+            entry.on = instance.shown;
+            entry.index = i32::from(open);
+            entry.pictures.push(thumb_of(&instance.character));
+            if !instance.shown {
+                entry.hint = "Hidden".into();
             }
-            b.note(
-                s,
-                "Drag a character to move it, click it to see it react, right-click for its menu.",
-                false,
+            entry.options.push(key("height"));
+            entry.value = instance.height as f32;
+            entry.min = *range.start() as f32;
+            entry.max = *range.end() as f32;
+            entry.text = format!("{:.0} px", instance.height);
+            s.items.push(entry);
+            b.extras.insert(
+                key("height"),
+                Extra {
+                    step: Some(4.0),
+                    choices: Vec::new(),
+                },
             );
-        });
-    }
+            if !open {
+                continue;
+            }
+            let first = s.items.len();
+            let mut eyes = Item::new(&key("eyes"), Kind::Toggle, "Eyes follow the cursor");
+            eyes.on = instance.eyes;
+            s.items.push(eyes);
+            let mut idle = Item::new(&key("idle"), Kind::Toggle, "Idle motion and blinking");
+            idle.on = instance.idle;
+            s.items.push(idle);
+            b.action(
+                s,
+                &format!("instance.remove.{}", instance.id),
+                "Take it off the desktop",
+                "Remove",
+            );
+            for item in &mut s.items[first..] {
+                item.nested = true;
+            }
+        }
+        b.note(
+            s,
+            if count == 0 {
+                "Nobody here yet. Choose a character from the library below."
+            } else {
+                "Drag a character to move it, click it to see it react, right-click for its menu."
+            },
+            false,
+        );
+    });
+    b.section("Library", |s, b| {
+        // Choosing a card puts that character on the desktop; the last card
+        // makes a new one.
+        let mut item = Item::new(ADD, Kind::Cards, "");
+        let mut choices = Vec::new();
+        for c in b.cx.characters {
+            item.options.push(c.name.clone());
+            item.pictures.push(c.thumb.clone());
+            choices.push(Value::Choice(crate::platform::intern(&c.id)));
+        }
+        item.options.push("New".into());
+        item.pictures.push(Thumb::none());
+        choices.push(Value::Choice(NEW));
+        item.warning = true;
+        // Nothing is selected: a click adds.
+        item.index = -1;
+        s.items.push(item);
+        b.extras.insert(
+            ADD.to_owned(),
+            Extra {
+                step: None,
+                choices,
+            },
+        );
+        b.note(
+            s,
+            "Click a character to put it on the desktop. The same one can be there more than once.",
+            false,
+        );
+        b.action(
+            s,
+            "characters.edit",
+            "Customize, import and export",
+            "Open the studio\u{2026}",
+        );
+    });
     b.section("All characters", |s, b| {
         b.choice(
             s,
@@ -751,47 +801,6 @@ fn characters_page(b: &mut Builder<'_>) {
             false,
         );
         b.action(s, "character.reset", "Character positions", "Reset");
-    });
-    b.section("Library", |s, b| {
-        b.action(
-            s,
-            "characters.edit",
-            "Create and edit characters",
-            "Open the studio\u{2026}",
-        );
-    });
-}
-
-/// The page while adding a character: the library as cards. Choosing one adds
-/// it and returns to the list.
-fn picker_page(b: &mut Builder<'_>) {
-    b.section("Choose a character", |s, b| {
-        let mut item = Item::new(ADD, Kind::Cards, "");
-        let mut choices = Vec::new();
-        for c in b.cx.characters {
-            item.options.push(c.name.clone());
-            item.pictures.push(c.thumb.clone());
-            choices.push(Value::Choice(crate::platform::intern(&c.id)));
-        }
-        // Nothing is selected: a click adds.
-        item.index = -1;
-        s.items.push(item);
-        b.extras.insert(
-            ADD.to_owned(),
-            Extra {
-                step: None,
-                choices,
-            },
-        );
-    });
-    b.section("", |s, b| {
-        b.action(
-            s,
-            "characters.edit",
-            "Make a new character",
-            "Open the studio\u{2026}",
-        );
-        b.action(s, PICK_CANCEL, "Back to the list", "Cancel");
     });
 }
 
@@ -1093,11 +1102,11 @@ mod tests {
     }
 
     fn build_page(page: PageId, custom_sound: bool) -> Built {
-        build_view(page, custom_sound, None, false)
+        build_view(page, custom_sound, None)
     }
 
-    fn build_view(page: PageId, custom_sound: bool, expanded: Option<u32>, picking: bool) -> Built {
-        build_with(page, custom_sound, expanded, picking, None)
+    fn build_view(page: PageId, custom_sound: bool, expanded: Option<u32>) -> Built {
+        build_with(page, custom_sound, expanded, None)
     }
 
     /// As `build_view`, with settings changed first and fine tuning unfolded.
@@ -1105,7 +1114,6 @@ mod tests {
         page: PageId,
         custom_sound: bool,
         expanded: Option<u32>,
-        picking: bool,
         sets: Option<&[(&'static str, Value)]>,
     ) -> Built {
         let registry = Registry::build(features::BUILTINS).expect("valid built-ins");
@@ -1155,7 +1163,6 @@ mod tests {
                 }],
                 has_custom_sound: custom_sound,
                 expanded,
-                picking,
                 advanced: sets.is_some(),
             },
         )
@@ -1175,7 +1182,7 @@ mod tests {
                 .map(|i| i.id.clone())
                 .collect()
         };
-        let open = build_with(PageId::Music, false, None, false, Some(&on));
+        let open = build_with(PageId::Music, false, None, Some(&on));
         let shown = ids(&open);
         for gone in [
             mascot::MUSIC_POSE,
@@ -1255,7 +1262,12 @@ mod tests {
                         item.options.len()
                     };
                     assert_eq!(extra.choices.len(), shown, "{}", item.id);
-                    assert!(item.index >= 0, "{} shows no current choice", item.id);
+                    // The library adds on a click; none of its cards is the current one.
+                    assert!(
+                        item.index >= 0 || item.id == ADD,
+                        "{} shows no current choice",
+                        item.id
+                    );
                 }
                 if item.kind == Kind::Range {
                     assert!(built.extras[&item.id].step.is_some());
@@ -1286,13 +1298,9 @@ mod tests {
     }
 
     #[test]
-    fn each_character_on_the_desktop_is_one_row_that_opens_to_its_own_controls() {
+    fn each_character_on_the_desktop_is_one_row_with_its_size_that_opens_to_the_rest() {
         let ids = |built: &Built| -> Vec<String> {
-            built
-                .sections
-                .iter()
-                .find(|s| s.title == "Characters")
-                .expect("the list")
+            built.sections[0]
                 .items
                 .iter()
                 .filter(|i| i.kind != Kind::Note)
@@ -1300,54 +1308,57 @@ mod tests {
                 .collect()
         };
         let closed = build_page(PageId::Characters, false);
-        assert_eq!(ids(&closed), ["instance.1.shown"]);
-        let row = &closed.sections[1].items[0];
+        assert_eq!(closed.sections[0].title, "On the desktop \u{b7} 1");
+        assert_eq!(ids(&closed), [mascot::ENABLED, "instance.1.shown"]);
+        let row = &closed.sections[0].items[1];
         assert_eq!(
-            (row.kind, row.label.as_str(), row.on),
-            (Kind::Entry, "Yohta", true)
+            (row.kind, row.label.as_str(), row.on, row.index),
+            (Kind::Entry, "Yohta", true, 0)
         );
-        assert_eq!(row.index, 0);
+        // The row carries its own size slider.
+        assert_eq!(row.options, ["instance.1.height"]);
+        assert_eq!((row.value, row.text.as_str()), (146.0, "146 px"));
+        assert!(row.min < row.max);
+        assert_eq!(closed.extras["instance.1.height"].step, Some(4.0));
 
-        let open = build_view(PageId::Characters, false, Some(1), false);
+        let open = build_view(PageId::Characters, false, Some(1));
         assert_eq!(
             ids(&open),
             [
+                mascot::ENABLED,
                 "instance.1.shown",
-                "instance.1.height",
                 "instance.1.eyes",
                 "instance.1.idle",
                 "instance.remove.1"
             ]
         );
-        let list = &open.sections[1].items;
-        assert_eq!(list[0].index, 1);
-        assert!(!list[0].nested && list[1..5].iter().all(|i| i.nested));
-        assert_eq!(open.extras["instance.1.height"].step, Some(4.0));
+        let list = &open.sections[0].items;
+        assert_eq!(list[1].index, 1);
+        assert!(!list[1].nested && list[2..5].iter().all(|i| i.nested));
     }
 
     #[test]
-    fn adding_a_character_is_a_picker_of_the_library_with_nothing_selected() {
-        let list = build_page(PageId::Characters, false);
-        assert!(
-            list.sections
-                .iter()
-                .flat_map(|s| &s.items)
-                .any(|i| i.id == PICK)
-        );
-        let picker = build_view(PageId::Characters, false, None, true);
-        assert_eq!(picker.title, "Add a character");
-        let cards = &picker.sections[0].items[0];
+    fn the_library_adds_a_character_on_a_click_and_ends_with_a_new_card() {
+        let page = build_page(PageId::Characters, false);
+        let library = page
+            .sections
+            .iter()
+            .find(|s| s.title == "Library")
+            .expect("the library");
+        let cards = &library.items[0];
         assert_eq!((cards.id.as_str(), cards.kind), (ADD, Kind::Cards));
-        assert_eq!(cards.options, ["Yohta"]);
+        assert_eq!(cards.options, ["Yohta", "New"]);
+        // Nothing is selected, and the last card is the one that makes a new character.
         assert_eq!(cards.index, -1);
-        assert_eq!(picker.extras[ADD].choices, [Value::Choice("yohta")]);
-        assert!(
-            picker
-                .sections
-                .iter()
-                .flat_map(|s| &s.items)
-                .any(|i| i.id == PICK_CANCEL)
+        assert!(cards.warning);
+        assert_eq!(
+            page.extras[ADD].choices,
+            [Value::Choice("yohta"), Value::Choice(NEW)]
         );
+        // Every page has an icon.
+        for (_, name, id) in NAV {
+            assert!(!icon(*id).is_empty(), "{name} has no icon");
+        }
     }
 
     #[test]
@@ -1469,7 +1480,7 @@ mod tests {
             (mascot::MUSIC, Value::Bool(true)),
             (mascot::BEAT, Value::Bool(true)),
         ];
-        let music = build_with(PageId::Music, false, None, false, Some(&on));
+        let music = build_with(PageId::Music, false, None, Some(&on));
         let beat = music.sections.last().expect("follow beat");
         assert_eq!(
             (beat.title.as_str(), beat.tag.as_str()),
@@ -1478,7 +1489,7 @@ mod tests {
         assert!(music.sections.iter().filter(|s| !s.tag.is_empty()).count() == 1);
         // A note shows one line; the rest waits behind More.
         for page in NAV.iter().map(|n| n.2) {
-            let built = build_with(page, false, None, false, Some(&on));
+            let built = build_with(page, false, None, Some(&on));
             for note in built
                 .sections
                 .iter()

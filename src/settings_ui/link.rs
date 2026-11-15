@@ -16,6 +16,9 @@ use crate::features;
 use crate::platform::ipc;
 use crate::registry::{Registry, SettingValues, Value};
 
+/// The header's switch: turns annotation on or off.
+pub const ANNOTATION: &str = "annotation.toggle";
+
 /// How often the window asks the resident app for changes.
 const REFRESH: Duration = Duration::from_millis(400);
 /// Failed requests in a row before the window gives up and closes.
@@ -100,6 +103,8 @@ pub struct State {
     pub values: SettingValues,
     pub displays: Vec<DisplayInfo>,
     pub custom_sound: bool,
+    /// Annotation is on.
+    pub annotation: bool,
     /// The user asked for Settings again: bring the window forward.
     pub focus: bool,
 }
@@ -255,6 +260,10 @@ pub fn parse_state(registry: &Registry, reply: &str) -> Option<State> {
         values,
         displays,
         custom_sound: json.get("custom_sound")?.as_bool()?,
+        annotation: json
+            .get("annotation")
+            .and_then(Json::as_bool)
+            .unwrap_or(false),
         focus: json.get("focus").and_then(Json::as_bool).unwrap_or(false),
     })
 }
@@ -374,7 +383,6 @@ fn thumb_from(handle: &iced::advanced::image::Handle) -> Thumb {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct View {
     pub expanded: Option<u32>,
-    pub picking: bool,
     /// A page's fine tuning is unfolded.
     pub advanced: bool,
 }
@@ -405,7 +413,6 @@ fn snapshot(registry: &Registry, state: &State, page: usize, notice: &str, view:
         music: &state.music,
         has_custom_sound: state.custom_sound,
         expanded: view.expanded,
-        picking: view.picking,
         advanced: view.advanced,
     };
     let built = pages::build(id, &cx);
@@ -415,6 +422,7 @@ fn snapshot(registry: &Registry, state: &State, page: usize, notice: &str, view:
             .map(|(group, name, _)| ((*group).to_owned(), (*name).to_owned()))
             .collect(),
         current,
+        annotation: state.annotation,
         title: built.title.to_owned(),
         summary: built.summary,
         notice: notice.to_owned(),
@@ -457,21 +465,24 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
     let mut failures = 0;
     loop {
         match rx.recv_timeout(REFRESH) {
+            Ok(Cmd::Set(pages::ADD, Value::Choice(pages::NEW))) => {
+                // The library's last card: make a new character in the studio.
+                notice.clear();
+                let _ = ipc::request("settings-action characters.edit");
+            }
+            Ok(Cmd::Action(name)) if name == ANNOTATION => {
+                state.annotation = !state.annotation;
+                super::show(snapshot(&registry, &state, page, &notice, view), false);
+                let _ = ipc::request(&format!("settings-action {ANNOTATION}"));
+            }
             Ok(Cmd::Set(pages::ADD, value)) => {
-                // A card in the picker: put that character on the desktop.
-                view.picking = false;
+                // A library card: put that character on the desktop.
                 before_add = Some(state.instances.iter().map(|i| i.id).collect());
                 notice.clear();
                 let _ = ipc::request(&format!(
                     "settings-action instance.add.{}",
                     value_text(&value)
                 ));
-            }
-            Ok(Cmd::Action(name)) if name == pages::PICK || name == pages::PICK_CANCEL => {
-                view.picking = name == pages::PICK;
-                notice.clear();
-                super::show(snapshot(&registry, &state, page, &notice, view), false);
-                continue;
             }
             Ok(Cmd::Action(name)) if name == pages::ADVANCED => {
                 view.advanced = !view.advanced;
@@ -519,7 +530,6 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
             }
             Ok(Cmd::Action(name)) if name.starts_with("page:") => {
                 page = pages::index_of(&name["page:".len()..]);
-                view.picking = false;
                 prepare(&mut state, page, &mut thumbs);
                 notice.clear();
                 super::show(snapshot(&registry, &state, page, &notice, view), false);
@@ -540,7 +550,6 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
             }
             Ok(Cmd::Navigate(index)) => {
                 page = index;
-                view.picking = false;
                 prepare(&mut state, page, &mut thumbs);
                 notice.clear();
                 super::show(snapshot(&registry, &state, page, &notice, view), false);

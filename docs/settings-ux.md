@@ -236,3 +236,24 @@ Still open from the whole plan: "Annotation on" on General, the data folder
 and licences under About, "Edit in the studio" on a character's row, opening
 Settings on one character from its menu, and carrying a character's music
 pose and hand in an exported pack.
+
+### Restyle toward the scoping mockup
+
+The steps above followed this document and not the mockup shown during
+scoping, so the result looked unlike it. This pass closes the visible gap
+while keeping the page structure:
+
+- A header bar with the app name and the Annotation master switch
+  (`annotation` in `settings-state`, `settings-action annotation.toggle`).
+- Line icons beside each navigation entry (`pages::icon`, drawn as paths).
+- Compact 44 px rows with hairlines between them, and cyan switches.
+- Characters: the section is "On the desktop · N". Each row shows the
+  picture, name, size slider and switch on one line; the dots open Eyes, Idle
+  and Remove. The Library sits on the same page: clicking a card puts that
+  character on the desktop, and the last card, New, opens the studio. The
+  separate picker page from step B is gone.
+- The navigation group is "Desktop" again, with Characters and Music & dance.
+
+Not matched yet: which display a character is on, Hide all, a row per music
+source with its own meter, inline Follow beat dropdowns, Export, Import and
+Remove of library characters from Settings, and the Character studio layout.

@@ -17,6 +17,10 @@ export component SettingsWindow inherits SettingsShell {
     entries: root.nav-entries;
     current <=> root.current-page;
     navigate(i) => { root.navigate-to(i); }
+    in property <bool> annotation-on;
+    callback annotation-toggled();
+    annotation: root.annotation-on;
+    toggle-annotation => { root.annotation-toggled(); }
     in property <string> page-title;
     in property <string> page-summary;
     in property <[SectionModel]> sections;
@@ -50,11 +54,14 @@ export component SettingsWindow inherits SettingsShell {
                     for section in root.sections: Section {
                         title: section.title;
                         tag: section.tag;
-                        for item in section.items: ItemView {
+                        for item[i] in section.items: ItemView {
                             item: item;
+                            // A hairline between rows; notes sit with the row above.
+                            divider: i > 0 && item.kind != 4;
                             capturing: root.capturing-id == item.id;
                             toggled(on) => { root.toggled(item.id, on); }
-                            ranged(v) => { root.ranged(item.id, v); }
+                            // An entry's slider is its own setting, named in its options.
+                            ranged(v) => { root.ranged(item.kind == 10 ? item.options[0] : item.id, v); }
                             chosen(i) => { root.chosen(item.id, i); }
                             pressed => {
                                 if (item.kind == 5) {

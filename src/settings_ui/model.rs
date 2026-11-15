@@ -124,6 +124,8 @@ pub struct Snapshot {
     /// Navigation entries: group and name.
     pub nav: Vec<(String, String)>,
     pub current: usize,
+    /// Annotation is on: the header's switch.
+    pub annotation: bool,
     pub title: String,
     pub summary: String,
     /// Why a change was refused, shown above the page.

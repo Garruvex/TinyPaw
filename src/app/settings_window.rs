@@ -155,6 +155,7 @@ impl App {
             "values": crate::preferences::to_json(self.session.settings()),
             "displays": displays,
             "custom_sound": self.audio.has_custom(),
+            "annotation": self.session.is_enabled(),
             "focus": std::mem::take(&mut self.settings_focus),
         });
         format!("ok: {state}")
@@ -185,6 +186,12 @@ impl App {
             "pointer.remove" => tasks.push(self.ui_message(UiMsg::RemovePack, now, out)),
             "pointer.prompt" => tasks.push(self.ui_message(UiMsg::CopyPointerPrompt, now, out)),
             "pointer.arm-prompt" => tasks.push(self.ui_message(UiMsg::CopyForearmPrompt, now, out)),
+            "annotation.toggle" => {
+                out.collect(
+                    self.dispatch(crate::features::system::MASTER_TOGGLE, now)
+                        .ok(),
+                );
+            }
             "first-run.turn-on" => {
                 if !self.session.is_enabled() {
                     out.collect(

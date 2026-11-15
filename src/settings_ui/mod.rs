@@ -105,6 +105,10 @@ pub fn run(page: &str) -> ExitCode {
         window.on_navigate_to(move |index| send(&cmds, Cmd::Navigate(index as usize)));
     }
     {
+        let cmds = cmds.clone();
+        window.on_annotation_toggled(move || send(&cmds, Cmd::Action(link::ANNOTATION.to_owned())));
+    }
+    {
         let (cmds, weak) = (cmds.clone(), window.as_weak());
         window.on_key_captured(move |id, text, ctrl, alt, shift| {
             let Some(window) = weak.upgrade() else { return };
@@ -349,14 +353,17 @@ fn apply(snapshot: Snapshot, focus: bool) {
                 snapshot
                     .nav
                     .iter()
-                    .map(|(group, name)| NavEntry {
+                    .enumerate()
+                    .map(|(i, (group, name))| NavEntry {
                         group: group.as_str().into(),
                         name: name.as_str().into(),
+                        icon: pages::NAV.get(i).map_or("", |n| pages::icon(n.2)).into(),
                     })
                     .collect::<Vec<_>>(),
             )));
         }
         window.set_current_page(snapshot.current as i32);
+        window.set_annotation_on(snapshot.annotation);
         window.set_page_title(snapshot.title.as_str().into());
         window.set_page_summary(snapshot.summary.as_str().into());
         window.set_notice(snapshot.notice.as_str().into());

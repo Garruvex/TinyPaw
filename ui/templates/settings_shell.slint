@@ -1,11 +1,13 @@
 import { Tokens } from "../tokens.slint";
-import { NavItem, NavGroup } from "../kit.slint";
+import { NavItem, NavGroup, Toggle, Icon } from "../kit.slint";
 
 // Template: the Settings window frame. A navigation column on the left and
 // one page on the right. Every Settings page is placed inside this shell.
 export struct NavEntry {
     group: string,
     name: string,
+    // SVG path commands on a 16 by 16 grid.
+    icon: string,
 }
 
 export component SettingsShell inherits Window {
@@ -13,28 +15,78 @@ export component SettingsShell inherits Window {
     in property <[NavEntry]> entries;
     in-out property <int> current;
     callback navigate(int);
+    // Annotation is on; the header's switch turns it on and off.
+    in property <bool> annotation;
+    callback toggle-annotation;
+    changed annotation => { master.checked = root.annotation; }
     title: root.window-title;
     background: Tokens.surface;
     preferred-width: 1000px; // guard:allow window size
     preferred-height: 680px; // guard:allow window size
-    HorizontalLayout {
+    VerticalLayout {
+        // The header: what this window is, and the app's master switch.
+        Rectangle {
+            height: Tokens.h-header;
+            background: Tokens.header;
+            Rectangle {
+                y: parent.height - self.height;
+                height: Tokens.hairline;
+                background: Tokens.line;
+            }
+            HorizontalLayout {
+                padding-left: Tokens.space-4;
+                padding-right: Tokens.space-4;
+                spacing: Tokens.space-2;
+                VerticalLayout {
+                    alignment: center;
+                    // A paw.
+                    Icon {
+                        commands: "M5 9.5 Q8 6.5 11 9.5 Q12.5 12.5 8 12.8 Q3.5 12.5 5 9.5 Z M3.2 6.8 v0.6 M6 4 v0.8 M10 4 v0.8 M12.8 6.8 v0.6";
+                        ink: Tokens.cyan-text;
+                    }
+                }
+                Text {
+                    text: "TinyPaw Settings";
+                    font-size: Tokens.font-nav;
+                    font-weight: 600;
+                    color: Tokens.text;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: "Annotation";
+                    font-size: Tokens.font-body;
+                    color: Tokens.muted;
+                    vertical-alignment: center;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    master := Toggle {
+                        checked: root.annotation;
+                        toggled(c) => { root.toggle-annotation(); }
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
         Rectangle {
             width: Tokens.nav-width;
             background: Tokens.nav;
             VerticalLayout {
-                padding: Tokens.space-4;
+                padding: Tokens.space-3;
                 spacing: Tokens.space-1;
                 alignment: start;
                 for entry[i] in root.entries: VerticalLayout {
                     spacing: Tokens.space-1;
                     if entry.group != "" && (i == 0 || root.entries[i - 1].group != entry.group): HorizontalLayout {
-                        // In line with the entries' text, with air above the group.
+                        // In line with the entries, with air above the group.
                         padding-left: Tokens.space-3;
                         padding-top: Tokens.space-3;
                         NavGroup { text: entry.group; }
                     }
                     NavItem {
                         text: entry.name;
+                        icon: entry.icon;
                         selected: i == root.current;
                         clicked => {
                             root.current = i;
@@ -45,5 +97,6 @@ export component SettingsShell inherits Window {
             }
         }
         @children
+        }
     }
 }

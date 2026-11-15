@@ -60,15 +60,35 @@ export component Btn inherits Rectangle {
     }
 }
 
+// A small line icon from SVG path commands on a 16 by 16 grid.
+export component Icon inherits Path {
+    in property <color> ink: Tokens.muted;
+    width: Tokens.icon;
+    height: Tokens.icon;
+    viewbox-width: 16;
+    viewbox-height: 16;
+    stroke: root.ink;
+    stroke-width: Tokens.stroke;
+    fill: transparent;
+}
+
 export component NavItem inherits Rectangle {
     in property <string> text;
+    // SVG path commands for the entry's icon, or none.
+    in property <string> icon;
     in property <bool> selected;
     callback clicked;
     height: Tokens.h-nav;
     border-radius: Tokens.radius-control;
     background: root.selected ? Tokens.cyan-bg : (area.has-hover ? Tokens.hover : Tokens.none);
-    Text {
+    if root.icon != "": Icon {
         x: Tokens.space-3;
+        y: (parent.height - self.height) / 2;
+        commands: root.icon;
+        ink: root.selected ? Tokens.cyan-text : Tokens.muted;
+    }
+    Text {
+        x: root.icon != "" ? 2 * Tokens.space-3 + Tokens.icon : Tokens.space-3;
         y: (parent.height - self.height) / 2;
         text: root.text;
         font-size: Tokens.font-nav;
@@ -142,14 +162,14 @@ export component Toggle inherits Rectangle {
     width: Tokens.toggle-w;
     height: Tokens.toggle-h;
     border-radius: Tokens.radius-round;
-    background: !root.enabled ? Tokens.control : root.checked ? Tokens.amber : Tokens.track;
+    background: !root.enabled ? Tokens.control : root.checked ? Tokens.cyan : Tokens.track;
     Rectangle {
         width: Tokens.knob;
         height: Tokens.knob;
         y: (parent.height - self.height) / 2;
         x: root.checked ? parent.width - self.width - (parent.height - self.height) / 2 : (parent.height - self.height) / 2;
         border-radius: Tokens.radius-round;
-        background: root.enabled ? Tokens.white : Tokens.faint;
+        background: !root.enabled ? Tokens.faint : root.checked ? Tokens.on-accent : Tokens.subtle;
     }
     TouchArea {
         enabled: root.enabled;
@@ -279,7 +299,10 @@ export component SettingRow inherits Rectangle {
     in property <bool> hint-warning;
     min-height: Tokens.h-row;
     HorizontalLayout {
-        padding: Tokens.space-3;
+        padding-left: Tokens.space-3;
+        padding-right: Tokens.space-3;
+        padding-top: Tokens.space-1;
+        padding-bottom: Tokens.space-1;
         spacing: Tokens.space-4;
         VerticalLayout {
             alignment: center;
@@ -340,40 +363,73 @@ export component Card inherits Rectangle {
     }
 }
 
-// One thing in a list that opens to show its settings (a character on the
-// desktop): its picture and name, a switch, and a mark for open or closed.
-// Clicking the row anywhere but the switch opens or closes it.
+// One thing in a list (a character on the desktop): its picture and name, its
+// size, a switch, and a mark that opens the rest of its settings below.
 export component EntryRow inherits Rectangle {
     in property <image> picture;
     in property <string> label;
     in property <string> hint;
     in property <bool> open;
     in-out property <bool> checked;
+    in-out property <float> value;
+    in property <float> minimum;
+    in property <float> maximum: 1;
+    in property <string> value-text;
     callback toggled(bool);
+    callback ranged(float);
     callback clicked;
     min-height: Tokens.h-row;
     border-radius: Tokens.radius-control;
-    background: root.open ? Tokens.raised : (area.has-hover ? Tokens.hover : Tokens.none);
-    area := TouchArea {
-        clicked => { root.clicked(); }
-    }
+    background: root.open ? Tokens.raised : Tokens.none;
     HorizontalLayout {
-        padding: Tokens.space-3;
+        padding-left: Tokens.space-3;
+        padding-right: Tokens.space-3;
+        padding-top: Tokens.space-1;
+        padding-bottom: Tokens.space-1;
         spacing: Tokens.space-3;
-        if root.picture.width > 0: VerticalLayout {
+        VerticalLayout {
             alignment: center;
-            Image {
-                source: root.picture;
-                width: Tokens.h-control;
-                height: Tokens.h-control;
-                image-fit: contain;
+            Rectangle {
+                width: Tokens.avatar;
+                height: Tokens.avatar;
+                border-radius: Tokens.radius-small;
+                background: Tokens.control;
+                if root.picture.width > 0: Image {
+                    source: root.picture;
+                    width: parent.width;
+                    height: parent.height;
+                    image-fit: contain;
+                }
             }
         }
         VerticalLayout {
             alignment: center;
+            width: Tokens.label-w / 2;
+            Text {
+                text: root.label;
+                font-size: Tokens.font-body;
+                color: Tokens.text;
+                overflow: elide;
+            }
+            if root.hint != "": Hint { text: root.hint; wrap: no-wrap; }
+        }
+        VerticalLayout {
+            alignment: center;
             horizontal-stretch: 1;
-            Text { text: root.label; font-size: Tokens.font-body; color: Tokens.text; }
-            if root.hint != "": Hint { text: root.hint; }
+            Range {
+                value <=> root.value;
+                minimum: root.minimum;
+                maximum: root.maximum;
+                changed(v) => { root.ranged(v); }
+            }
+        }
+        Text {
+            width: Tokens.value-w;
+            text: root.value-text;
+            font-size: Tokens.font-body;
+            color: Tokens.muted;
+            vertical-alignment: center;
+            horizontal-alignment: right;
         }
         VerticalLayout {
             alignment: center;
@@ -384,12 +440,22 @@ export component EntryRow inherits Rectangle {
         }
         VerticalLayout {
             alignment: center;
-            Text {
-                text: root.open ? "Close" : "Edit";
-                font-size: Tokens.font-body;
-                color: Tokens.cyan-text;
-                width: Tokens.value-w;
-                horizontal-alignment: right;
+            Rectangle {
+                width: Tokens.h-control;
+                height: Tokens.h-control;
+                border-radius: Tokens.radius-control;
+                background: more.has-hover || root.open ? Tokens.hover : Tokens.none;
+                // Three dots: more settings for this one.
+                Icon {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    commands: "M2.6 8 h1.6 M7.2 8 h1.6 M11.8 8 h1.6";
+                    ink: root.open ? Tokens.cyan-text : Tokens.muted;
+                    stroke-width: 2 * Tokens.stroke;
+                }
+                more := TouchArea {
+                    clicked => { root.clicked(); }
+                }
             }
         }
     }
@@ -558,6 +624,8 @@ export component Cards inherits Rectangle {
     in property <[image]> pictures;
     in property <[string]> names;
     in-out property <int> current;
+    // The last card makes a new one: it shows a plus instead of a picture.
+    in property <bool> last-adds;
     callback selected(int);
     // As many to a row as fit; the rest wrap onto further rows.
     property <int> columns: max(1, floor((root.width + Tokens.space-2) / (Tokens.card-w + Tokens.space-2)));
@@ -583,7 +651,13 @@ export component Cards inherits Rectangle {
                 height: 52px;
                 image-fit: contain;
             }
-            if root.pictures[i].width == 0: Rectangle {
+            if root.last-adds && i == root.names.length - 1: Icon {
+                x: (parent.width - self.width) / 2;
+                y: Tokens.space-5;
+                commands: "M8 2.5 V13.5 M2.5 8 H13.5";
+                ink: Tokens.muted;
+            }
+            if root.pictures[i].width == 0 && !(root.last-adds && i == root.names.length - 1): Rectangle {
                 x: (parent.width - self.width) / 2;
                 y: Tokens.space-3 + 6px;
                 width: 40px;
