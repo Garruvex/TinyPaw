@@ -32,6 +32,8 @@ pub const ADD: &str = "instance.add";
 /// Opens the picker, and leaves it without adding.
 pub const PICK: &str = "ui:pick";
 pub const PICK_CANCEL: &str = "ui:cancel";
+/// Shows or hides a page's fine tuning.
+pub const ADVANCED: &str = "ui:advanced";
 
 /// Navigation order: group, name, page. Each page holds one scope (see
 /// docs/settings-ux.md): the app, an annotation tool, or the characters on
@@ -78,6 +80,8 @@ pub struct Context<'a> {
     pub expanded: Option<u32>,
     /// The page shows the picker for adding a character.
     pub picking: bool,
+    /// Fine tuning is unfolded.
+    pub advanced: bool,
 }
 
 pub struct Built {
@@ -844,26 +848,26 @@ fn music_page(b: &mut Builder<'_>) {
         return;
     }
     b.section("Movement", |s, b| {
-        b.range(s, mascot::MUSIC_STRENGTH, Some("Music strength"), 0.05, |v| {
-            format!("{v:.2}")
-        });
-        b.choice(
+        b.range(
             s,
-            mascot::MUSIC_POSE,
-            Some("Music pose"),
-            vec![
-                ("auto", "Automatic".to_owned()),
-                ("sit", "Sitting".to_owned()),
-                ("stand", "Standing".to_owned()),
-            ],
+            mascot::MUSIC_STRENGTH,
+            Some("Music strength"),
+            0.05,
+            |v| format!("{v:.2}"),
         );
         b.range(s, mascot::EXCITEMENT, Some("Stand at energy"), 1.0, |v| {
             format!("{v:.0}%")
         });
         b.note(
             s,
-            "Automatic stands up when the music stays lively and sits when it calms. Standing needs standing artwork.",
+            "A character on Automatic stands up above this energy and sits when the music calms.",
             false,
+        );
+        b.action(
+            s,
+            "characters.edit",
+            "Each character's pose and waving hand",
+            "Open the studio\u{2026}",
         );
     });
     b.section("Dancing", |s, b| {
@@ -902,26 +906,6 @@ fn music_page(b: &mut Builder<'_>) {
             false,
         );
     });
-    b.section("Waving hand", |s, b| {
-        b.range(s, mascot::WAVE_X, Some("Horizontal"), 1.0, |v| {
-            format!("{v:.0}%")
-        });
-        b.range(s, mascot::WAVE_Y, Some("Vertical"), 1.0, |v| {
-            format!("{v:.0}%")
-        });
-        b.range(s, mascot::WAVE_ANGLE, Some("Angle"), 1.0, |v| {
-            format!("{v:.0}\u{b0}")
-        });
-        b.range(s, mascot::WAVE_RANGE, Some("Wave range"), 1.0, |v| {
-            format!("{v:.0}%")
-        });
-        b.action(s, "music.reset-hand", "Hand position", "Reset");
-        b.note(
-            s,
-            "Moves the waving arm and its item together, for every character.",
-            false,
-        );
-    });
     b.section("Follow beat (trial)", |s, b| {
         b.toggle(s, mascot::BEAT, Some("Follow beat"));
         b.note(s, "Nods land on the beat instead of a steady bob.", false);
@@ -931,6 +915,17 @@ fn music_page(b: &mut Builder<'_>) {
         if !b.cx.music.beat.is_empty() {
             b.note(s, &format!("Beat: {}", b.cx.music.beat), false);
         }
+        // Fine tuning stays folded away until asked for.
+        b.action(
+            s,
+            ADVANCED,
+            "Advanced",
+            if b.cx.advanced { "Hide" } else { "Show" },
+        );
+        if !b.cx.advanced {
+            return;
+        }
+        let first = s.items.len();
         b.choice(
             s,
             mascot::BEAT_SENSITIVITY,
@@ -967,6 +962,9 @@ fn music_page(b: &mut Builder<'_>) {
             "Try another engine if the nod drifts off the beat. Changing it restarts the search.",
             false,
         );
+        for item in &mut s.items[first..] {
+            item.nested = true;
+        }
     });
 }
 
@@ -1087,8 +1085,24 @@ mod tests {
     }
 
     fn build_view(page: PageId, custom_sound: bool, expanded: Option<u32>, picking: bool) -> Built {
+        build_with(page, custom_sound, expanded, picking, None)
+    }
+
+    /// As `build_view`, with settings changed first and fine tuning unfolded.
+    fn build_with(
+        page: PageId,
+        custom_sound: bool,
+        expanded: Option<u32>,
+        picking: bool,
+        sets: Option<&[(&'static str, Value)]>,
+    ) -> Built {
         let registry = Registry::build(features::BUILTINS).expect("valid built-ins");
-        let settings = registry.defaults();
+        let mut settings = registry.defaults();
+        for (id, value) in sets.unwrap_or_default() {
+            registry
+                .set(&mut settings, id, value.clone())
+                .expect("valid");
+        }
         let displays = [DisplayInfo {
             name: "Main".into(),
             text: "Main — 1920 × 1080 (primary)".into(),
@@ -1130,8 +1144,52 @@ mod tests {
                 has_custom_sound: custom_sound,
                 expanded,
                 picking,
+                advanced: sets.is_some(),
             },
         )
+    }
+
+    #[test]
+    fn music_keeps_what_is_shared_and_leaves_pose_and_hand_to_the_studio() {
+        let on = [
+            (mascot::MUSIC, Value::Bool(true)),
+            (mascot::BEAT, Value::Bool(true)),
+        ];
+        let ids = |built: &Built| -> Vec<String> {
+            built
+                .sections
+                .iter()
+                .flat_map(|s| &s.items)
+                .map(|i| i.id.clone())
+                .collect()
+        };
+        let open = build_with(PageId::Music, false, None, false, Some(&on));
+        let shown = ids(&open);
+        for gone in [
+            mascot::MUSIC_POSE,
+            mascot::WAVE_X,
+            mascot::WAVE_Y,
+            mascot::WAVE_ANGLE,
+            mascot::WAVE_RANGE,
+        ] {
+            assert!(!shown.iter().any(|i| i == gone), "{gone} is still on Music");
+        }
+        for kept in [
+            mascot::MUSIC_STRENGTH,
+            mascot::EXCITEMENT,
+            mascot::BEAT_ENGINE,
+        ] {
+            assert!(shown.iter().any(|i| i == kept), "{kept} is missing");
+        }
+        assert!(shown.iter().any(|i| i == "characters.edit"));
+        // The beat's fine tuning is nested under Advanced.
+        let tuning = open
+            .sections
+            .iter()
+            .flat_map(|s| &s.items)
+            .find(|i| i.id == mascot::BEAT_ENGINE)
+            .unwrap();
+        assert!(tuning.nested);
     }
 
     #[test]

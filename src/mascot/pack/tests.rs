@@ -933,6 +933,7 @@ fn motion_overrides_round_trip_and_must_fit_the_rig() {
         motion: Some(specs.to_vec()),
         lines: None,
         bop: Some(Bop::Groove),
+        music: None,
         reactions: None,
     };
     save_overrides_in(&dir, BUILTIN, &o).unwrap();
@@ -954,6 +955,7 @@ fn motion_overrides_round_trip_and_must_fit_the_rig() {
         motion: None,
         lines: Some(Lines::default()),
         bop: None,
+        music: None,
         reactions: None,
     };
     save_overrides_in(&dir, BUILTIN, &quiet).unwrap();
@@ -1255,6 +1257,7 @@ fn export_carries_motion_lines_and_sounds_and_imports_the_same() {
         motion: Some(motion.clone()),
         lines: Some(lines),
         bop: Some(Bop::RubberHose),
+        music: None,
         reactions: None,
     };
     let out = dir.join("out");
@@ -1290,6 +1293,7 @@ fn export_carries_motion_lines_and_sounds_and_imports_the_same() {
         }]),
         lines: None,
         bop: None,
+        music: None,
         reactions: None,
     };
     let folder = export_with(&plain, &out, &o, |_| None).unwrap();
@@ -1313,6 +1317,7 @@ fn replacing_a_pack_keeps_the_users_overrides() {
         }]),
         lines: Some(Lines::default()),
         bop: None,
+        music: None,
         reactions: None,
     };
     let (root, c) = test_install_folder(&dir, OnDuplicate::Ask);
@@ -1330,4 +1335,42 @@ fn replacing_a_pack_keeps_the_users_overrides() {
         "replace keeps what the user changed"
     );
     fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_characters_own_music_pose_and_hand_are_saved_beside_its_other_overrides() {
+    let dir = scratch("music-fit");
+    let fit = MusicFit {
+        pose: 2,
+        hand_x: 4.0,
+        hand_y: -3.0,
+        hand_angle: 12.0,
+        wave_range: 150.0,
+    };
+    let o = Overrides {
+        bop: Some(Bop::Groove),
+        music: Some(fit),
+        ..Overrides::default()
+    };
+    save_overrides_in(&dir, BUILTIN, &o).unwrap();
+    assert_eq!(load_overrides_in(&dir, BUILTIN), o);
+    // Dropping it leaves the rest, and the character follows the app again.
+    let without = Overrides { music: None, ..o };
+    save_overrides_in(&dir, BUILTIN, &without).unwrap();
+    assert_eq!(load_overrides_in(&dir, BUILTIN).music, None);
+    assert_eq!(load_overrides_in(&dir, BUILTIN).bop, Some(Bop::Groove));
+    // Values outside the sliders are pulled back in; a broken one is ignored.
+    let path = dir.join(".overrides/yohta.json");
+    std::fs::write(
+        &path,
+        r#"{"schema_version":1,"music":{"pose":"sit","hand_x":99,"hand_y":0,"hand_angle":-90,"wave_range":50}}"#,
+    )
+    .unwrap();
+    let loaded = load_overrides_in(&dir, BUILTIN).music.unwrap();
+    assert_eq!(
+        (loaded.pose, loaded.hand_x, loaded.hand_angle),
+        (1, 15.0, -45.0)
+    );
+    std::fs::write(&path, r#"{"schema_version":1,"music":{"pose":"fly"}}"#).unwrap();
+    assert_eq!(load_overrides_in(&dir, BUILTIN).music, None);
 }

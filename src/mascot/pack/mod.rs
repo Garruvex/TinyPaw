@@ -1143,12 +1143,58 @@ fn motion_file(root: &Path, id: &str) -> PathBuf {
     root.join(".overrides").join(format!("{id}.json"))
 }
 
+/// How one character holds itself to music: its pose while music plays and
+/// where its waving hand sits. A character without one follows the app-wide
+/// values (`mascot.music_pose`, `mascot.wave_*`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MusicFit {
+    /// 0 follows the music's energy, 1 seated, 2 standing.
+    pub pose: u8,
+    /// Hand offset, percent of the artwork canvas.
+    pub hand_x: f32,
+    pub hand_y: f32,
+    /// Degrees.
+    pub hand_angle: f32,
+    /// Percent of the usual wave.
+    pub wave_range: f32,
+}
+
+impl MusicFit {
+    const POSES: [&'static str; 3] = ["auto", "sit", "stand"];
+
+    fn parse(v: &Json) -> Option<Self> {
+        let number =
+            |key: &str, min: f32, max: f32| v[key].as_f64().map(|n| (n as f32).clamp(min, max));
+        Some(Self {
+            pose: Self::POSES
+                .iter()
+                .position(|p| v["pose"].as_str() == Some(p))? as u8,
+            hand_x: number("hand_x", -15.0, 15.0)?,
+            hand_y: number("hand_y", -15.0, 15.0)?,
+            hand_angle: number("hand_angle", -45.0, 45.0)?,
+            wave_range: number("wave_range", 0.0, 200.0)?,
+        })
+    }
+
+    fn to_json(self) -> Json {
+        json!({
+            "pose": Self::POSES[usize::from(self.pose.min(2))],
+            "hand_x": self.hand_x,
+            "hand_y": self.hand_y,
+            "hand_angle": self.hand_angle,
+            "wave_range": self.wave_range,
+        })
+    }
+}
+
 /// What the user changed for a character, kept beside its pack.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Overrides {
     pub motion: Option<Vec<MotionSpec>>,
     pub lines: Option<Lines>,
     pub bop: Option<Bop>,
+    /// Its own music pose and hand position, once the user set them.
+    pub music: Option<MusicFit>,
     /// The user's reaction layer; `user:` sounds live beside the overrides.
     pub reactions: Option<super::reactions::Config>,
 }
@@ -1194,6 +1240,7 @@ fn load_overrides_in(root: &Path, id: &str) -> Overrides {
         motion,
         lines,
         bop,
+        music: MusicFit::parse(&v["music"]),
         reactions,
     }
 }
@@ -1227,6 +1274,9 @@ fn save_overrides_in(root: &Path, id: &str, o: &Overrides) -> Result<(), String>
     }
     if let Some(bop) = o.bop {
         json["bop"] = json!(bop.name());
+    }
+    if let Some(fit) = o.music {
+        json["music"] = fit.to_json();
     }
     if let Some(r) = &o.reactions {
         json["reactions"] = r.to_json();

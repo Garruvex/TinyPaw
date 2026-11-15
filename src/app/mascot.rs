@@ -88,7 +88,7 @@ impl App {
             music: 0.0,
             energy: None,
             beat: None,
-            dance: self.dance_options(),
+            dance: self.dance_options(&instance.character),
         }
     }
 

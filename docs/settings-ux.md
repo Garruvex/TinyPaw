@@ -1,7 +1,7 @@
 # Settings: scope, hierarchy and flow
 
 A review of the Slint Settings window as it stands on `refactor/settings-registry`,
-and the structure it should move to. Steps A and B (section 6) are done; C and D
+and the structure it should move to. Steps A, B and C (section 6) are done; D
 are not.
 
 ## 1. What is wrong today
@@ -201,3 +201,21 @@ A test now fails if any setting appears on two pages.
 
 Not done: "Edit in the studio" on a row, and opening Settings on a given
 character from its right-click menu.
+
+### Step C, as built
+
+- Music pose and the waving hand (horizontal, vertical, angle, range) are now
+  each character's own. They are edited on the studio's Music tab and saved at
+  once to the character's overrides file as `music`, beside its bop style.
+- No values are moved. A character without its own follows the old app-wide
+  settings (`mascot.music_pose`, `mascot.wave_*`), which stay registered and
+  keep whatever the user had, so nothing changes on upgrade. Settings no
+  longer shows them; the command line can still set them.
+- Music & dance drops the pose row and the Waving hand section and links to
+  the studio instead. Stand at energy stays, as one value for everyone.
+- Follow beat's Sensitivity, Timing and Engine sit under an "Advanced" row
+  that shows or hides them.
+
+Not done: an exported pack does not carry the character's music pose and
+hand; they stay with the user's overrides. Setting a character back to the
+app-wide values drops its own, so it follows them again.

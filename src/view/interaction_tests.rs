@@ -134,6 +134,13 @@ fn settings_view<'a>(
         unsaved: false,
         leaving: false,
         music: ("Off".into(), 0.0),
+        music_fit: crate::mascot::pack::MusicFit {
+            pose: 0,
+            hand_x: 0.0,
+            hand_y: 0.0,
+            hand_angle: 0.0,
+            wave_range: 100.0,
+        },
         music_source: crate::mascot::music::Source::All,
         music_rows: vec![(crate::mascot::music::Source::All, 0.0, false)],
         music_inputs: Vec::new(),

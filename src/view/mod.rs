@@ -207,6 +207,8 @@ pub enum UiMsg {
     MotionTest(crate::mascot::preview::Test),
     /// Pick how the selected character bops to music; saved at once.
     MusicBop(crate::mascot::motion::Bop),
+    /// The selected character's own music pose and hand position; saved at once.
+    MusicFit(crate::mascot::pack::MusicFit),
     MotionReset,
     /// Lines: edit, add or remove a line, and its sound.
     LineText(crate::mascot::lines::Trigger, usize, String),

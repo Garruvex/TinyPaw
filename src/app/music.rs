@@ -1,21 +1,58 @@
 use super::*;
 
 impl App {
-    pub(super) fn dance_options(&self) -> crate::mascot::motion::Dance {
+    /// The app-wide music pose and hand position: what a character uses
+    /// until it is given its own in the studio.
+    pub(super) fn default_music_fit(&self) -> characters::MusicFit {
         let s = self.session.settings();
-        crate::mascot::motion::Dance {
+        characters::MusicFit {
             pose: match s.choice(character::MUSIC_POSE) {
                 "sit" => 1,
                 "stand" => 2,
                 _ => 0,
             },
+            hand_x: s.float(character::WAVE_X) as f32,
+            hand_y: s.float(character::WAVE_Y) as f32,
+            hand_angle: s.float(character::WAVE_ANGLE) as f32,
+            wave_range: s.float(character::WAVE_RANGE) as f32,
+        }
+    }
+
+    /// How `id` holds itself to music: its own fit, else the app-wide one.
+    pub(super) fn music_fit(&self, id: &str) -> characters::MusicFit {
+        let own = *self
+            .music_fits
+            .borrow_mut()
+            .entry(id.to_owned())
+            .or_insert_with(|| characters::load_overrides(id).music);
+        own.unwrap_or_else(|| self.default_music_fit())
+    }
+
+    /// Gives `id` its own music pose and hand position, saved at once. One
+    /// equal to the app-wide values is dropped, so the character follows them.
+    pub(super) fn set_music_fit(&mut self, id: &str, fit: characters::MusicFit) {
+        let own = (fit != self.default_music_fit()).then_some(fit);
+        let mut overrides = characters::load_overrides(id);
+        overrides.music = own;
+        match characters::save_overrides(id, &overrides) {
+            Ok(()) => {
+                self.music_fits.borrow_mut().insert(id.to_owned(), own);
+            }
+            Err(e) => self.notice = Some(format!("Couldn't save the music pose: {e}")),
+        }
+    }
+
+    /// The dance choices for the character `id`: its own pose and hand, and
+    /// the app-wide rest.
+    pub(super) fn dance_options(&self, id: &str) -> crate::mascot::motion::Dance {
+        let s = self.session.settings();
+        let fit = self.music_fit(id);
+        crate::mascot::motion::Dance {
+            pose: fit.pose,
             stand_threshold: s.float(character::EXCITEMENT) as f32 / 100.0,
-            hand_offset: iced::Vector::new(
-                s.float(character::WAVE_X) as f32 / 100.0,
-                s.float(character::WAVE_Y) as f32 / 100.0,
-            ),
-            hand_angle: (s.float(character::WAVE_ANGLE) as f32).to_radians(),
-            wave_range: s.float(character::WAVE_RANGE) as f32 / 100.0,
+            hand_offset: iced::Vector::new(fit.hand_x / 100.0, fit.hand_y / 100.0),
+            hand_angle: fit.hand_angle.to_radians(),
+            wave_range: fit.wave_range / 100.0,
             every: s.choice(character::DANCE_EVERY).parse().unwrap_or(16),
             included: character::DANCE_STYLES.map(|id| s.bool(id)),
             item: match s.choice(character::DANCE_ITEM) {

@@ -190,6 +190,8 @@ impl App {
     /// rest by name.
     pub(super) fn add_character(&mut self, c: Character) {
         self.characters.retain(|x| x.id != c.id);
+        // A replaced character starts from what is saved for it now.
+        self.music_fits.borrow_mut().remove(c.id);
         self.characters.push(c);
         self.characters[1..].sort_by_key(|c| c.name.to_lowercase());
     }
@@ -667,7 +669,7 @@ impl App {
                     .bpm()
                     / 60.0;
                 let control = crate::mascot::preview::Control {
-                    dance: self.dance_options(),
+                    dance: self.dance_options(self.current_character().id),
                     idle: o.0,
                     reduced: o.1,
                     music: self.music_level(),
@@ -916,6 +918,10 @@ impl App {
                 {
                     p.hold_speech(seconds);
                 }
+            }
+            UiMsg::MusicFit(fit) => {
+                let id = self.current_character().id;
+                self.set_music_fit(id, fit);
             }
             UiMsg::MusicBop(bop) => {
                 if let Some(p) = &mut self.studio.motion_preview {

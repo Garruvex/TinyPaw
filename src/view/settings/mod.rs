@@ -134,6 +134,8 @@ pub struct SettingsView<'a> {
     pub transfer: Option<&'a Transfer>,
     /// The Art tab's open character, while editing.
     pub art: Option<&'a crate::mascot::editor::Editor>,
+    /// The selected character's music pose and hand position.
+    pub music_fit: crate::mascot::pack::MusicFit,
     /// The Motion tab's live preview, on the Character page.
     pub motion: Option<&'a crate::mascot::preview::MotionPreview>,
     /// Create from reference in progress, with the reference's thumbnail.

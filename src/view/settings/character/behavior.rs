@@ -790,8 +790,39 @@ pub(super) fn level_bar<'a>(level: f32, width: f32) -> Element<'a, Message> {
     }
 }
 
+/// One of the selected character's hand settings: a slider, its value and Reset.
+fn hand_row<'a>(
+    label: &'a str,
+    range: std::ops::RangeInclusive<f32>,
+    value: f32,
+    unit: &'a str,
+    default: f32,
+    with: impl Fn(f32) -> MusicFit + Copy + 'a,
+) -> Element<'a, Message> {
+    row![
+        text(label).size(12).color(theme::MUTED).width(110),
+        slider(range, value, move |x| set_fit(with(x)))
+            .step(1.0_f32)
+            .style(theme::range),
+        text(format!("{value:.0}{unit}")).size(12).width(48),
+        button("Reset")
+            .style(theme::secondary)
+            .on_press(set_fit(with(default))),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+fn set_fit(fit: MusicFit) -> Message {
+    Message::Ui(UiMsg::MusicFit(fit))
+}
+
+use crate::mascot::pack::MusicFit;
+
 pub(super) fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     let s = v.session.settings();
+    let fit = v.music_fit;
     use crate::mascot::music::Source;
     let (status, level) = (v.music.0.clone(), v.music.1);
     let on = s.bool(mascot::MUSIC);
@@ -901,8 +932,8 @@ pub(super) fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         row![
             text("Music pose").size(12).color(theme::MUTED).width(110),
             pick_list(["Automatic", "Sitting", "Standing"],
-                Some(match s.choice(mascot::MUSIC_POSE) { "sit" => "Sitting", "stand" => "Standing", _ => "Automatic" }),
-                |x| Message::Set(mascot::MUSIC_POSE, Value::Choice(match x { "Sitting" => "sit", "Standing" => "stand", _ => "auto" })))
+                Some(["Automatic", "Sitting", "Standing"][usize::from(fit.pose.min(2))]),
+                move |x| set_fit(MusicFit { pose: match x { "Sitting" => 1, "Standing" => 2, _ => 0 }, ..fit }))
                 .text_size(13).padding([6, 10]).style(theme::select),
         ].spacing(10).align_y(Alignment::Center).into(),
         row![
@@ -924,35 +955,11 @@ pub(super) fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
                 |x| Message::Set(mascot::DANCE_ITEM, Value::Choice(match x { "Phone" => "phone", "Glow stick" => "glow_stick", _ => "random" })))
                 .text_size(13).padding([6, 10]).style(theme::select),
         ].spacing(10).align_y(Alignment::Center).into(),
-        row![
-            text("Hand horizontal").size(12).color(theme::MUTED).width(110),
-            slider(-15.0..=15.0, s.float(mascot::WAVE_X), |x| Message::Set(mascot::WAVE_X, Value::Float(x)))
-                .step(1.0).style(theme::range),
-            text(format!("{:.0}%", s.float(mascot::WAVE_X))).size(12).width(48),
-            button("Reset").style(theme::secondary).on_press(Message::Set(mascot::WAVE_X, Value::Float(0.0))),
-        ].spacing(8).align_y(Alignment::Center).into(),
-        row![
-            text("Hand vertical").size(12).color(theme::MUTED).width(110),
-            slider(-15.0..=15.0, s.float(mascot::WAVE_Y), |x| Message::Set(mascot::WAVE_Y, Value::Float(x)))
-                .step(1.0).style(theme::range),
-            text(format!("{:.0}%", s.float(mascot::WAVE_Y))).size(12).width(48),
-            button("Reset").style(theme::secondary).on_press(Message::Set(mascot::WAVE_Y, Value::Float(0.0))),
-        ].spacing(8).align_y(Alignment::Center).into(),
-        row![
-            text("Hand angle").size(12).color(theme::MUTED).width(110),
-            slider(-45.0..=45.0, s.float(mascot::WAVE_ANGLE), |x| Message::Set(mascot::WAVE_ANGLE, Value::Float(x)))
-                .step(1.0).style(theme::range),
-            text(format!("{:.0}°", s.float(mascot::WAVE_ANGLE))).size(12).width(48),
-            button("Reset").style(theme::secondary).on_press(Message::Set(mascot::WAVE_ANGLE, Value::Float(0.0))),
-        ].spacing(8).align_y(Alignment::Center).into(),
-        row![
-            text("Wave range").size(12).color(theme::MUTED).width(110),
-            slider(0.0..=200.0, s.float(mascot::WAVE_RANGE), |x| Message::Set(mascot::WAVE_RANGE, Value::Float(x)))
-                .step(1.0).style(theme::range),
-            text(format!("{:.0}%", s.float(mascot::WAVE_RANGE))).size(12).width(48),
-            button("Reset").style(theme::secondary).on_press(Message::Set(mascot::WAVE_RANGE, Value::Float(100.0))),
-        ].spacing(8).align_y(Alignment::Center).into(),
-        hint("Hand position moves the waving arm and item together. Positive horizontal moves right; positive vertical moves down. These adjustments apply across characters and save immediately."),
+        hand_row("Hand horizontal", -15.0..=15.0, fit.hand_x, "%", 0.0, move |x| MusicFit { hand_x: x, ..fit }),
+        hand_row("Hand vertical", -15.0..=15.0, fit.hand_y, "%", 0.0, move |x| MusicFit { hand_y: x, ..fit }),
+        hand_row("Hand angle", -45.0..=45.0, fit.hand_angle, "\u{b0}", 0.0, move |x| MusicFit { hand_angle: x, ..fit }),
+        hand_row("Wave range", 0.0..=200.0, fit.wave_range, "%", 100.0, move |x| MusicFit { wave_range: x, ..fit }),
+        hint("Music pose and hand position belong to this character and save immediately. Hand position moves the waving arm and item together. Positive horizontal moves right; positive vertical moves down."),
         hint("Random uses the checked styles and changes on a beat boundary. Light wave joins Random when the character has a holding arm and an item. An empty selection uses Nod. Items use the available artwork; characters without gesture artwork use the built-in glow stick. Interval, included styles and item apply to all characters."),
         check("Random · Nod", s.bool(mascot::DANCE_STYLES[0]), mascot::DANCE_STYLES[0]),
         check("Random · Groove", s.bool(mascot::DANCE_STYLES[1]), mascot::DANCE_STYLES[1]),

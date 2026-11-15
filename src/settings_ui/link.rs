@@ -375,6 +375,8 @@ fn thumb_from(handle: &iced::advanced::image::Handle) -> Thumb {
 pub struct View {
     pub expanded: Option<u32>,
     pub picking: bool,
+    /// A page's fine tuning is unfolded.
+    pub advanced: bool,
 }
 
 /// Opens or closes a character's row: `open:instance.<id>.shown`.
@@ -404,6 +406,7 @@ fn snapshot(registry: &Registry, state: &State, page: usize, notice: &str, view:
         has_custom_sound: state.custom_sound,
         expanded: view.expanded,
         picking: view.picking,
+        advanced: view.advanced,
     };
     let built = pages::build(id, &cx);
     Snapshot {
@@ -467,6 +470,11 @@ fn run(rx: Receiver<Cmd>, start_page: usize) {
             Ok(Cmd::Action(name)) if name == pages::PICK || name == pages::PICK_CANCEL => {
                 view.picking = name == pages::PICK;
                 notice.clear();
+                super::show(snapshot(&registry, &state, page, &notice, view), false);
+                continue;
+            }
+            Ok(Cmd::Action(name)) if name == pages::ADVANCED => {
+                view.advanced = !view.advanced;
                 super::show(snapshot(&registry, &state, page, &notice, view), false);
                 continue;
             }

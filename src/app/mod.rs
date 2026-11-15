@@ -190,6 +190,9 @@ pub struct App {
     crowd: Arc<crate::mascot::crowd::Crowd>,
     /// Which free character gets the next idle sound.
     idle_turn: usize,
+    /// Each character's own music pose and hand position, read once from its
+    /// overrides; `None` follows the app-wide values.
+    music_fits: std::cell::RefCell<std::collections::HashMap<String, Option<characters::MusicFit>>>,
     #[cfg(windows)]
     sources: Vec<platform::windows::WindowSource>,
     /// Why overlays cannot open on this desktop; settings stay usable.
@@ -464,6 +467,7 @@ impl App {
             instances,
             crowd: Arc::default(),
             idle_turn: 0,
+            music_fits: Default::default(),
             #[cfg(windows)]
             sources: platform::windows::window_sources(),
             #[cfg(target_os = "linux")]
@@ -1604,6 +1608,7 @@ impl App {
                 unsaved: self.character_unsaved(),
                 leaving: self.studio.leaving.is_some(),
                 music: self.music_status(),
+                music_fit: self.music_fit(self.current_character().id),
                 music_source: self.music_source(),
                 music_rows: self.music_rows(),
                 music_inputs: self.music_inputs(),
