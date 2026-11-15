@@ -2,7 +2,6 @@
 //! status chip and quick bar. Settings and first-run windows live in their own
 //! modules and share the Graphite tokens.
 
-pub mod first_run;
 pub mod icons;
 mod ink;
 pub(crate) mod paw;
@@ -80,12 +79,6 @@ pub enum UiMsg {
     CharacterDiscard,
     ImportWav,
     PreviewSound,
-    TurnOn,
-    OpenSettings,
-    PickPack(&'static str),
-    Rebind(&'static str),
-    ResetShortcuts,
-    RefreshSources,
     AddPointer,
     ImportPack,
     EditPack,
@@ -1214,72 +1207,5 @@ impl canvas::Program<Message> for OverlayCanvas<'_> {
         } else {
             mouse::Interaction::None
         }
-    }
-}
-
-/// Preview tile shared by settings: one stroke and the pointer on a backdrop.
-pub struct PreviewTile {
-    pub forearm_color: Option<[u8; 4]>,
-    pub background: Color,
-    pub ink: Color,
-    pub width: f32,
-    pub laser: bool,
-    pub stick: bool,
-    pub stretch: bool,
-    pub scale: f32,
-    pub angle: f32,
-    pub pack: Option<crate::packs::Pack>,
-}
-
-impl<Message> canvas::Program<Message> for PreviewTile {
-    type State = ();
-
-    fn draw(
-        &self,
-        _state: &(),
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: mouse::Cursor,
-    ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        let size = bounds.size();
-        frame.fill(
-            &Path::rounded_rectangle(Point::ORIGIN, size, 12.0.into()),
-            self.background,
-        );
-        let (w, h) = (size.width, size.height);
-        let tip = Point::new(w * 0.56, h * 0.25);
-        let curve = Path::new(|b| {
-            b.move_to(Point::new(w * 0.15, h * 0.68));
-            b.bezier_curve_to(
-                Point::new(w * 0.27, h * 0.25),
-                Point::new(w * 0.6, h * 0.2),
-                tip,
-            );
-        });
-        frame.stroke(&curve, stroke_style(self.ink, self.width));
-        let at = crate::session::Pt::new(tip.x, tip.y);
-        let pose = if self.laser {
-            crate::session::Tip::Laser { at, press: 0.0 }
-        } else {
-            crate::session::Tip::Paw {
-                at,
-                press: 0.0,
-                scale: self.scale,
-                angle: self.angle,
-                stick: self.stick,
-                stretch: self.stretch,
-                grip_x: tip.x,
-            }
-        };
-        paw::draw_tip(
-            &mut frame,
-            pose,
-            size,
-            self.pack.as_ref(),
-            self.forearm_color,
-        );
-        vec![frame.into_geometry()]
     }
 }

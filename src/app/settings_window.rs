@@ -6,13 +6,28 @@
 use super::*;
 
 impl App {
-    /// Whether Settings opens the Slint window. Opt-in while pages move over.
-    pub(super) fn slint_settings_wanted() -> bool {
-        std::env::var_os("TINYPAW_SLINT_SETTINGS").is_some()
+    /// Shows the first-run card, a window of its own process.
+    pub(super) fn open_first_run(&mut self) {
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+        let mut command = std::process::Command::new(exe);
+        command.arg("--first-run");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000);
+        }
+        let _ = command.spawn();
     }
 
     /// Opens the Settings process, or asks the open one to come forward.
     pub(super) fn open_slint_settings(&mut self) {
+        self.open_slint_settings_on("");
+    }
+
+    /// As `open_slint_settings`, on the named page when it has to start.
+    pub(super) fn open_slint_settings_on(&mut self, page: &str) {
         if let Some(child) = &mut self.settings_child {
             if matches!(child.try_wait(), Ok(None)) {
                 self.settings_focus = true;
@@ -31,6 +46,9 @@ impl App {
         }
         let mut command = std::process::Command::new(exe);
         command.arg("--settings");
+        if !page.is_empty() {
+            command.arg(page);
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -151,6 +169,15 @@ impl App {
             "pointer.remove" => tasks.push(self.ui_message(UiMsg::RemovePack, now, out)),
             "pointer.prompt" => tasks.push(self.ui_message(UiMsg::CopyPointerPrompt, now, out)),
             "pointer.arm-prompt" => tasks.push(self.ui_message(UiMsg::CopyForearmPrompt, now, out)),
+            "first-run.turn-on" => {
+                if !self.session.is_enabled() {
+                    out.collect(
+                        self.dispatch(crate::features::system::MASTER_TOGGLE, now)
+                            .ok(),
+                    );
+                }
+            }
+            "first-run.settings" => self.open_slint_settings(),
             "characters.edit" => {
                 self.page = crate::view::settings::Page::Character;
                 tasks.push(self.open_classic_settings());

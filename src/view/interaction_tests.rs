@@ -111,7 +111,7 @@ fn overlay_buttons_receive_complete_clicks_above_the_annotation_canvas() {
 fn settings_view<'a>(
     registry: &'a Registry,
     session: &'a Session,
-    packs: &'a [crate::packs::Pack],
+    _packs: &'a [crate::packs::Pack],
     page: settings::Page,
 ) -> settings::SettingsView<'a> {
     settings::SettingsView {
@@ -119,14 +119,7 @@ fn settings_view<'a>(
         session,
         page,
         character_tab: Default::default(),
-        displays: &[],
-        #[cfg(windows)]
-        sources: &[],
-        has_custom_sound: false,
-        taken: &[],
         notice: None,
-        packs,
-        pack: packs.first(),
         draft: None,
         editing: false,
         frame: None,
@@ -199,40 +192,18 @@ fn settings_navigation_and_page_actions_receive_clicks() {
     let packs = crate::packs::load_all().0;
     use settings::Page;
     for (page, expected) in [
-        (
-            Page::Pointer,
-            vec![
-                "AddPointer",
-                "ImportPack",
-                "CopyPointerPrompt",
-                "CopyForearmPrompt",
-                "PreviewSound",
-            ],
-        ),
+        (Page::Pointer, vec![]),
         (
             Page::Character,
             vec!["AddCharacter", "ArtFromParts", "TransferOpen(false)"],
         ),
-        (Page::Ink, vec![]),
-        (Page::Tools, vec!["RefreshSources"]),
-        (Page::Shortcuts, vec!["ResetShortcuts"]),
-        (Page::Display, vec![]),
-        (Page::Sound, vec!["PreviewSound", "ImportWav"]),
     ] {
         let messages = click_layout(
             settings::view(settings_view(&registry, &session, &packs, page)),
             Size::new(1200.0, 2400.0),
         );
         assert_ui(&messages, &expected);
-        for target in [
-            Page::Pointer,
-            Page::Ink,
-            Page::Tools,
-            Page::Character,
-            Page::Shortcuts,
-            Page::Sound,
-            Page::Display,
-        ] {
+        for target in [Page::Pointer, Page::Character] {
             assert!(
                 messages
                     .iter()
@@ -263,11 +234,7 @@ fn character_tabs_show_the_selected_controls_and_keep_the_preview_interactive() 
         Default::default(),
         Default::default(),
     );
-    let tabs = [
-        CharacterTab::Library,
-        CharacterTab::Desktop,
-        CharacterTab::Behavior,
-    ];
+    let tabs = [CharacterTab::Library, CharacterTab::Behavior];
     for tab in tabs {
         let mut view = settings_view(&registry, &session, &[], settings::Page::Character);
         view.motion = Some(&preview);
@@ -275,7 +242,6 @@ fn character_tabs_show_the_selected_controls_and_keep_the_preview_interactive() 
         let messages = click_layout(settings::view(view), Size::new(1040.0, 4000.0));
         for target in [
             CharacterTab::Library,
-            CharacterTab::Desktop,
             CharacterTab::Artwork,
             CharacterTab::Behavior,
             CharacterTab::Advanced,
@@ -306,7 +272,6 @@ fn character_tabs_show_the_selected_controls_and_keep_the_preview_interactive() 
                 .any(|m| matches!(m, Message::Ui(UiMsg::MotionTest(_))))
         );
         for (id, owner) in [
-            (mascot::ENABLED, CharacterTab::Desktop),
             (mascot::LINES, CharacterTab::Behavior),
             (mascot::MUSIC, CharacterTab::Behavior),
         ] {
@@ -403,59 +368,6 @@ fn pointer_editor_save_and_cancel_work_beside_the_live_pair_preview() {
     );
 }
 
-#[test]
-fn first_run_buttons_receive_clicks() {
-    let registry = Registry::build(crate::features::BUILTINS).unwrap();
-    let messages = click_layout(first_run::view(&registry), Size::new(600.0, 400.0));
-    assert_ui(&messages, &["TurnOn", "OpenSettings"]);
-}
-
-#[test]
-fn generated_forearm_colour_controls_receive_clicks() {
-    let registry = Registry::build(crate::features::BUILTINS).unwrap();
-    let mut session = pointing(&registry);
-    let mut values = session.settings().clone();
-    registry
-        .set(&mut values, point::PRESENTATION, Value::Choice("stretch"))
-        .unwrap();
-    session.handle(crate::session::Event::SettingsChanged(values), 2);
-    let packs = crate::packs::load_all().0;
-    let messages = click_layout(
-        settings::view(settings_view(
-            &registry,
-            &session,
-            &packs,
-            settings::Page::Pointer,
-        )),
-        Size::new(1200.0, 2400.0),
-    );
-    assert!(
-        messages
-            .iter()
-            .any(|m| matches!(m, Message::Ui(UiMsg::ForearmColor(_))))
-    );
-    assert!(messages.iter().any(
-        |m| matches!(m, Message::Set(id, Value::Bool(false)) if *id == point::FOREARM_AUTO_COLOR)
-    ));
-    let mut values = session.settings().clone();
-    registry
-        .set(
-            &mut values,
-            point::FOREARM_COLOR,
-            Value::Color([20, 30, 80, 255]),
-        )
-        .unwrap();
-    assert_eq!(
-        point::forearm_color(&values),
-        None,
-        "auto retains the pack colour"
-    );
-    registry
-        .set(&mut values, point::FOREARM_AUTO_COLOR, Value::Bool(false))
-        .unwrap();
-    assert_eq!(point::forearm_color(&values), Some([20, 30, 80, 255]));
-}
-
 /// Lays out and clicks `next` with the widget state `prev` left behind,
 /// the way the app moves from one screen to another.
 fn transition(prev: Element<'_, Message>, mut next: Element<'_, Message>, size: Size) {
@@ -510,7 +422,6 @@ fn character_screens_switch_without_mismatched_widget_state() {
     request.add_results(vec!["body.png".into(), "tail.png".into()]);
     let tabs = [
         CharacterTab::Library,
-        CharacterTab::Desktop,
         CharacterTab::Artwork,
         CharacterTab::Behavior,
         CharacterTab::Advanced,
@@ -519,14 +430,14 @@ fn character_screens_switch_without_mismatched_widget_state() {
         let mut v = settings_view(&registry, &session, &[], settings::Page::Character);
         v.motion = Some(&preview);
         match n {
-            0..=4 => v.character_tab = tabs[n],
-            5 => v.reference = Some((&request, None)),
+            0..=3 => v.character_tab = tabs[n],
+            4 => v.reference = Some((&request, None)),
             _ => v.reference = Some((&request, Some(&thumb))),
         }
         settings::view(v)
     };
-    for a in 0..7 {
-        for b in 0..7 {
+    for a in 0..6 {
+        for b in 0..6 {
             transition(screen(a), screen(b), Size::new(1040.0, 2000.0));
         }
     }

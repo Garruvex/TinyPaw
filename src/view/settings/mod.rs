@@ -4,32 +4,25 @@
 
 use iced::widget::{
     Column, button, canvas, checkbox, column, container, pick_list, row, scrollable, slider, space,
-    text, toggler, tooltip,
+    text, toggler,
 };
 use iced::{Alignment, Color, Element, Length, Theme};
 
 use super::icons::{Glyph, icon};
-use super::{PreviewTile, UiMsg, theme};
+use super::{UiMsg, theme};
 use crate::app::Message;
-use crate::features::{display, mascot, point, sound, system};
+use crate::features::{mascot, point, system};
 use crate::packs::{Draft, Pack};
-use crate::registry::{Registry, ShortcutContext, Value};
-use crate::session::{ActivationStyle, Session};
+use crate::registry::{Registry, Value};
+use crate::session::Session;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 /// In navigation order: Annotate, then Desktop, then App.
 pub enum Page {
     #[default]
+    /// The pointer editor, while a pointer is being added or re-aimed.
     Pointer,
-    /// Ink and text labels.
-    Ink,
-    /// Spotlight and Lens, which also work outside annotation.
-    Tools,
     Character,
-    /// How drawing starts, and every shortcut.
-    Shortcuts,
-    Sound,
-    Display,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -37,8 +30,6 @@ pub enum CharacterTab {
     /// Pick, add, export or remove characters.
     #[default]
     Library,
-    /// The selected character on the desktop: shown, size, eyes, idle.
-    Desktop,
     /// Customize → Artwork: arrange layers in the Arrange preview.
     Artwork,
     /// Customize → Behavior: reactions, lines, moving parts and music,
@@ -125,16 +116,7 @@ pub struct SettingsView<'a> {
     pub session: &'a Session,
     pub page: Page,
     pub character_tab: CharacterTab,
-    pub displays: &'a [crate::platform::displays::Display],
-    #[cfg(windows)]
-    pub sources: &'a [crate::platform::windows::WindowSource],
-    pub has_custom_sound: bool,
-    /// Commands whose global shortcut is held by another app.
-    pub taken: &'a [&'static str],
     pub notice: Option<&'a str>,
-    pub packs: &'a [Pack],
-    /// The pack the Point tool draws with.
-    pub pack: Option<&'a Pack>,
     /// "Add your pointer" in progress.
     pub draft: Option<&'a Draft>,
     pub editing: bool,
@@ -178,16 +160,10 @@ pub struct SettingsView<'a> {
 
 mod character;
 mod controls;
-mod display_tab;
-mod ink;
 mod pointer;
-mod sound_tab;
 use character::character_page;
 use controls::*;
-use display_tab::*;
-use ink::*;
 use pointer::*;
-use sound_tab::*;
 
 fn h1<'a>(label: &'a str) -> Element<'a, Message> {
     text(label)
@@ -203,23 +179,6 @@ fn h2<'a>(label: &'a str) -> Element<'a, Message> {
         .size(15)
         .color(theme::TEXT_SOFT)
         .into()
-}
-
-/// How to use and adjust a Lens or Spotlight anywhere shortcut, with its
-/// current binding.
-fn anywhere_hint(
-    registry: &crate::registry::Registry,
-    id: &str,
-    fallback: &str,
-    size: &str,
-    more: &str,
-) -> String {
-    let key = registry
-        .shortcut_label(id)
-        .unwrap_or_else(|| fallback.to_owned());
-    format!(
-        "Anywhere: tap {key} to toggle, or hold it to show until release.          While holding, Up/Down change the {size} and +/− the {more}.          In annotation, scroll for {size}, Shift+scroll for {more}."
-    )
 }
 
 fn hint<'a>(label: impl text::IntoFragment<'a>) -> Element<'a, Message> {
@@ -246,56 +205,6 @@ fn card_label(name: &str) -> String {
     let mut short: String = name.chars().take(MAX - 1).collect();
     short.push('…');
     short
-}
-
-/// An inline jump to the place a related setting lives.
-fn link<'a>(label: &'a str, msg: Message) -> Element<'a, Message> {
-    button(text(label).size(12).color(theme::CYAN_TEXT))
-        .padding([2, 4])
-        .style(theme::tool_button(theme::Tone::Plain))
-        .on_press(msg)
-        .into()
-}
-
-/// A hint followed by a link, on one line.
-fn hint_link<'a>(
-    label: impl text::IntoFragment<'a>,
-    link_label: &'a str,
-    msg: Message,
-) -> Element<'a, Message> {
-    row![hint(label), link(link_label, msg)]
-        .spacing(6)
-        .align_y(Alignment::Center)
-        .wrap()
-        .into()
-}
-
-/// When ink and tap stamps fade; one setting shared by both.
-fn fade_picker<'a>(s: &crate::registry::SettingValues) -> Element<'a, Message> {
-    pick_list(
-        [FadeChoice::Keep, FadeChoice::ThreeSeconds],
-        Some(if s.choice(system::INK_FADE) == "3s" {
-            FadeChoice::ThreeSeconds
-        } else {
-            FadeChoice::Keep
-        }),
-        |f| Message::Set(system::INK_FADE, Value::Choice(f.id())),
-    )
-    .text_size(13)
-    .padding([8, 10])
-    .style(theme::select)
-    .into()
-}
-
-fn later<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
-    tooltip(
-        content,
-        container(text("Coming in a later alpha").size(12))
-            .padding([6, 10])
-            .style(theme::fill(theme::HOVER, 8.0)),
-        tooltip::Position::Top,
-    )
-    .into()
 }
 
 pub fn view(v: SettingsView<'_>) -> Element<'_, Message> {
@@ -438,18 +347,9 @@ fn nav<'a>(page: Page) -> Element<'a, Message> {
     };
     container(
         column![
-            hint("Annotate"),
-            item(Page::Pointer, Glyph::Pointer, "Pointer"),
-            item(Page::Ink, Glyph::Pen, "Ink & text"),
-            item(Page::Tools, Glyph::Lens, "Spotlight & lens"),
-            space().height(10),
-            hint("Desktop"),
+            hint("Editors"),
             item(Page::Character, Glyph::Head, "Character"),
-            space().height(10),
-            hint("App"),
-            item(Page::Shortcuts, Glyph::Controls, "Shortcuts"),
-            item(Page::Sound, Glyph::Sound, "Sound"),
-            item(Page::Display, Glyph::Display, "Display & motion"),
+            item(Page::Pointer, Glyph::Pointer, "Pointer"),
         ]
         .spacing(4),
     )
@@ -472,11 +372,6 @@ fn main<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     }
     let (body, side) = match v.page {
         Page::Pointer => pointer_page(v),
-        Page::Ink => (ink_page(v), None),
-        Page::Tools => (tools_page(v), None),
-        Page::Shortcuts => (controls(v), None),
-        Page::Display => (display_page(v), None),
-        Page::Sound => (sound_page(v), None),
         Page::Character => character_page(v),
     };
     content.push(body);

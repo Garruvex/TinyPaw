@@ -134,11 +134,7 @@ impl App {
             exclude.extend(
                 self.helper_hwnds
                     .iter()
-                    .filter(|(id, hwnd)| {
-                        **hwnd != 0
-                            && (Some(**id) == self.settings_window
-                                || Some(**id) == self.first_run_window)
-                    })
+                    .filter(|(id, hwnd)| **hwnd != 0 && Some(**id) == self.settings_window)
                     .map(|(_, hwnd)| *hwnd),
             );
             let result = self.lens.update(platform::lens::Input {

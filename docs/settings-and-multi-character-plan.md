@@ -287,12 +287,20 @@ Slice 3d results. The app now runs the desktop character on the stage and nothin
 
 | Slice | Scope | State |
 |---|---|---|
-| 4a | Slint in the main crate; the Settings window as its own process; page definitions that the registry mounts; Sound and Display & motion pages | Done; opt in with `TINYPAW_SLINT_SETTINGS=1` |
+| 4a | Slint in the main crate; the Settings window as its own process; page definitions that the registry mounts; Sound and Display & motion pages | Done |
 | 4b | Shortcuts (rebinding is custom) | Done |
 | 4c | Ink & text, Spotlight & lens | Done |
 | 4d | Pointer | Done, except the live preview and the pointer editor |
 | 4e | Music response (moved out of the Character page) and the Characters page, with Customize opening the existing editor until step 5 | Done |
-| 4f | First-run window; delete the Iced settings views | Not started |
+| 4f | First-run window; delete the Iced settings views | Done, except the character and pointer editors, which go with the studio in step 5 |
+
+Slice 4f results. Step 4 is done:
+
+- **Slint Settings is the only Settings.** The `TINYPAW_SLINT_SETTINGS` gate is gone: the tray, the shortcut and `tinypaw settings` all open it. When annotation cannot start because no display is available, Settings opens on Display & motion.
+- **First-run card in Slint.** `tinypaw --first-run` is a small window of its own process, started by the resident app on first start. It shows the tips with the keys currently bound, Turn on TinyPaw beside the shortcut, and Open settings; each button is answered by the resident app (`settings-action first-run.turn-on` and `first-run.settings`) and closes the window. Checked on a fresh profile: the card appeared, and Turn on switched TinyPaw On.
+- **Iced pages deleted:** Ink & text, Spotlight & lens, Shortcuts (and in-window rebinding with its key capture), Sound, Display & motion, the Pointer page, the pointer preview tiles, the On desktop tab of the Character page, and the Iced first-run card. About 1,400 lines net went, and four UI messages with them.
+- **What the classic window still is:** a two-item editor window (Character and Pointer) that opens only from the Characters page's "Open the editor…", from Add pointer and Re-aim, and when a character job needs it. It exists only because the character editor (artwork, behavior, advanced, import and export) and the pointer hot-spot editor have not moved; both go with the studio window in step 5, and this window goes with them.
+- **Checked:** both windows open side by side from a running app with no environment variable; 284 tests pass (the removed Iced pages took their click tests with them), clippy clean. Not checked by hand: pressing the first-run buttons with a mouse (the actions were sent directly).
 
 Slice 4e results. Characters and Music response are Slint pages; every page in the navigation is now on the new window:
 

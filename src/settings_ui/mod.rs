@@ -146,6 +146,73 @@ pub fn run(page: &str) -> ExitCode {
     }
 }
 
+/// `tinypaw --first-run`: the card shown the first time TinyPaw starts. Its
+/// buttons are answered by the running app.
+pub fn first_run() -> ExitCode {
+    use crate::features::system;
+    use crate::platform::ipc;
+    let window = match FirstRunWindow::new() {
+        Ok(window) => window,
+        Err(e) => {
+            eprintln!("tinypaw: could not create the first-run window: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let registry = crate::registry::Registry::build(crate::features::BUILTINS).ok();
+    let shortcuts = ipc::request("settings-state")
+        .ok()
+        .zip(registry)
+        .and_then(|(reply, registry)| link::parse_state(&registry, &reply))
+        .map(|state| state.shortcuts)
+        .unwrap_or_default();
+    let key = |id: &str| {
+        shortcuts
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| s.binding.replace('+', " "))
+    };
+    let edit = match (key(system::UNDO), key(system::CLEAR)) {
+        (Some(u), Some(c)) => format!("2.  {u} undoes, {c} clears."),
+        (Some(u), None) => format!("2.  {u} undoes; Clear marks is under More."),
+        _ => "2.  Undo and Clear marks are on the quick bar.".to_owned(),
+    };
+    let exit = match key(system::EXIT) {
+        Some(e) => format!("3.  {e} hands the mouse back to your game."),
+        None => "3.  End annotation hands the mouse back to your game.".to_owned(),
+    };
+    let tips: Vec<SharedString> = vec![
+        "1.  Click to tap, drag to draw.".into(),
+        edit.into(),
+        exit.into(),
+    ];
+    window.set_tips(ModelRc::new(VecModel::from(tips)));
+    window.set_shortcut(key(system::MASTER_TOGGLE).unwrap_or_default().into());
+    let (w, h, rgba) = crate::branding::logo_rgba();
+    let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(w, h);
+    buffer.make_mut_bytes().copy_from_slice(rgba);
+    window.set_logo(slint::Image::from_rgba8(buffer));
+    let answer = |action: &'static str| {
+        move || {
+            let _ = ipc::request(&format!("settings-action {action}"));
+            let _ = slint::quit_event_loop();
+        }
+    };
+    window.on_turn_on(answer("first-run.turn-on"));
+    window.on_open_settings(answer("first-run.settings"));
+    window.window().on_close_requested(|| {
+        let _ = slint::quit_event_loop();
+        CloseRequestResponse::HideWindow
+    });
+    if let Err(e) = window.show() {
+        eprintln!("tinypaw: could not show the first-run window: {e}");
+        return ExitCode::FAILURE;
+    }
+    match slint::run_event_loop() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(_) => ExitCode::FAILURE,
+    }
+}
+
 enum Capture {
     Keep,
     Cancel,

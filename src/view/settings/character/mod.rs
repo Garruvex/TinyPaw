@@ -18,13 +18,6 @@ use iced::widget::{column, row};
 use reference::*;
 use transfer::*;
 
-/// `mascot::FRAME_RATE` choices with their labels.
-const FRAME_RATES: [(&str, &str); 3] = [
-    ("30", "30 fps"),
-    ("60", "60 fps"),
-    ("display", "Match display"),
-];
-
 pub(super) fn character_page<'a>(
     v: &SettingsView<'a>,
 ) -> (Element<'a, Message>, Option<Element<'a, Message>>) {
@@ -103,7 +96,6 @@ fn navigator<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     let mut tabs = row![].spacing(4);
     for (tab, label) in [
         (CharacterTab::Library, "Library"),
-        (CharacterTab::Desktop, "On desktop"),
         (CharacterTab::Artwork, "Artwork"),
         (CharacterTab::Behavior, "Behavior"),
         (CharacterTab::Advanced, "Advanced"),
@@ -203,8 +195,6 @@ fn character_body<'a>(
             v.motion.map(motion_preview),
         );
     }
-    let s = v.session.settings();
-    let size = s.float(mascot::HEIGHT);
     let selected = v
         .characters
         .iter()
@@ -364,80 +354,5 @@ fn character_body<'a>(
         return (page.into(), side);
     }
 
-    // On desktop.
-    let tracks = v.motion.is_some_and(|m| m.rig().eye_point().is_some());
-    let eyes: Element<'a, Message> = if tracks {
-        check("Eyes follow the cursor", s.bool(mascot::EYES), mascot::EYES)
-    } else {
-        hint_link(
-            format!(
-                "{name}'s eyes are part of its artwork, so they can't follow the cursor. Tracking eyes need a head with separate white, pupil and mask art."
-            ),
-            "Artwork → Eyes",
-            Message::Ui(UiMsg::CharacterTab(CharacterTab::Artwork)),
-        )
-    };
-    page = page
-        .push(section(vec![
-            h2("Visibility"),
-            check(
-                "Show on the desktop",
-                s.bool(mascot::ENABLED),
-                mascot::ENABLED,
-            ),
-            hint(format!(
-                "Right-click {name} for its menu, click to see it react, and drag to move it. It stays while annotation is off and steps aside while you draw."
-            )),
-        ]))
-        .push(section(vec![
-            row![
-                h2("Size"),
-                space().width(Length::Fill),
-                text(format!("{size:.0} px tall")).size(13)
-            ]
-            .into(),
-            slider(v.registry.range(mascot::HEIGHT), size, |x| {
-                Message::Set(mascot::HEIGHT, Value::Float(x))
-            })
-            .step(4.0)
-            .style(theme::range)
-            .into(),
-        ]))
-        .push(section(vec![
-            h2("Liveliness"),
-            eyes,
-            check(
-                "Idle motion and blinking",
-                s.bool(mascot::IDLE),
-                mascot::IDLE,
-            ),
-            hint_link(
-                "Reduced motion also stops idle motion and blinking.",
-                "Motion settings",
-                Message::Ui(UiMsg::Nav(Page::Display)),
-            ),
-            row![
-                text("Frame rate").size(13).width(Length::Fill),
-                pick_list(FRAME_RATES.map(|(v, l)| Choice(v, l)), {
-                    Some(Choice::of(s.choice(mascot::FRAME_RATE), &FRAME_RATES))
-                }, |c| Message::Set(mascot::FRAME_RATE, Value::Choice(c.0)))
-                .text_size(13)
-                .padding([6, 10])
-                .style(theme::select),
-            ]
-            .spacing(10)
-            .align_y(Alignment::Center)
-            .into(),
-            hint("Higher is smoother but uses more CPU while the character moves."),
-        ]))
-        .push(
-            button(text("Reset position").size(13))
-                .padding([7, 12])
-                .style(theme::secondary)
-                .on_press_maybe(
-                    s.bool(mascot::ENABLED)
-                        .then_some(Message::Ui(UiMsg::ResetMascotPosition)),
-                ),
-        );
     (page.into(), side)
 }

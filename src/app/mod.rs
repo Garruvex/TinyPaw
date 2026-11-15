@@ -133,7 +133,6 @@ pub struct App {
     /// Whether Settings uses the merged Windows header.
     settings_framed: bool,
     helper_hwnds: std::collections::BTreeMap<window::Id, isize>,
-    first_run_window: Option<window::Id>,
     page: Page,
     character_tab: view::settings::CharacterTab,
     notice: Option<String>,
@@ -173,7 +172,6 @@ pub struct App {
     #[cfg(windows)]
     beat_clock: crate::stage::SharedClock,
     editing_pack: Option<&'static str>,
-    rebinding: Option<&'static str>,
     alt_down: bool,
     #[cfg(windows)]
     lens: platform::lens::Controller,
@@ -423,7 +421,6 @@ impl App {
             settings_window: None,
             settings_framed: false,
             helper_hwnds: std::collections::BTreeMap::new(),
-            first_run_window: None,
             page: Page::default(),
             character_tab: Default::default(),
             notice: None,
@@ -450,7 +447,6 @@ impl App {
             beat_clock: Default::default(),
             pointer_draft: None,
             editing_pack: None,
-            rebinding: None,
             alt_down: false,
             #[cfg(windows)]
             lens: platform::lens::Controller::default(),
@@ -500,9 +496,8 @@ impl App {
         let task = if loaded.first_run {
             // Saving now means the card shows once.
             app.preference_writer.schedule(app.session.settings());
-            let (id, open) = open_panel(Size::new(420.0, 330.0), None, false);
-            app.first_run_window = Some(id);
-            open
+            app.open_first_run();
+            Task::none()
         } else {
             Task::none()
         };
@@ -535,7 +530,7 @@ impl App {
         let mut tasks = Vec::new();
 
         if let Message::NativeReady(id, hwnd) = &message
-            && (Some(*id) == self.settings_window || Some(*id) == self.first_run_window)
+            && Some(*id) == self.settings_window
         {
             self.helper_hwnds.insert(*id, *hwnd);
         }
@@ -680,39 +675,7 @@ impl App {
             }
             Message::Ui(ui) => tasks.push(self.ui_message(ui, now, &mut out)),
             Message::Key(key, modifiers, window) => {
-                if Some(window) == self.settings_window && self.rebinding.is_some() {
-                    if matches!(
-                        key.as_ref(),
-                        keyboard::Key::Named(
-                            Named::Control | Named::Shift | Named::Alt | Named::Super
-                        )
-                    ) {
-                        return Task::none();
-                    }
-                    let command = self.rebinding.take().unwrap();
-                    if !matches!(key.as_ref(), keyboard::Key::Named(Named::Escape)) {
-                        let base = match key.as_ref() {
-                            keyboard::Key::Character(c) => Some(c.to_uppercase()),
-                            keyboard::Key::Named(Named::Alt) => Some("Alt".into()),
-                            keyboard::Key::Named(n) => Some(format!("{n:?}")),
-                            _ => None,
-                        };
-                        if let Some(base) = base {
-                            let binding = if base == "Alt" {
-                                base
-                            } else {
-                                format!(
-                                    "{}{}{}{}",
-                                    if modifiers.control() { "Ctrl+" } else { "" },
-                                    if modifiers.alt() { "Alt+" } else { "" },
-                                    if modifiers.shift() { "Shift+" } else { "" },
-                                    base
-                                )
-                            };
-                            self.notice = self.rebind_shortcut(command, &binding).err();
-                        }
-                    }
-                } else if Some(window) == self.settings_window
+                if Some(window) == self.settings_window
                     && self.studio.character_job.is_none()
                     && self.studio.art.is_some()
                 {
@@ -798,7 +761,7 @@ impl App {
             }
             Message::WindowOpened(id) => {
                 #[cfg(windows)]
-                if Some(id) == self.settings_window || Some(id) == self.first_run_window {
+                if Some(id) == self.settings_window {
                     tasks.push(window::run(id, move |w| {
                         use iced::window::raw_window_handle::RawWindowHandle;
                         let hwnd = match w.window_handle().map(|h| h.as_raw()) {
@@ -833,9 +796,6 @@ impl App {
                     } else {
                         tasks.push(self.close_settings());
                     }
-                } else if Some(id) == self.first_run_window {
-                    self.first_run_window = None;
-                    tasks.push(window::close(id));
                 }
             }
             Message::Tick => {
@@ -1011,17 +971,6 @@ impl App {
             e.checkpoint();
         }
         match ui {
-            UiMsg::RefreshSources => {
-                #[cfg(windows)]
-                {
-                    self.sources = platform::windows::window_sources();
-                }
-            }
-            UiMsg::Rebind(id) => {
-                self.rebinding = Some(id);
-                self.notice = Some("Press the new shortcut (Escape cancels)".into());
-            }
-            UiMsg::ResetShortcuts => self.reset_shortcuts(),
             UiMsg::ImportPack => {
                 return Task::perform(
                     rfd::AsyncFileDialog::new()
@@ -1144,10 +1093,6 @@ impl App {
                 );
                 return iced::clipboard::write(packs::FOREARM_PROMPT.to_owned());
             }
-            UiMsg::PickPack(id) => {
-                out.sets.push((point::STYLE, Value::Choice("paw")));
-                out.sets.push((point::PACK, Value::Choice(id)));
-            }
             UiMsg::AddPointer => {
                 return Task::perform(
                     rfd::AsyncFileDialog::new()
@@ -1223,21 +1168,6 @@ impl App {
                         .pick_file(),
                     |file| Message::WavPicked(file.map(|f| f.path().to_path_buf())),
                 );
-            }
-            UiMsg::TurnOn => {
-                if !self.session.is_enabled() {
-                    out.collect(self.dispatch(system::MASTER_TOGGLE, now).ok());
-                }
-                if let Some(id) = self.first_run_window.take() {
-                    return window::close(id);
-                }
-            }
-            UiMsg::OpenSettings => {
-                let open = self.open_settings();
-                return match self.first_run_window.take() {
-                    Some(id) => window::close(id).chain(open),
-                    None => open,
-                };
             }
             other => return self.character_ui(other, now, out),
         }
@@ -1337,11 +1267,8 @@ impl App {
     }
 
     fn open_settings(&mut self) -> Task<Message> {
-        if Self::slint_settings_wanted() {
-            self.open_slint_settings();
-            return Task::none();
-        }
-        self.open_classic_settings()
+        self.open_slint_settings();
+        Task::none()
     }
 
     /// Rebinds a command's shortcut, keeping the old one when the new one is
@@ -1543,8 +1470,8 @@ impl App {
             if selected.is_empty() {
                 self.session.handle(Event::Interrupted, self.now());
                 self.notice = Some("The selected display is unavailable. Choose a display.".into());
-                self.page = Page::Display;
-                return self.open_settings();
+                self.open_slint_settings_on("display");
+                return Task::none();
             }
             if want == OverlayState::Interactive {
                 self.previous_focus = platform::foreground_window();
@@ -1611,6 +1538,7 @@ impl App {
                 registry: &self.registry,
                 session: &self.session,
                 ink: &o.ink,
+                pack: self.current_pack(),
                 ui: &self.ui,
                 output: o.display.id,
                 now: self.now(),
@@ -1625,7 +1553,6 @@ impl App {
                             .map(|(_, h)| h)
                     }),
                 notice: self.overlay_notice.as_ref().map(|(text, _)| text.as_str()),
-                pack: self.current_pack(),
                 spotlight: self.spotlight(),
             });
         }
@@ -1634,15 +1561,9 @@ impl App {
             let element = view::settings::view(view::settings::SettingsView {
                 registry: &self.registry,
                 session: &self.session,
-                displays: &self.displays,
                 #[cfg(windows)]
-                sources: &self.sources,
                 page: self.page,
                 character_tab: self.character_tab,
-                has_custom_sound: self.audio.has_custom(),
-                taken: self.hotkeys.as_ref().map_or(&[], |h| h.taken.as_slice()),
-                packs: &self.packs,
-                pack: self.current_pack(),
                 draft: self.pointer_draft.as_ref(),
                 editing: self.editing_pack.is_some(),
                 notice: self.notice.as_deref(),
@@ -1675,9 +1596,6 @@ impl App {
                 );
             }
             return element;
-        }
-        if Some(window) == self.first_run_window {
-            return view::first_run::view(&self.registry);
         }
         iced::widget::space().into()
     }
