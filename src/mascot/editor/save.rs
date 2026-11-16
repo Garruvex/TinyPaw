@@ -30,6 +30,9 @@ impl Editor {
         if name.is_empty() {
             return Err("give the character a name".into());
         }
+        if let Some(library) = &self.library {
+            return library.save(root, name, self.new_install, job);
+        }
         let head = self.head();
         // Write each image under a name from its role, then the manifest.
         let dir = &self.pose;
@@ -98,6 +101,7 @@ impl Editor {
             };
             let base = format!("{dir}/eye-{}", n + 1);
             let mut eye = EyeDef {
+                static_image: false,
                 white: format!("{base}-white.png"),
                 pupil: format!("{base}-pupil.png"),
                 mask: format!("{base}-mask.png"),
@@ -162,6 +166,7 @@ impl Editor {
             lines: self.lines.clone(),
             bop: self.bop,
             music_art: self.music_art.clone(),
+            composition: None,
             reactions,
             canvas: self.canvas,
             default_pose: self.pose.clone(),

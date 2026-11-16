@@ -34,8 +34,20 @@ impl App {
                     r.tail = on;
                 }
             }
+            UiMsg::ReferenceSeatedHands(on) => {
+                if let Some(r) = &mut self.studio.reference {
+                    r.seated_hands = on;
+                }
+            }
             UiMsg::ReferenceDance(on) => {
-                if let Some(r) = &mut self.studio.reference { r.dance = on; }
+                if let Some(r) = &mut self.studio.reference {
+                    r.dance = on;
+                    if on {
+                        r.tracking = true;
+                        r.eyes = false;
+                        r.blink = true;
+                    }
+                }
             }
             UiMsg::ReferenceHead(on) => {
                 if let Some(r) = &mut self.studio.reference {
@@ -146,7 +158,7 @@ impl App {
                 self.studio.reference_thumb = None;
             }
             UiMsg::ReferenceOpen => {
-                use crate::mascot::editor::{Editor, Target};
+                use crate::mascot::editor::Editor;
                 use crate::mascot::reference::Role;
                 let Some(r) = self.studio.reference.clone() else {
                     return Task::none();
@@ -158,122 +170,18 @@ impl App {
                     );
                     return Task::none();
                 }
-                let Some(body) = r.file_for(Role::Body).map(PathBuf::from) else {
+                let Some(_body) = r.file_for(Role::Body).map(PathBuf::from) else {
                     self.notice = Some("Assign a file to Body first.".into());
                     return Task::none();
                 };
-                let head = r.file_for(Role::Head).map(PathBuf::from);
-                let tail = r.file_for(Role::Tail).map(PathBuf::from);
-                let held = r.file_for(Role::Held).map(PathBuf::from);
-                let extra_art: Vec<_> = r
-                    .roles()
-                    .into_iter()
-                    .filter_map(|role| Some((role.reaction()?, r.file_for(role)?.to_owned())))
-                    .collect();
-                let petting = r
-                    .extras
-                    .iter()
-                    .any(|role| matches!(role, Role::Petted | Role::HeadPetted));
-                let head_faces: Vec<(usize, PathBuf)> = r
-                    .roles()
-                    .into_iter()
-                    .filter_map(|role| Some((role.face_slot()?, PathBuf::from(r.file_for(role)?))))
-                    .collect();
-                let faces: Vec<(Role, PathBuf)> = r
-                    .roles()
-                    .into_iter()
-                    .filter(|role| role.is_face())
-                    .filter_map(|role| r.file_for(role).map(|p| (role, PathBuf::from(p))))
-                    .collect();
-                let tracking: Vec<_> = r
-                    .roles()
-                    .into_iter()
-                    .filter_map(|role| {
-                        if let Role::Tracking(right, layer) = role {
-                            Some((right, layer, r.file_for(role)?.to_owned()))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
+                let request = r.clone();
                 self.studio.reference = None;
                 self.studio.reference_thumb = None;
                 let taken: Vec<_> = self.characters.iter().map(|c| c.id).collect();
                 let id = self.begin_character_job();
-                // The assembled draft opens in Arrange for alignment; Save
-                // exports through the ordinary validated pack path.
                 return character_work(id, move || {
-                    let mut editor = Editor::from_body(&body, &taken)?;
-                    let mut errors = Vec::new();
-                    // The head first, so eyes and eyebrows ride on it.
-                    if let Some(head) = head {
-                        let before = editor.parts.len();
-                        errors.extend(editor.set_images(Target::NewPart, vec![head]));
-                        if editor.parts.len() == before {
-                            return Err(errors.join("; "));
-                        }
-                        if let Some(p) = editor.parts.last_mut() {
-                            p.kind = crate::mascot::motion::PartType::Head;
-                            p.motion = crate::mascot::motion::MotionSpec::default_for(p.kind);
-                            p.name = "Head".into();
-                        }
-                        // Its faces: eyes closed, pressed, being carried.
-                        let index = editor.parts.len() - 1;
-                        for (slot, path) in head_faces {
-                            if let Err(e) = editor.set_image(Target::Face(index, slot), &path) {
-                                errors.push(format!("{}: {e}", path.display()));
-                            }
-                        }
-                    }
-                    for (role, path) in faces {
-                        let before = editor.parts.len();
-                        errors.extend(editor.set_images(Target::EyePart, vec![path]));
-                        if editor.parts.len() > before
-                            && let Some(p) = editor.parts.last_mut()
-                        {
-                            p.name = role.label().into();
-                        }
-                    }
-                    if !tracking.is_empty() {
-                        use crate::mascot::editor::EyeSlot;
-                        use crate::mascot::reference::EyeLayer;
-                        editor.add_eye();
-                        editor.add_eye();
-                        for (right, layer, path) in tracking {
-                            let slot = match layer {
-                                EyeLayer::White => EyeSlot::White,
-                                EyeLayer::Pupil => EyeSlot::Pupil,
-                                EyeLayer::Mask => EyeSlot::Mask,
-                                EyeLayer::Blink => EyeSlot::Blink,
-                            };
-                            if let Err(e) =
-                                editor.set_image(Target::Eye(usize::from(right), slot), &path)
-                            {
-                                errors.push(format!("{}: {e}", path.display()));
-                            }
-                        }
-                    }
-                    if let Some(tail) = tail {
-                        errors.extend(editor.set_images(Target::NewPart, vec![tail]));
-                        if let Some(p) = editor.parts.last_mut() {
-                            p.kind = crate::mascot::motion::PartType::Tail;
-                            p.name = "Tail".into();
-                        }
-                    }
-                    if let Some(held) = held
-                        && let Err(e) = editor.set_image(Target::Held, &held)
-                    {
-                        errors.push(format!("held pose: {e}"));
-                    }
-                    for (event, path) in extra_art {
-                        if let Err(e) = editor.set_reference_reaction(event, &path) {
-                            errors.push(e);
-                        }
-                    }
-                    if petting {
-                        editor.enable_reference_headpat();
-                    }
-                    Ok(CharacterWork::Editor(Box::new(editor), errors))
+                    Editor::from_reference_request(&request, &taken)
+                        .map(|editor| CharacterWork::Editor(Box::new(editor), Vec::new()))
                 });
             }
             other => return self.reaction_ui(other, now, out),

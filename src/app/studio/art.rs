@@ -1,9 +1,40 @@
 use super::*;
 
 impl App {
+    fn refresh_art_preview(&mut self) -> Task<Message> {
+        let Some(draft) = self.studio.art.clone() else {
+            return Task::none();
+        };
+        self.studio.draft_rig_request += 1;
+        let request = self.studio.draft_rig_request;
+        let (tx, rx) = iced::futures::channel::oneshot::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(draft.draft_artwork());
+        });
+        Task::perform(rx, move |result| match result {
+            Ok(rig) => Message::DraftRig(request, Box::new(rig)),
+            Err(_) => Message::DraftRig(
+                0,
+                Box::new(crate::mascot::editor::DraftArtwork {
+                    rig: crate::mascot::rig::Rig::load(),
+                    arrange: None,
+                    reactions: None,
+                }),
+            ),
+        })
+    }
+
     /// Art tab edits.
     pub(super) fn art_ui(&mut self, ui: UiMsg, now: Millis, out: &mut Outcomes) -> Task<Message> {
         match ui {
+            UiMsg::ArtLibrary(action) => {
+                if let Some(e) = &mut self.studio.art {
+                    if let Err(error) = e.library_action(action) {
+                        self.notice = Some(error);
+                    }
+                    return self.refresh_art_preview();
+                }
+            }
             UiMsg::EditArt => {
                 let mut c = self.current_character().clone();
                 // Bundled Yohta stays built in: edit an installed copy of him.
@@ -43,6 +74,7 @@ impl App {
             UiMsg::ArtPick(target) => {
                 use crate::mascot::editor::{EyeSlot, FACE_LABELS, Target};
                 let title = match target {
+                    Target::LibraryImage(_, _) => "Choose the shared artwork PNG".to_owned(),
                     Target::Body => "Choose the body PNG".to_owned(),
                     Target::NewPart => {
                         "Choose a part PNG: head, tail, ear, wing or hair".to_owned()
@@ -257,11 +289,13 @@ impl App {
                 if let Some(e) = &mut self.studio.art {
                     e.undo();
                 }
+                return self.refresh_art_preview();
             }
             UiMsg::ArtRedo => {
                 if let Some(e) = &mut self.studio.art {
                     e.redo();
                 }
+                return self.refresh_art_preview();
             }
             UiMsg::ArtZoom(zoom) => {
                 if let Some(e) = &mut self.studio.art {

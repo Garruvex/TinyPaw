@@ -1,0 +1,62 @@
+import { Tokens } from "../tokens.slint";
+import { Btn, Keycap, Hint } from "../kit.slint";
+
+// Template: the card shown the first time TinyPaw starts. One primary action
+// beside the active shortcut, three tips, and a way into Settings.
+export component FirstRunWindow inherits Window {
+    in property <image> logo;
+    in property <string> shortcut;
+    in property <[string]> tips;
+    callback turn-on;
+    callback open-settings;
+    title: "TinyPaw";
+    background: Tokens.surface;
+    preferred-width: 420px; // guard:allow window size
+    preferred-height: 330px; // guard:allow window size
+    VerticalLayout {
+        padding: Tokens.space-5;
+        spacing: Tokens.space-4;
+        HorizontalLayout {
+            spacing: Tokens.space-3;
+            Image {
+                source: root.logo;
+                width: Tokens.h-control;
+                height: Tokens.h-control;
+            }
+            VerticalLayout {
+                alignment: center;
+                Text {
+                    text: "TinyPaw is ready";
+                    font-size: Tokens.font-h2;
+                    font-weight: 700;
+                    color: Tokens.text;
+                }
+                Hint { text: "It lives in the tray and starts Off."; }
+            }
+        }
+        VerticalLayout {
+            spacing: Tokens.space-2;
+            alignment: start;
+            for tip in root.tips: Text {
+                text: tip;
+                font-size: Tokens.font-body;
+                color: Tokens.subtle;
+                wrap: word-wrap;
+            }
+        }
+        HorizontalLayout {
+            spacing: Tokens.space-3;
+            Btn {
+                text: "Turn on TinyPaw";
+                primary: true;
+                horizontal-stretch: 1;
+                clicked => { root.turn-on(); }
+            }
+            if root.shortcut != "": Keycap { text: root.shortcut; }
+        }
+        Btn {
+            text: "Open settings";
+            clicked => { root.open-settings(); }
+        }
+    }
+}

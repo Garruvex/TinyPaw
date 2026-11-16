@@ -68,10 +68,14 @@ impl App {
                 .rig()
                 .map(|r| f64::from(r.visible_height() / r.size().height))
                 .unwrap_or(1.0);
-            sets.push((
-                character::HEIGHT,
-                Value::Float((old * ratio).clamp(character::MIN_HEIGHT, character::MAX_HEIGHT)),
-            ));
+            let height = (old * ratio).clamp(character::MIN_HEIGHT, character::MAX_HEIGHT);
+            sets.push((character::HEIGHT, Value::Float(height)));
+            // The instance list was built from the old settings before this
+            // ran, so the migrated size goes there too.
+            if let Some(first) = self.instances.get_mut(1) {
+                first.height = height;
+                self.save_instances();
+            }
         }
         let mut values = self.session.settings().clone();
         for (id, value) in sets {
@@ -113,26 +117,16 @@ impl App {
         let compress = p.visual(crate::mascot::reactions::Event::Click)
             == crate::mascot::reactions::Visual::Compress;
         let fall = p.falls();
+        let lines = p.lines.clone();
         self.notice = None;
         #[cfg(windows)]
-        if self.mascot.as_ref().is_some_and(|m| m.character() == id) {
-            self.reaction_sounds = saved_sounds;
-            let lines = p.lines.clone();
-            let rig = self.character_rig(id);
-            let options = self.mascot_options();
-            let pictures = self
-                .characters
-                .iter()
-                .find(|c| c.id == id)
-                .map(character_pictures)
-                .unwrap_or_default();
-            if let Some(m) = &mut self.mascot {
-                m.set_rig(id, rig);
-                m.set_lines(lines, &options);
-                m.set_click_compress(compress);
-                m.set_pictures(pictures);
-                m.set_fall(fall);
-            }
+        if self.character_on_desktop(id) {
+            self.reaction_sounds.insert(id, saved_sounds);
+            self.refresh_character_stages(id, |character| {
+                character.lines = lines.clone();
+                character.click_compress = compress;
+                character.fall = fall;
+            });
         }
         Ok(())
     }
@@ -184,10 +178,20 @@ impl App {
             .unwrap_or(&self.characters[0])
     }
 
+    /// The installed character with this ID, or bundled Yohta if it's gone.
+    pub(super) fn character_named(&self, id: &str) -> &Character {
+        self.characters
+            .iter()
+            .find(|c| c.id == id)
+            .unwrap_or(&self.characters[0])
+    }
+
     /// Adds or replaces a character in the list, keeping Yohta first and the
     /// rest by name.
     pub(super) fn add_character(&mut self, c: Character) {
         self.characters.retain(|x| x.id != c.id);
+        // A replaced character starts from what is saved for it now.
+        self.music_fits.borrow_mut().remove(c.id);
         self.characters.push(c);
         self.characters[1..].sort_by_key(|c| c.name.to_lowercase());
     }
@@ -251,7 +255,7 @@ impl App {
                     ));
                 }
                 self.notice = Some(notes.join(" "));
-                self.character_tab = view::settings::CharacterTab::Behavior;
+                self.character_tab = view::settings::CharacterTab::Speech;
                 Task::none()
             }
             Some(choose @ Transfer::Choose { .. }) => {
@@ -402,11 +406,8 @@ impl App {
                     }
                     self.add_character(c.clone());
                     #[cfg(windows)]
-                    if self.mascot.as_ref().is_some_and(|m| m.character() == c.id) {
-                        let rig = self.character_rig(c.id);
-                        if let Some(m) = &mut self.mascot {
-                            m.set_rig(c.id, rig);
-                        }
+                    if self.character_on_desktop(c.id) {
+                        self.refresh_character_stages(c.id, |_| {});
                     }
                 }
                 if id == self.studio.character_request {
@@ -529,7 +530,8 @@ impl App {
                             if e == Event::Pickup {
                                 p.set_held(Some(art));
                                 p.placement_preview = Some(e);
-                            } else if e == Event::Sleep && std::mem::take(&mut p.adding_sleep_pose) {
+                            } else if e == Event::Sleep && std::mem::take(&mut p.adding_sleep_pose)
+                            {
                                 p.add_sleep_pose(art);
                             } else {
                                 p.set_art(e, Some(art));
@@ -542,7 +544,11 @@ impl App {
                     }
                 }
             }
-            Message::ReactionPicturePicked(_, None) => { if let Some(p) = &mut self.studio.motion_preview { p.adding_sleep_pose = false; } }
+            Message::ReactionPicturePicked(_, None) => {
+                if let Some(p) = &mut self.studio.motion_preview {
+                    p.adding_sleep_pose = false;
+                }
+            }
             Message::ReferencePicked(Some(path)) => {
                 // A thumbnail only; the reference stays where it is.
                 self.studio.reference_thumb = ::image::open(&path).ok().map(|img| {
@@ -561,11 +567,22 @@ impl App {
             }
             Message::DraftRig(request, rig) => {
                 if request == self.studio.draft_rig_request
-                    && let Some(e) = &self.studio.art
-                    && let Some(p) = &mut self.studio.motion_preview
-                    && p.id == e.id
+                    && let Some(e) = &mut self.studio.art
                 {
-                    p.set_rig(*rig);
+                    if let Some(library) = &mut e.library {
+                        library.preview = rig.arrange.unwrap_or_else(|| rig.rig.clone());
+                    }
+                    if let Some(p) = &mut self.studio.motion_preview
+                        && p.id == e.id
+                    {
+                        p.set_rig(rig.rig);
+                        if let Some((config, pictures)) = rig.reactions {
+                            p.set_pack_reactions(config);
+                            for (file, image) in pictures {
+                                p.add_art_picture(file, &image);
+                            }
+                        }
+                    }
                 }
             }
             Message::CharacterExportPicked(Some(into)) => {
@@ -600,6 +617,12 @@ impl App {
                     let id = self.begin_character_job();
                     tasks.push(character_work(id, move || {
                         let errors = editor.set_images(target, paths);
+                        if editor.library.is_some() {
+                            let rig = editor.draft_rig();
+                            if let Some(library) = &mut editor.library {
+                                library.preview = rig;
+                            }
+                        }
                         Ok(CharacterWork::Editor(Box::new(editor), errors))
                     }));
                 }
@@ -639,24 +662,31 @@ impl App {
                     };
                     for e in events {
                         if let Ok(play) = self.voice.accept(e, &sounds, quiet, now)
-                            && let Some(seconds) = self.play_reaction(&play) {
-                                self.voice.started(now, seconds);
-                                reacted = true;
-                            }
-                    }
-                    if !reacted
-                        && let Some(sound) = line_sound {
-                            self.play_line_sound(&sound);
+                            && let Some(seconds) =
+                                self.play_reaction(&play, self.current_character().id)
+                        {
+                            self.voice.started(now, seconds);
+                            reacted = true;
                         }
+                    }
+                    if !reacted && let Some(sound) = line_sound {
+                        self.play_line_sound(&sound, self.current_character().id);
+                    }
                 }
                 let o = self.motion_options();
                 let beat = self.beat_phase();
                 let sampled = Instant::now();
                 // Use the clock speed directly. Wrapped phase differences
                 // alias after a delayed refresh and can falsely freeze a preview.
-                let beat_rate = self.beat_clock.get().0.bpm() / 60.0;
+                let beat_rate = self
+                    .beat_clock
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .0
+                    .bpm()
+                    / 60.0;
                 let control = crate::mascot::preview::Control {
-                    dance: self.dance_options(),
+                    dance: self.dance_options(self.current_character().id),
                     idle: o.0,
                     reduced: o.1,
                     music: self.music_level(),
@@ -683,6 +713,8 @@ impl App {
                     self.editing_pack = None;
                     self.page = Page::Pointer;
                     self.notice = None;
+                    // The editor is still a classic Settings view.
+                    tasks.push(self.open_classic_settings());
                 }
                 Err(e) => self.notice = Some(format!("Could not use that image: {e}")),
             },
@@ -714,7 +746,7 @@ impl App {
                 self.character_tab = tab;
                 // Test character shows the unsaved artwork: build it on a
                 // worker by revision, keeping the last preview meanwhile.
-                if tab == CharacterTab::Behavior
+                if tab.is_behavior()
                     && let Some(e) = self.studio.art.clone()
                     && self
                         .studio
@@ -727,11 +759,18 @@ impl App {
                     let request = self.studio.draft_rig_request;
                     let (tx, rx) = iced::futures::channel::oneshot::channel();
                     std::thread::spawn(move || {
-                        let _ = tx.send(e.draft_rig());
+                        let _ = tx.send(e.draft_artwork());
                     });
                     return Task::perform(rx, move |r| match r {
                         Ok(rig) => Message::DraftRig(request, Box::new(rig)),
-                        Err(_) => Message::DraftRig(0, Box::new(crate::mascot::rig::Rig::load())),
+                        Err(_) => Message::DraftRig(
+                            0,
+                            Box::new(crate::mascot::editor::DraftArtwork {
+                                rig: crate::mascot::rig::Rig::load(),
+                                arrange: None,
+                                reactions: None,
+                            }),
+                        ),
                     });
                 }
                 // Artwork and Advanced open the editor for an installed
@@ -825,6 +864,10 @@ impl App {
                 match characters::remove(&c) {
                     Ok(()) => {
                         self.characters.retain(|x| x.id != c.id);
+                        // Instances of it show Yohta instead of vanishing.
+                        if self.instances.retarget(c.id, characters::BUILTIN) {
+                            self.save_instances();
+                        }
                         out.sets
                             .push((character::CHARACTER, Value::Choice(characters::BUILTIN)));
                         self.notice = None;
@@ -894,11 +937,15 @@ impl App {
                     .motion_preview
                     .as_mut()
                     .and_then(|p| p.take_sound())
-                    && let Some(seconds) = self.play_line_sound(&sound)
+                    && let Some(seconds) = self.play_line_sound(&sound, self.current_character().id)
                     && let Some(p) = &mut self.studio.motion_preview
                 {
                     p.hold_speech(seconds);
                 }
+            }
+            UiMsg::MusicFit(fit) => {
+                let id = self.current_character().id;
+                self.set_music_fit(id, fit);
             }
             UiMsg::MusicBop(bop) => {
                 if let Some(p) = &mut self.studio.motion_preview {

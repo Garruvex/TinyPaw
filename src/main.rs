@@ -10,12 +10,15 @@ mod app;
 mod audio;
 mod branding;
 mod features;
+mod instances;
 mod mascot;
 mod packs;
 mod platform;
 mod preferences;
 mod registry;
 mod session;
+mod settings_ui;
+mod stage;
 mod view;
 
 use std::process::ExitCode;
@@ -37,6 +40,17 @@ fn usage(registry: &Registry) -> String {
 }
 
 fn main() -> ExitCode {
+    if std::env::args().nth(1).as_deref() == Some("--first-run") {
+        return settings_ui::first_run();
+    }
+    if std::env::args().nth(1).as_deref() == Some("--settings") {
+        return settings_ui::run(&std::env::args().nth(2).unwrap_or_default());
+    }
+    #[cfg(windows)]
+    if std::env::args().nth(1).as_deref() == Some("--stage-probe") {
+        stage::probe();
+        return ExitCode::SUCCESS;
+    }
     if std::env::args().nth(1).as_deref() == Some("--mascot-preview") {
         return match mascot::run() {
             Ok(()) => ExitCode::SUCCESS,

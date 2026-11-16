@@ -1,4 +1,4 @@
-//! Behavior tab: motion, music, sounds, speech and the motion preview.
+//! The Reactions, Speech and Motion tabs, and the Test character preview.
 
 use super::*;
 use iced::widget::{column, row};
@@ -83,32 +83,28 @@ pub(super) fn motion_section<'a>(
     ])
 }
 
-/// Behavior, grouped by the moment the creator is thinking about. Each
-/// event row is where its lines (and later its sound) are edited.
-pub(super) fn behavior_section<'a>(
+/// The name of the moment a group of rows is about.
+fn moment<'a>(label: &'static str) -> Element<'a, Message> {
+    text(label).font(theme::MEDIUM).size(13).into()
+}
+
+/// Reactions: what the character shows and plays when it is touched, petted
+/// or left alone.
+pub(super) fn reactions_tab<'a>(
     v: &SettingsView<'a>,
     m: &'a crate::mascot::preview::MotionPreview,
 ) -> Element<'a, Message> {
-    use crate::mascot::lines::Trigger;
-    let s = v.session.settings();
-    let mut own = column![event_row(m, Trigger::Idle)].spacing(16);
-    own = own.push(idle_interval(s));
-    own = own
-        .push(event_row(m, Trigger::MusicStart))
-        .push(event_row(m, Trigger::AnnotationEnd));
-    let muted = s.bool(crate::features::sound::MUTE_ALL);
+    let muted = v.session.settings().bool(crate::features::sound::MUTE_ALL);
     column![
-        character_sounds(m, muted),
-        companionship_section(m, muted),
         section(vec![
             h2("When touched"),
-            event_row(m, Trigger::Click),
+            moment("Click"),
             visual_row(m, Event::Click),
             sound_row(m, Event::Click, muted),
-            event_row(m, Trigger::Pickup),
+            moment("Pick up"),
             held_row(m),
             sound_row(m, Event::Pickup, muted),
-            event_row(m, Trigger::Drop),
+            moment("Drop"),
             visual_row(m, Event::Drop),
             row![
                 text("After release").size(12).color(theme::MUTED).width(84),
@@ -125,13 +121,53 @@ pub(super) fn behavior_section<'a>(
             .into(),
             sound_row(m, Event::Drop, muted),
         ]),
-        section(vec![h2("On its own"), own.into(), sound_row(m, Event::Idle, muted)]),
-        speech_options(v, m),
-        motion_section(m),
-        music_section(v),
+        section(vec![
+            h2("On its own"),
+            sound_row(m, Event::Idle, muted),
+        ]),
+        companionship_section(m, muted),
+        character_sounds(m, muted),
     ]
-    .spacing(22)
+    .spacing(16)
     .into()
+}
+
+/// Speech: the bubble, and the lines for each everyday moment. Lines for
+/// petting, sleep and neighbours sit with those reactions.
+pub(super) fn speech_tab<'a>(
+    v: &SettingsView<'a>,
+    m: &'a crate::mascot::preview::MotionPreview,
+) -> Element<'a, Message> {
+    use crate::mascot::lines::Trigger;
+    let s = v.session.settings();
+    column![
+        section(vec![
+            h2("When touched"),
+            event_row(m, Trigger::Click),
+            event_row(m, Trigger::Pickup),
+            event_row(m, Trigger::Drop),
+        ]),
+        section(vec![
+            h2("On its own"),
+            event_row(m, Trigger::Idle),
+            idle_interval(s),
+            event_row(m, Trigger::MusicStart),
+            event_row(m, Trigger::AnnotationEnd),
+        ]),
+        speech_options(v, m),
+    ]
+    .spacing(16)
+    .into()
+}
+
+/// Motion: how each part moves, and how the character moves to music.
+pub(super) fn motion_tab<'a>(
+    v: &SettingsView<'a>,
+    m: &'a crate::mascot::preview::MotionPreview,
+) -> Element<'a, Message> {
+    column![motion_section(m), music_section(v)]
+        .spacing(16)
+        .into()
 }
 
 use crate::mascot::reactions::{BUILTIN_SOUNDS, Event, Sound};
@@ -790,8 +826,39 @@ pub(super) fn level_bar<'a>(level: f32, width: f32) -> Element<'a, Message> {
     }
 }
 
+/// One of the selected character's hand settings: a slider, its value and Reset.
+fn hand_row<'a>(
+    label: &'a str,
+    range: std::ops::RangeInclusive<f32>,
+    value: f32,
+    unit: &'a str,
+    default: f32,
+    with: impl Fn(f32) -> MusicFit + Copy + 'a,
+) -> Element<'a, Message> {
+    row![
+        text(label).size(12).color(theme::MUTED).width(110),
+        slider(range, value, move |x| set_fit(with(x)))
+            .step(1.0_f32)
+            .style(theme::range),
+        text(format!("{value:.0}{unit}")).size(12).width(48),
+        button("Reset")
+            .style(theme::secondary)
+            .on_press(set_fit(with(default))),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+fn set_fit(fit: MusicFit) -> Message {
+    Message::Ui(UiMsg::MusicFit(fit))
+}
+
+use crate::mascot::pack::MusicFit;
+
 pub(super) fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     let s = v.session.settings();
+    let fit = v.music_fit;
     use crate::mascot::music::Source;
     let (status, level) = (v.music.0.clone(), v.music.1);
     let on = s.bool(mascot::MUSIC);
@@ -901,8 +968,8 @@ pub(super) fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         row![
             text("Music pose").size(12).color(theme::MUTED).width(110),
             pick_list(["Automatic", "Sitting", "Standing"],
-                Some(match s.choice(mascot::MUSIC_POSE) { "sit" => "Sitting", "stand" => "Standing", _ => "Automatic" }),
-                |x| Message::Set(mascot::MUSIC_POSE, Value::Choice(match x { "Sitting" => "sit", "Standing" => "stand", _ => "auto" })))
+                Some(["Automatic", "Sitting", "Standing"][usize::from(fit.pose.min(2))]),
+                move |x| set_fit(MusicFit { pose: match x { "Sitting" => 1, "Standing" => 2, _ => 0 }, ..fit }))
                 .text_size(13).padding([6, 10]).style(theme::select),
         ].spacing(10).align_y(Alignment::Center).into(),
         row![
@@ -911,7 +978,7 @@ pub(super) fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
                 .step(1.0).style(theme::range),
             text(format!("{:.0}%", s.float(mascot::EXCITEMENT))).size(12).width(48),
         ].spacing(8).align_y(Alignment::Center).into(),
-        hint("Automatic keeps gentle bops seated, stands after sustained high activity, and sits again when the music calms. A higher threshold keeps it seated more often. Standing artwork is required. Choose Standing to adjust the waving hand."),
+        hint("Automatic keeps gentle bops seated, stands after sustained high activity, and sits again when the music calms. A higher threshold keeps it seated more often. Standing artwork is required. Light wave runs only on poses with authored movable hands and wave enabled; fixed paws keep nodding. Choose Standing to adjust its authored waving hand."),
         row![
             text("Change every").size(12).color(theme::MUTED).width(110),
             pick_list(["8", "16", "32"], Some(s.choice(mascot::DANCE_EVERY)), |x| Message::Set(mascot::DANCE_EVERY, Value::Choice(x)))
@@ -924,36 +991,12 @@ pub(super) fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
                 |x| Message::Set(mascot::DANCE_ITEM, Value::Choice(match x { "Phone" => "phone", "Glow stick" => "glow_stick", _ => "random" })))
                 .text_size(13).padding([6, 10]).style(theme::select),
         ].spacing(10).align_y(Alignment::Center).into(),
-        row![
-            text("Hand horizontal").size(12).color(theme::MUTED).width(110),
-            slider(-15.0..=15.0, s.float(mascot::WAVE_X), |x| Message::Set(mascot::WAVE_X, Value::Float(x)))
-                .step(1.0).style(theme::range),
-            text(format!("{:.0}%", s.float(mascot::WAVE_X))).size(12).width(48),
-            button("Reset").style(theme::secondary).on_press(Message::Set(mascot::WAVE_X, Value::Float(0.0))),
-        ].spacing(8).align_y(Alignment::Center).into(),
-        row![
-            text("Hand vertical").size(12).color(theme::MUTED).width(110),
-            slider(-15.0..=15.0, s.float(mascot::WAVE_Y), |x| Message::Set(mascot::WAVE_Y, Value::Float(x)))
-                .step(1.0).style(theme::range),
-            text(format!("{:.0}%", s.float(mascot::WAVE_Y))).size(12).width(48),
-            button("Reset").style(theme::secondary).on_press(Message::Set(mascot::WAVE_Y, Value::Float(0.0))),
-        ].spacing(8).align_y(Alignment::Center).into(),
-        row![
-            text("Hand angle").size(12).color(theme::MUTED).width(110),
-            slider(-45.0..=45.0, s.float(mascot::WAVE_ANGLE), |x| Message::Set(mascot::WAVE_ANGLE, Value::Float(x)))
-                .step(1.0).style(theme::range),
-            text(format!("{:.0}°", s.float(mascot::WAVE_ANGLE))).size(12).width(48),
-            button("Reset").style(theme::secondary).on_press(Message::Set(mascot::WAVE_ANGLE, Value::Float(0.0))),
-        ].spacing(8).align_y(Alignment::Center).into(),
-        row![
-            text("Wave range").size(12).color(theme::MUTED).width(110),
-            slider(0.0..=200.0, s.float(mascot::WAVE_RANGE), |x| Message::Set(mascot::WAVE_RANGE, Value::Float(x)))
-                .step(1.0).style(theme::range),
-            text(format!("{:.0}%", s.float(mascot::WAVE_RANGE))).size(12).width(48),
-            button("Reset").style(theme::secondary).on_press(Message::Set(mascot::WAVE_RANGE, Value::Float(100.0))),
-        ].spacing(8).align_y(Alignment::Center).into(),
-        hint("Hand position moves the waving arm and item together. Positive horizontal moves right; positive vertical moves down. These adjustments apply across characters and save immediately."),
-        hint("Random uses the checked styles and changes on a beat boundary. Light wave joins Random when the character has a holding arm and an item. An empty selection uses Nod. Items use the available artwork; characters without gesture artwork use the built-in glow stick. Interval, included styles and item apply to all characters."),
+        hand_row("Hand horizontal", -15.0..=15.0, fit.hand_x, "%", 0.0, move |x| MusicFit { hand_x: x, ..fit }),
+        hand_row("Hand vertical", -15.0..=15.0, fit.hand_y, "%", 0.0, move |x| MusicFit { hand_y: x, ..fit }),
+        hand_row("Hand angle", -45.0..=45.0, fit.hand_angle, "\u{b0}", 0.0, move |x| MusicFit { hand_angle: x, ..fit }),
+        hand_row("Wave range", 0.0..=200.0, fit.wave_range, "%", 100.0, move |x| MusicFit { wave_range: x, ..fit }),
+        hint("Music pose and hand position belong to this character and save immediately. Hand position moves the waving arm and item together. Positive horizontal moves right; positive vertical moves down."),
+        hint("Random uses the checked styles and changes on a beat boundary. Light wave joins Random only for the active pose's approved wave artwork. Movable hands alone do not enable it. An empty selection uses Nod. Fixed-hand poses keep nodding; items use their authored artwork. Interval, included styles and item apply to all characters."),
         check("Random · Nod", s.bool(mascot::DANCE_STYLES[0]), mascot::DANCE_STYLES[0]),
         check("Random · Groove", s.bool(mascot::DANCE_STYLES[1]), mascot::DANCE_STYLES[1]),
         check("Random · Rubber hose", s.bool(mascot::DANCE_STYLES[2]), mascot::DANCE_STYLES[2]),
@@ -1260,17 +1303,17 @@ impl canvas::Program<Message> for MotionStage<'_> {
                 |action| canvas::Action::publish(Message::Ui(UiMsg::Align(action))).and_capture();
             if let canvas::Event::Mouse(Event::CursorMoved { .. }) = event
                 && state.gripping
-                    && let (Some(point), Some(picture)) = (point, self.preview.placement_picture())
-                    {
-                        let grip = picture.source_fraction(self.preview.rig().size(), point);
-                        return Some(
-                            canvas::Action::publish(Message::Ui(UiMsg::GripSet(Some([
-                                grip.x.clamp(0.0, 1.0),
-                                grip.y.clamp(0.0, 1.0),
-                            ]))))
-                            .and_capture(),
-                        );
-                    }
+                && let (Some(point), Some(picture)) = (point, self.preview.placement_picture())
+            {
+                let grip = picture.source_fraction(self.preview.rig().size(), point);
+                return Some(
+                    canvas::Action::publish(Message::Ui(UiMsg::GripSet(Some([
+                        grip.x.clamp(0.0, 1.0),
+                        grip.y.clamp(0.0, 1.0),
+                    ]))))
+                    .and_capture(),
+                );
+            }
             if let canvas::Event::Mouse(Event::ButtonPressed(Button::Left)) = event {
                 state.focused = point.is_some();
                 if let Some(point) = point {
@@ -1283,11 +1326,11 @@ impl canvas::Program<Message> for MotionStage<'_> {
                     }
                     if a.event == crate::mascot::reactions::Event::Pickup
                         && let Some(picture) = self.preview.placement_picture()
-                            && point.distance(picture.hold_in(self.preview.rig().size())) < 9.0 / k
-                            {
-                                state.gripping = true;
-                                return Some(canvas::Action::capture());
-                            }
+                        && point.distance(picture.hold_in(self.preview.rig().size())) < 9.0 / k
+                    {
+                        state.gripping = true;
+                        return Some(canvas::Action::capture());
+                    }
                     if !self.preview.placing_grip {
                         state.start = Some((point, a.art.place));
                         return Some(canvas::Action::capture());
@@ -1299,63 +1342,66 @@ impl canvas::Program<Message> for MotionStage<'_> {
                 state.gripping = false;
             }
             if let canvas::Event::Mouse(Event::CursorMoved { .. }) = event
-                && let (Some((start, original)), Some(point)) = (state.start, point) {
-                    let stage = self.preview.rig().size();
-                    return Some(publish(Action::Place([
-                        (original[0] + (point.x - start.x) / stage.width).clamp(-1.0, 1.0),
-                        (original[1] + (point.y - start.y) / stage.height).clamp(-1.0, 1.0),
-                        original[2],
-                    ])));
-                }
+                && let (Some((start, original)), Some(point)) = (state.start, point)
+            {
+                let stage = self.preview.rig().size();
+                return Some(publish(Action::Place([
+                    (original[0] + (point.x - start.x) / stage.width).clamp(-1.0, 1.0),
+                    (original[1] + (point.y - start.y) / stage.height).clamp(-1.0, 1.0),
+                    original[2],
+                ])));
+            }
             if state.focused
                 && let canvas::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                     key: iced::keyboard::Key::Named(key),
                     ..
                 }) = event
-                {
-                    use iced::keyboard::key::Named;
-                    let mut place = a.art.place;
-                    let size = self.preview.rig().size();
-                    match key {
-                        Named::ArrowLeft => place[0] -= 1.0 / size.width,
-                        Named::ArrowRight => place[0] += 1.0 / size.width,
-                        Named::ArrowUp => place[1] -= 1.0 / size.height,
-                        Named::ArrowDown => place[1] += 1.0 / size.height,
-                        _ => return None,
-                    }
-                    place[0] = place[0].clamp(-1.0, 1.0);
-                    place[1] = place[1].clamp(-1.0, 1.0);
-                    return Some(publish(Action::Place(place)));
+            {
+                use iced::keyboard::key::Named;
+                let mut place = a.art.place;
+                let size = self.preview.rig().size();
+                match key {
+                    Named::ArrowLeft => place[0] -= 1.0 / size.width,
+                    Named::ArrowRight => place[0] += 1.0 / size.width,
+                    Named::ArrowUp => place[1] -= 1.0 / size.height,
+                    Named::ArrowDown => place[1] += 1.0 / size.height,
+                    _ => return None,
                 }
+                place[0] = place[0].clamp(-1.0, 1.0);
+                place[1] = place[1].clamp(-1.0, 1.0);
+                return Some(publish(Action::Place(place)));
+            }
         }
         if self.preview.placing_grip {
             if let canvas::Event::Mouse(Event::ButtonPressed(Button::Left)) = event
-                && let (Some(point), Some(picture)) = (point, self.preview.placement_picture()) {
-                    let size = self.preview.rig().size();
-                    let fraction = picture.source_fraction(size, point);
-                    let grip = [fraction.x, fraction.y];
-                    if grip.iter().all(|v| (0.0..=1.0).contains(v)) {
-                        return Some(
-                            canvas::Action::publish(Message::Ui(UiMsg::GripSet(Some(grip))))
-                                .and_capture(),
-                        );
-                    }
+                && let (Some(point), Some(picture)) = (point, self.preview.placement_picture())
+            {
+                let size = self.preview.rig().size();
+                let fraction = picture.source_fraction(size, point);
+                let grip = [fraction.x, fraction.y];
+                if grip.iter().all(|v| (0.0..=1.0).contains(v)) {
+                    return Some(
+                        canvas::Action::publish(Message::Ui(UiMsg::GripSet(Some(grip))))
+                            .and_capture(),
+                    );
                 }
+            }
             return None;
         }
         if self.preview.placing_mouth
             && let canvas::Event::Mouse(Event::ButtonPressed(Button::Left)) = event
-                && let Some(p) = point {
-                    let size = self.preview.rig().size();
-                    let mut s = self.preview.companionship();
-                    s.mouth = [
-                        (p.x / size.width).clamp(0.0, 1.0),
-                        (p.y / size.height).clamp(0.0, 1.0),
-                    ];
-                    return Some(
-                        canvas::Action::publish(Message::Ui(UiMsg::Companionship(s))).and_capture(),
-                    );
-                }
+            && let Some(p) = point
+        {
+            let size = self.preview.rig().size();
+            let mut s = self.preview.companionship();
+            s.mouth = [
+                (p.x / size.width).clamp(0.0, 1.0),
+                (p.y / size.height).clamp(0.0, 1.0),
+            ];
+            return Some(
+                canvas::Action::publish(Message::Ui(UiMsg::Companionship(s))).and_capture(),
+            );
+        }
         if !self.preview.placing_bubble {
             return None;
         }
@@ -1404,6 +1450,13 @@ impl canvas::Program<Message> for MotionStage<'_> {
             &Path::rounded_rectangle(iced::Point::ORIGIN, size, 12.0.into()),
             theme::WELL,
         );
+        frame.fill_text(canvas::Text {
+            content: self.preview.playback_status(),
+            position: iced::Point::new(12.0, 20.0),
+            color: theme::MUTED,
+            size: 12.0.into(),
+            ..Default::default()
+        });
         let rig = self.preview.rig();
         let mut pose = self.preview.pose().clone();
         let canvas_size = rig.size();
@@ -1670,5 +1723,9 @@ fn companionship_section<'a>(
         event_row(m, crate::mascot::lines::Trigger::Wake),
         visual_row(m, Event::Wake),
         sound_row(m, Event::Wake, muted),
+        event_row(m, crate::mascot::lines::Trigger::Neighbor),
+        hint(
+            "Said when another character nearby is picked up or dropped. {other} becomes that character's name. Only used when several characters are on the desktop.",
+        ),
     ])
 }

@@ -109,24 +109,16 @@ fn overlay_buttons_receive_complete_clicks_above_the_annotation_canvas() {
 }
 
 fn settings_view<'a>(
-    registry: &'a Registry,
+    _registry: &'a Registry,
     session: &'a Session,
-    packs: &'a [crate::packs::Pack],
+    _packs: &'a [crate::packs::Pack],
     page: settings::Page,
 ) -> settings::SettingsView<'a> {
     settings::SettingsView {
-        registry,
         session,
         page,
         character_tab: Default::default(),
-        displays: &[],
-        #[cfg(windows)]
-        sources: &[],
-        has_custom_sound: false,
-        taken: &[],
         notice: None,
-        packs,
-        pack: packs.first(),
         draft: None,
         editing: false,
         frame: None,
@@ -142,6 +134,13 @@ fn settings_view<'a>(
         unsaved: false,
         leaving: false,
         music: ("Off".into(), 0.0),
+        music_fit: crate::mascot::pack::MusicFit {
+            pose: 0,
+            hand_x: 0.0,
+            hand_y: 0.0,
+            hand_angle: 0.0,
+            wave_range: 100.0,
+        },
         music_source: crate::mascot::music::Source::All,
         music_rows: vec![(crate::mascot::music::Source::All, 0.0, false)],
         music_inputs: Vec::new(),
@@ -199,40 +198,18 @@ fn settings_navigation_and_page_actions_receive_clicks() {
     let packs = crate::packs::load_all().0;
     use settings::Page;
     for (page, expected) in [
-        (
-            Page::Pointer,
-            vec![
-                "AddPointer",
-                "ImportPack",
-                "CopyPointerPrompt",
-                "CopyForearmPrompt",
-                "PreviewSound",
-            ],
-        ),
+        (Page::Pointer, vec![]),
         (
             Page::Character,
             vec!["AddCharacter", "ArtFromParts", "TransferOpen(false)"],
         ),
-        (Page::Ink, vec![]),
-        (Page::Tools, vec!["RefreshSources"]),
-        (Page::Shortcuts, vec!["ResetShortcuts"]),
-        (Page::Display, vec![]),
-        (Page::Sound, vec!["PreviewSound", "ImportWav"]),
     ] {
         let messages = click_layout(
             settings::view(settings_view(&registry, &session, &packs, page)),
             Size::new(1200.0, 2400.0),
         );
         assert_ui(&messages, &expected);
-        for target in [
-            Page::Pointer,
-            Page::Ink,
-            Page::Tools,
-            Page::Character,
-            Page::Shortcuts,
-            Page::Sound,
-            Page::Display,
-        ] {
+        for target in [Page::Pointer, Page::Character] {
             assert!(
                 messages
                     .iter()
@@ -263,61 +240,82 @@ fn character_tabs_show_the_selected_controls_and_keep_the_preview_interactive() 
         Default::default(),
         Default::default(),
     );
-    let tabs = [
+    let all = [
         CharacterTab::Library,
-        CharacterTab::Desktop,
-        CharacterTab::Behavior,
+        CharacterTab::Artwork,
+        CharacterTab::Reactions,
+        CharacterTab::Speech,
+        CharacterTab::Motion,
+        CharacterTab::Advanced,
     ];
-    for tab in tabs {
+    let clicks = |tab: CharacterTab| {
         let mut view = settings_view(&registry, &session, &[], settings::Page::Character);
         view.motion = Some(&preview);
         view.character_tab = tab;
-        let messages = click_layout(settings::view(view), Size::new(1040.0, 4000.0));
-        for target in [
-            CharacterTab::Library,
-            CharacterTab::Desktop,
-            CharacterTab::Artwork,
-            CharacterTab::Behavior,
-            CharacterTab::Advanced,
-        ] {
+        click_layout(settings::view(view), Size::new(1040.0, 6000.0))
+    };
+    let lines = |messages: &[Message]| -> Vec<crate::mascot::lines::Trigger> {
+        crate::mascot::lines::Trigger::ALL
+            .into_iter()
+            .filter(|t| {
+                let row = messages
+                    .iter()
+                    .any(|m| matches!(m, Message::Ui(UiMsg::LineAdd(x)) if x == t));
+                let try_ = messages.iter().any(|m| {
+                    matches!(m, Message::Ui(UiMsg::MotionTest(crate::mascot::preview::Test::Say(x))) if x == t)
+                });
+                assert_eq!(row, try_, "{t:?} has a row without Try, or Try without a row");
+                row
+            })
+            .collect()
+    };
+    let mut seen = Vec::new();
+    for tab in [
+        CharacterTab::Library,
+        CharacterTab::Reactions,
+        CharacterTab::Speech,
+        CharacterTab::Motion,
+    ] {
+        let messages = clicks(tab);
+        // Every tab is reachable from every tab.
+        for target in all {
             assert!(
                 messages
                     .iter()
-                    .any(|m| matches!(m, Message::Ui(UiMsg::CharacterTab(t)) if *t == target))
+                    .any(|m| matches!(m, Message::Ui(UiMsg::CharacterTab(t)) if *t == target)),
+                "{target:?} is not reachable from {tab:?}"
             );
         }
-        // Behavior has a row for every line trigger, each with Try.
-        for t in crate::mascot::lines::Trigger::ALL {
-            let row = messages
-                .iter()
-                .any(|m| matches!(m, Message::Ui(UiMsg::LineAdd(x)) if *x == t));
-            let try_ = messages.iter().any(|m| {
-                matches!(m, Message::Ui(UiMsg::MotionTest(crate::mascot::preview::Test::Say(x))) if *x == t)
-            });
-            assert_eq!(
-                (row, try_),
-                (tab == CharacterTab::Behavior, tab == CharacterTab::Behavior),
-                "{t:?}"
-            );
-        }
+        // The preview stays interactive beside every tab.
         assert!(
             messages
                 .iter()
                 .any(|m| matches!(m, Message::Ui(UiMsg::MotionTest(_))))
         );
+        let here = lines(&messages);
+        match tab {
+            CharacterTab::Library | CharacterTab::Motion => assert!(here.is_empty(), "{tab:?}"),
+            _ => assert!(!here.is_empty(), "{tab:?} has no lines"),
+        }
+        seen.extend(here);
         for (id, owner) in [
-            (mascot::ENABLED, CharacterTab::Desktop),
-            (mascot::LINES, CharacterTab::Behavior),
-            (mascot::MUSIC, CharacterTab::Behavior),
+            (mascot::LINES, CharacterTab::Speech),
+            (mascot::MUSIC, CharacterTab::Motion),
         ] {
             assert_eq!(
                 messages
                     .iter()
                     .any(|m| matches!(m, Message::Set(key, _) if *key == id)),
-                tab == owner
+                tab == owner,
+                "{id} on {tab:?}"
             );
         }
     }
+    // Between them, Reactions and Speech hold a row for every line trigger, once.
+    seen.sort_by_key(|t| t.label());
+    let mut every: Vec<_> = crate::mascot::lines::Trigger::ALL.into_iter().collect();
+    every.sort_by_key(|t| t.label());
+    assert_eq!(seen, every);
 }
 
 #[test]
@@ -342,7 +340,7 @@ fn one_save_and_the_leave_prompt_appear_only_with_unsaved_work() {
     let messages = |unsaved: bool, leaving: bool| {
         let mut view = settings_view(&registry, &session, &[], settings::Page::Character);
         view.motion = Some(&preview);
-        view.character_tab = CharacterTab::Behavior;
+        view.character_tab = CharacterTab::Speech;
         view.unsaved = unsaved;
         view.leaving = leaving;
         click_layout(settings::view(view), Size::new(1040.0, 1200.0))
@@ -403,59 +401,6 @@ fn pointer_editor_save_and_cancel_work_beside_the_live_pair_preview() {
     );
 }
 
-#[test]
-fn first_run_buttons_receive_clicks() {
-    let registry = Registry::build(crate::features::BUILTINS).unwrap();
-    let messages = click_layout(first_run::view(&registry), Size::new(600.0, 400.0));
-    assert_ui(&messages, &["TurnOn", "OpenSettings"]);
-}
-
-#[test]
-fn generated_forearm_colour_controls_receive_clicks() {
-    let registry = Registry::build(crate::features::BUILTINS).unwrap();
-    let mut session = pointing(&registry);
-    let mut values = session.settings().clone();
-    registry
-        .set(&mut values, point::PRESENTATION, Value::Choice("stretch"))
-        .unwrap();
-    session.handle(crate::session::Event::SettingsChanged(values), 2);
-    let packs = crate::packs::load_all().0;
-    let messages = click_layout(
-        settings::view(settings_view(
-            &registry,
-            &session,
-            &packs,
-            settings::Page::Pointer,
-        )),
-        Size::new(1200.0, 2400.0),
-    );
-    assert!(
-        messages
-            .iter()
-            .any(|m| matches!(m, Message::Ui(UiMsg::ForearmColor(_))))
-    );
-    assert!(messages.iter().any(
-        |m| matches!(m, Message::Set(id, Value::Bool(false)) if *id == point::FOREARM_AUTO_COLOR)
-    ));
-    let mut values = session.settings().clone();
-    registry
-        .set(
-            &mut values,
-            point::FOREARM_COLOR,
-            Value::Color([20, 30, 80, 255]),
-        )
-        .unwrap();
-    assert_eq!(
-        point::forearm_color(&values),
-        None,
-        "auto retains the pack colour"
-    );
-    registry
-        .set(&mut values, point::FOREARM_AUTO_COLOR, Value::Bool(false))
-        .unwrap();
-    assert_eq!(point::forearm_color(&values), Some([20, 30, 80, 255]));
-}
-
 /// Lays out and clicks `next` with the widget state `prev` left behind,
 /// the way the app moves from one screen to another.
 fn transition(prev: Element<'_, Message>, mut next: Element<'_, Message>, size: Size) {
@@ -510,23 +455,22 @@ fn character_screens_switch_without_mismatched_widget_state() {
     request.add_results(vec!["body.png".into(), "tail.png".into()]);
     let tabs = [
         CharacterTab::Library,
-        CharacterTab::Desktop,
         CharacterTab::Artwork,
-        CharacterTab::Behavior,
+        CharacterTab::Reactions,
         CharacterTab::Advanced,
     ];
     let screen = |n: usize| {
         let mut v = settings_view(&registry, &session, &[], settings::Page::Character);
         v.motion = Some(&preview);
         match n {
-            0..=4 => v.character_tab = tabs[n],
-            5 => v.reference = Some((&request, None)),
+            0..=3 => v.character_tab = tabs[n],
+            4 => v.reference = Some((&request, None)),
             _ => v.reference = Some((&request, Some(&thumb))),
         }
         settings::view(v)
     };
-    for a in 0..7 {
-        for b in 0..7 {
+    for a in 0..6 {
+        for b in 0..6 {
             transition(screen(a), screen(b), Size::new(1040.0, 2000.0));
         }
     }

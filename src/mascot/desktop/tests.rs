@@ -345,7 +345,7 @@ fn hit_testing_follows_the_drawn_lean() {
 
 #[test]
 fn a_carried_character_leans_around_the_grab_and_trails_unprotected_parts() {
-    let (mut d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 500.0), 5, false);
+    let mut d = Desktop::new("yohta", Rig::load(), 146.0, (500.0, 500.0), 5, false);
     let o = Options {
         energy: None,
         bop: None,
@@ -422,7 +422,7 @@ fn a_carried_character_leans_around_the_grab_and_trails_unprotected_parts() {
 
 #[test]
 fn a_released_character_falls_to_rest_once_and_a_pickup_catches_it() {
-    let (mut d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 300.0), 5, false);
+    let mut d = Desktop::new("yohta", Rig::load(), 146.0, (500.0, 300.0), 5, false);
     let o = Options {
         energy: None,
         bop: None,
@@ -453,8 +453,8 @@ fn a_released_character_falls_to_rest_once_and_a_pickup_catches_it() {
     assert!(d.take_events().is_empty(), "landing is not a Drop");
     // Picking it up mid-flight catches it at once.
     d.flight = flight((0.0, 0.0), 1.0, true, (500.0, 300.0), bounds);
-    assert!(d.moving());
-    let _ = d.update(Msg::Pressed, &o);
+    assert!(d.flight.is_some() || d.press.as_ref().is_some_and(|p| p.dragging));
+    let _ = d.step(Msg::Pressed, &o);
     assert!(d.flight.is_none());
     // Off unless the character asks for it.
     d.set_fall(false);
@@ -592,7 +592,7 @@ fn a_thrown_character_arcs_bounces_off_the_edges_and_comes_to_rest() {
 
 #[test]
 fn the_carry_limit_is_the_window_edge_not_a_step_short_of_it() {
-    let (d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 500.0), 5, false);
+    let d = Desktop::new("yohta", Rig::load(), 146.0, (500.0, 500.0), 5, false);
     let l = d.layout;
     // Held by the body, low down: the window's bottom edge stops the swing.
     let pivot = Point::new(310.0, 650.0);
@@ -615,7 +615,7 @@ fn the_carry_limit_is_the_window_edge_not_a_step_short_of_it() {
 
 #[test]
 fn a_held_pose_swings_from_its_scruff_when_shaken_and_settles() {
-    let (mut d, _) = Desktop::open("yohta", Rig::load(), 146.0, (500.0, 500.0), 5, false);
+    let mut d = Desktop::new("yohta", Rig::load(), 146.0, (500.0, 500.0), 5, false);
     let o = Options {
         energy: None,
         bop: None,
@@ -693,7 +693,7 @@ fn a_held_pose_swings_from_its_scruff_when_shaken_and_settles() {
 
 #[test]
 fn gestures_emit_each_event_once_and_cancellation_none() {
-    let (mut d, _) = Desktop::open("yohta", Rig::load(), 160.0, (500.0, 500.0), 5, false);
+    let mut d = Desktop::new("yohta", Rig::load(), 160.0, (500.0, 500.0), 5, false);
     let o = Options {
         energy: None,
         bop: None,
@@ -732,14 +732,14 @@ fn gestures_emit_each_event_once_and_cancellation_none() {
     // Releasing with no press, or hiding mid-drag, invents nothing.
     assert_eq!(d.release(&o), None);
     d.press = Some(press(true));
-    let _ = d.set_hidden(true);
+    let _ = d.hide(true);
     assert_eq!(d.release(&o), None);
     assert!(d.take_events().is_empty());
 }
 
 #[test]
 fn a_held_press_keeps_its_pose_and_eases_out_on_release() {
-    let (mut d, _) = Desktop::open("yohta", Rig::load(), 160.0, (500.0, 500.0), 5, false);
+    let mut d = Desktop::new("yohta", Rig::load(), 160.0, (500.0, 500.0), 5, false);
     let o = Options {
         energy: None,
         bop: None,
@@ -811,7 +811,7 @@ fn a_held_press_keeps_its_pose_and_eases_out_on_release() {
 
 #[test]
 fn enlarged_held_art_keeps_room_to_swing() {
-    let (mut d, _) = Desktop::open("yohta", Rig::load(), 292.0, (500.0, 500.0), 5, false);
+    let mut d = Desktop::new("yohta", Rig::load(), 292.0, (500.0, 500.0), 5, false);
     let size = d.rig.size();
     let mut art = image::RgbaImage::new(size.width as u32, size.height as u32);
     for y in 20..size.height as u32 - 1 {
@@ -845,8 +845,7 @@ fn enlarged_held_art_keeps_room_to_swing() {
 fn authored_grips_keep_full_swing_clearance_for_rectangular_original_art() {
     for grip in [[0.0, 0.0], [1.0, 0.0], [0.15, 0.3], [0.5, 1.0]] {
         for height in [73.0, 292.0, 584.0] {
-            let (mut desktop, _) =
-                Desktop::open("yohta", Rig::load(), height, (500.0, 500.0), 5, false);
+            let mut desktop = Desktop::new("yohta", Rig::load(), height, (500.0, 500.0), 5, false);
             let stage = desktop.rig.size();
             let pixels = image::RgbaImage::from_pixel(100, 260, image::Rgba([120, 180, 220, 255]));
             let mut picture =
@@ -870,4 +869,194 @@ fn authored_grips_keep_full_swing_clearance_for_rectangular_original_art() {
             }
         }
     }
+}
+
+/// Paints the speech bubble and the open menu into a buffer and checks they
+/// land on the pixels they should. With `TINYPAW_PAINT_PNG` set to a path, the
+/// frame is also saved there for a look.
+#[test]
+fn stage_paints_speech_bubble_and_menu() {
+    use crate::mascot::surface::Raster;
+    use crate::mascot::typeset::{IconCache, Typeset};
+    use crate::view::icons::Glyph;
+
+    let o = Options {
+        bop: None,
+        dance: Default::default(),
+        eyes: false,
+        idle: false,
+        reduced: true,
+        lines: true,
+        quiet: false,
+        idle_every: (60.0, 120.0),
+        music: 0.0,
+        energy: None,
+        beat: None,
+    };
+    let mut d = Desktop::new("yohta", Rig::load(), 146.0, (500.0, 500.0), 3, false);
+    let mut lines = Lines::default();
+    lines
+        .get_mut(Trigger::Click)
+        .push(super::super::lines::Line {
+            text: "Hi! I'm Yohta. Click me again, or right-click for the menu.".into(),
+            sound: None,
+        });
+    d.set_lines(lines, &o);
+    d.reduced = true;
+    d.speech = Speech::new(
+        "Hi! I'm Yohta. Click me again, or right-click for the menu.",
+        0.0,
+    );
+    d.menu = Some(Side::Right);
+    d.hover = vec![0.0, 1.0, 0.0];
+    let items = vec![
+        Item {
+            icon: Glyph::Pen,
+            label: "Annotation",
+            checked: Some(true),
+            on_press: Some(Msg::Command("x")),
+        },
+        Item {
+            icon: Glyph::Gear,
+            label: "Settings",
+            checked: None,
+            on_press: Some(Msg::CharacterSettings),
+        },
+        Item {
+            icon: Glyph::EyeOff,
+            label: "Hide",
+            checked: None,
+            on_press: None,
+        },
+    ];
+    let k = 1.5;
+    let w = (d.layout.window.width * k).ceil() as u32;
+    let h = (d.layout.window.height * k).ceil() as u32;
+    let mut raster = Raster::new(w, h).unwrap();
+    let mut text = Typeset::new();
+    let mut icons = IconCache::default();
+    let before = raster.data().iter().filter(|b| **b != 0).count();
+    raster.with_save(|r| {
+        r.scale(k);
+        d.paint_character(r);
+    });
+    let drawn = raster.data().iter().filter(|b| **b != 0).count();
+    raster.with_save(|r| {
+        r.scale(k);
+        d.paint_menu(r, &mut text, &mut icons, &items);
+        d.paint_speech(r, &mut text, &o);
+    });
+    let after = raster.data().iter().filter(|b| **b != 0).count();
+    assert!(drawn > before, "the character drew nothing");
+    assert!(
+        after > drawn + 2000,
+        "the menu and bubble drew almost nothing"
+    );
+    // The menu is where the layout says: its box has pixels, a far corner none.
+    let m = d.layout.menu(Side::Right);
+    let at = |x: f32, y: f32| {
+        let (px, py) = ((x * k) as u32, (y * k) as u32);
+        raster.data()[((py * w + px) * 4 + 3) as usize]
+    };
+    assert!(at(m.x + m.width / 2.0, m.y + m.height / 2.0) > 200);
+    if let Some(path) = std::env::var_os("TINYPAW_PAINT_PNG") {
+        image::save_buffer(
+            path,
+            &raster.to_straight_rgba(),
+            w,
+            h,
+            image::ExtendedColorType::Rgba8,
+        )
+        .unwrap();
+    }
+}
+
+fn neighbour_options() -> Options {
+    Options {
+        bop: None,
+        dance: Default::default(),
+        eyes: true,
+        idle: false,
+        reduced: true,
+        lines: true,
+        quiet: false,
+        idle_every: (60.0, 120.0),
+        music: 0.0,
+        energy: None,
+        beat: None,
+    }
+}
+
+fn desktop_with_a_neighbour_line(
+    crowd: &std::sync::Arc<crate::mascot::crowd::Crowd>,
+    id: u32,
+) -> Desktop {
+    let o = neighbour_options();
+    let mut d = Desktop::new("yohta", Rig::load(), 146.0, (500.0, 500.0), 3, false);
+    let mut lines = Lines::default();
+    lines
+        .get_mut(Trigger::Neighbor)
+        .push(super::super::lines::Line {
+            text: "Look at {other} go!".into(),
+            sound: None,
+        });
+    lines
+        .get_mut(Trigger::Click)
+        .push(super::super::lines::Line {
+            text: "Hey!".into(),
+            sound: None,
+        });
+    d.set_lines(lines, &o);
+    d.join(crowd.clone(), id);
+    d
+}
+
+#[test]
+fn a_line_about_a_neighbour_names_it() {
+    let crowd = std::sync::Arc::new(crate::mascot::crowd::Crowd::default());
+    let mut d = desktop_with_a_neighbour_line(&crowd, 1);
+    d.say_about(Trigger::Neighbor, &neighbour_options(), Some("Moro"));
+    assert_eq!(
+        d.speech.as_ref().map(|s| s.text()),
+        Some("Look at Moro go!")
+    );
+    // With no name to give it still reads naturally.
+    let mut d = desktop_with_a_neighbour_line(&crowd, 2);
+    crowd.release_voice(1);
+    d.say_about(Trigger::Neighbor, &neighbour_options(), None);
+    assert_eq!(
+        d.speech.as_ref().map(|s| s.text()),
+        Some("Look at them go!")
+    );
+}
+
+#[test]
+fn two_characters_never_have_a_bubble_up_at_once_unless_the_user_asked() {
+    let crowd = std::sync::Arc::new(crate::mascot::crowd::Crowd::default());
+    let o = neighbour_options();
+    let mut first = desktop_with_a_neighbour_line(&crowd, 1);
+    let mut second = desktop_with_a_neighbour_line(&crowd, 2);
+    first.say_about(Trigger::Neighbor, &o, Some("Moro"));
+    assert!(first.speech.is_some());
+    // A neighbour comment nobody asked for waits for the first to finish.
+    second.say_about(Trigger::Neighbor, &o, Some("Moro"));
+    assert!(second.speech.is_none());
+    // The user clicking the second takes the turn.
+    second.say(Trigger::Click, &o);
+    assert_eq!(second.speech.as_ref().map(|s| s.text()), Some("Hey!"));
+    // The first notices it lost the turn on its next step and puts its bubble away.
+    first.step_speech(&o);
+    assert!(first.speech.is_none());
+}
+
+#[test]
+fn quiet_lines_silence_what_a_neighbour_prompts() {
+    let crowd = std::sync::Arc::new(crate::mascot::crowd::Crowd::default());
+    let mut d = desktop_with_a_neighbour_line(&crowd, 1);
+    let quiet = Options {
+        quiet: true,
+        ..neighbour_options()
+    };
+    d.say_about(Trigger::Neighbor, &quiet, Some("Moro"));
+    assert!(d.speech.is_none());
 }

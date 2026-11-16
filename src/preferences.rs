@@ -44,7 +44,17 @@ pub fn load(registry: &Registry) -> Loaded {
             first_run: true,
         };
     };
-    if let Ok(Json::Object(map)) = serde_json::from_str::<Json>(&text) {
+    apply_json(registry, &mut values, &text);
+    Loaded {
+        values,
+        first_run: false,
+    }
+}
+
+/// Applies a JSON object of setting IDs to values over `values`. Unknown IDs
+/// and values that no longer validate are ignored.
+pub fn apply_json(registry: &Registry, values: &mut SettingValues, text: &str) {
+    if let Ok(Json::Object(map)) = serde_json::from_str::<Json>(text) {
         for (id, json) in map {
             if id == crate::features::upcoming::SOURCE {
                 continue;
@@ -56,25 +66,14 @@ pub fn load(registry: &Registry) -> Loaded {
                 _ => continue,
             };
             if let Ok(value) = registry.parse_value(&id, &text) {
-                let _ = registry.set(&mut values, &id, value);
+                let _ = registry.set(values, &id, value);
             }
         }
     }
-    Loaded {
-        values,
-        first_run: false,
-    }
 }
 
-pub fn save(values: &SettingValues) -> io::Result<()> {
-    let path = file().ok_or_else(|| io::Error::other("no per-user data folder"))?;
-    save_to(&path, values)
-}
-
-fn save_to(path: &std::path::Path, values: &SettingValues) -> io::Result<()> {
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)?;
-    }
+/// The values as a JSON object, as saved to disk.
+pub fn to_json(values: &SettingValues) -> Json {
     let mut map = Map::new();
     for (id, value) in values.iter() {
         // Native window handles are valid only for this process session.
@@ -90,7 +89,19 @@ fn save_to(path: &std::path::Path, values: &SettingValues) -> io::Result<()> {
         };
         map.insert(id.to_owned(), json);
     }
-    let text = serde_json::to_string_pretty(&Json::Object(map)).map_err(io::Error::other)?;
+    Json::Object(map)
+}
+
+pub fn save(values: &SettingValues) -> io::Result<()> {
+    let path = file().ok_or_else(|| io::Error::other("no per-user data folder"))?;
+    save_to(&path, values)
+}
+
+fn save_to(path: &std::path::Path, values: &SettingValues) -> io::Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let text = serde_json::to_string_pretty(&to_json(values)).map_err(io::Error::other)?;
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, text)?;
     fs::rename(&tmp, path)

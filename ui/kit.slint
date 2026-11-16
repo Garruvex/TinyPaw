@@ -1,0 +1,800 @@
+import { Tokens } from "tokens.slint";
+
+// The component kit. Pages, templates and studio tabs are built only from
+// these and from Tokens: no raw sizes or colours outside this file and
+// tokens.slint (the guard in src/view/ui_guard_tests.rs enforces it).
+// A missing component is added here, not written inline in a page.
+
+// ---- Text ----------------------------------------------------------------
+
+export component PageTitle inherits Text {
+    font-size: Tokens.font-h1;
+    font-weight: 700;
+    color: Tokens.text;
+}
+
+export component SectionTitle inherits Text {
+    font-size: Tokens.font-h2;
+    font-weight: 600;
+    color: Tokens.text-soft;
+}
+
+export component Hint inherits Text {
+    font-size: Tokens.font-label;
+    color: Tokens.muted;
+    wrap: word-wrap;
+}
+
+export component NavGroup inherits Text {
+    font-size: Tokens.font-label;
+    color: Tokens.muted;
+}
+
+// ---- Buttons and navigation ------------------------------------------------
+
+// Use `primary` once per view for the main action.
+export component Btn inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary;
+    in property <bool> enabled: true;
+    callback clicked;
+    height: Tokens.h-control;
+    preferred-width: label.preferred-width + 2 * Tokens.space-3;
+    border-radius: Tokens.radius-control;
+    border-width: root.primary ? 0px : Tokens.hairline;
+    border-color: Tokens.line-strong;
+    background: !root.enabled ? Tokens.control
+        : root.primary ? (area.has-hover ? Tokens.cyan-text : Tokens.cyan)
+        : (area.has-hover ? Tokens.hover : Tokens.control);
+    label := Text {
+        x: Tokens.space-3;
+        y: (parent.height - self.height) / 2;
+        text: root.text;
+        font-size: Tokens.font-body;
+        font-weight: root.primary ? 600 : 400;
+        color: !root.enabled ? Tokens.disabled : root.primary ? Tokens.on-accent : Tokens.text;
+    }
+    area := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+// A small line icon from SVG path commands on a 16 by 16 grid.
+export component Icon inherits Path {
+    in property <color> ink: Tokens.muted;
+    width: Tokens.icon;
+    height: Tokens.icon;
+    viewbox-width: 16;
+    viewbox-height: 16;
+    stroke: root.ink;
+    stroke-width: Tokens.stroke;
+    fill: transparent;
+}
+
+export component NavItem inherits Rectangle {
+    in property <string> text;
+    // SVG path commands for the entry's icon, or none.
+    in property <string> icon;
+    in property <bool> selected;
+    callback clicked;
+    height: Tokens.h-nav;
+    border-radius: Tokens.radius-control;
+    background: root.selected ? Tokens.cyan-bg : (area.has-hover ? Tokens.hover : Tokens.none);
+    if root.icon != "": Icon {
+        x: Tokens.space-3;
+        y: (parent.height - self.height) / 2;
+        commands: root.icon;
+        ink: root.selected ? Tokens.cyan-text : Tokens.muted;
+    }
+    Text {
+        x: root.icon != "" ? 2 * Tokens.space-3 + Tokens.icon : Tokens.space-3;
+        y: (parent.height - self.height) / 2;
+        text: root.text;
+        font-size: Tokens.font-nav;
+        font-weight: root.selected ? 600 : 400;
+        color: root.selected ? Tokens.cyan-text : Tokens.subtle;
+    }
+    area := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// One tab of a studio or page tab strip.
+export component Tab inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked;
+    preferred-width: label.preferred-width + 2 * Tokens.space-3;
+    height: Tokens.h-tab;
+    border-radius: Tokens.radius-small;
+    background: root.selected ? Tokens.control : (area.has-hover ? Tokens.hover : Tokens.none);
+    label := Text {
+        x: Tokens.space-3;
+        y: (parent.height - self.height) / 2;
+        text: root.text;
+        font-size: Tokens.font-body;
+        color: root.selected ? Tokens.text : Tokens.muted;
+    }
+    area := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// A short list of mutually exclusive choices inside a dark well.
+export component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> current;
+    callback selected(int);
+    height: Tokens.h-control;
+    preferred-width: max(Tokens.label-w, root.options.length * 96px);
+    background: Tokens.well;
+    border-radius: Tokens.radius-control;
+    HorizontalLayout {
+        padding: Tokens.space-1;
+        spacing: Tokens.space-1;
+        for option[i] in root.options: Rectangle {
+            border-radius: Tokens.radius-small;
+            background: i == root.current ? Tokens.hover : (seg.has-hover ? Tokens.control : Tokens.none);
+            Text {
+                text: option;
+                font-size: Tokens.font-body;
+                color: i == root.current ? Tokens.text : Tokens.muted;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            seg := TouchArea {
+                clicked => {
+                    root.current = i;
+                    root.selected(i);
+                }
+            }
+        }
+    }
+}
+
+// ---- Controls --------------------------------------------------------------
+
+export component Toggle inherits Rectangle {
+    in-out property <bool> checked;
+    in property <bool> enabled: true;
+    callback toggled(bool);
+    width: Tokens.toggle-w;
+    height: Tokens.toggle-h;
+    border-radius: Tokens.radius-round;
+    background: !root.enabled ? Tokens.control : root.checked ? Tokens.cyan : Tokens.track;
+    Rectangle {
+        width: Tokens.knob;
+        height: Tokens.knob;
+        y: (parent.height - self.height) / 2;
+        x: root.checked ? parent.width - self.width - (parent.height - self.height) / 2 : (parent.height - self.height) / 2;
+        border-radius: Tokens.radius-round;
+        background: !root.enabled ? Tokens.faint : root.checked ? Tokens.on-accent : Tokens.subtle;
+    }
+    TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+}
+
+// A switch that follows a value it does not own: it shows `on` whenever that
+// changes, and reports a click without keeping the result itself.
+export component BoundToggle inherits Rectangle {
+    in property <bool> on;
+    callback toggled(bool);
+    width: Tokens.toggle-w;
+    height: Tokens.toggle-h;
+    changed on => { inner.checked = root.on; }
+    inner := Toggle {
+        checked: root.on;
+        toggled(c) => { root.toggled(c); }
+    }
+}
+
+// A slider that takes the app's tokens. The touch area covers the fixed rail,
+// never the handle, so a drag reports stable positions.
+export component Range inherits Rectangle {
+    in-out property <float> value;
+    in property <float> minimum: 0;
+    in property <float> maximum: 100;
+    in property <bool> enabled: true;
+    callback changed(float);
+    min-width: Tokens.label-w / 2;
+    preferred-width: Tokens.label-w;
+    height: Tokens.h-control;
+    property <float> fraction: root.maximum > root.minimum ? (root.value - root.minimum) / (root.maximum - root.minimum) : 0;
+    Rectangle {
+        y: (parent.height - self.height) / 2;
+        height: Tokens.rail;
+        border-radius: Tokens.radius-round;
+        background: Tokens.track;
+        Rectangle {
+            x: 0px;
+            width: parent.width * root.fraction;
+            border-radius: Tokens.radius-round;
+            background: root.enabled ? Tokens.cyan : Tokens.faint;
+        }
+    }
+    Rectangle {
+        width: Tokens.handle;
+        height: Tokens.handle;
+        y: (parent.height - self.height) / 2;
+        x: (parent.width - self.width) * root.fraction;
+        border-radius: Tokens.radius-round;
+        background: !root.enabled ? Tokens.faint : area.pressed || area.has-hover ? Tokens.cyan-text : Tokens.cyan;
+    }
+    area := TouchArea {
+        enabled: root.enabled;
+        property <length> span: root.width - Tokens.handle;
+        function set-from(x: length) {
+            if (self.span > 0px) {
+                root.value = root.minimum + max(0, min(1, (x - Tokens.handle / 2) / self.span)) * (root.maximum - root.minimum);
+                root.changed(root.value);
+            }
+        }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                self.set-from(self.mouse-x);
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                self.set-from(self.mouse-x);
+            }
+        }
+    }
+}
+
+// ---- Layout pieces ---------------------------------------------------------
+
+// A page body: title, then sections. Pages are built from this template part.
+export component Page inherits Rectangle {
+    in property <string> title;
+    in property <string> summary;
+    // A switch for the whole page, beside its title; none without a label.
+    in property <string> switch-label;
+    in property <bool> switch-on;
+    callback switched(bool);
+    background: Tokens.surface;
+    VerticalLayout {
+        padding: Tokens.space-5;
+        spacing: Tokens.space-3;
+        alignment: start;
+        HorizontalLayout {
+            spacing: Tokens.space-3;
+            PageTitle {
+                text: root.title;
+                horizontal-stretch: 1;
+            }
+            if root.switch-label != "": Text {
+                text: root.switch-label;
+                font-size: Tokens.font-body;
+                color: Tokens.muted;
+                vertical-alignment: center;
+            }
+            if root.switch-label != "": VerticalLayout {
+                alignment: center;
+                BoundToggle {
+                    on: root.switch-on;
+                    toggled(c) => { root.switched(c); }
+                }
+            }
+        }
+        if root.summary != "": Hint { text: root.summary; }
+        @children
+    }
+}
+
+// A titled group of rows on a card.
+// A small label beside a title: "Trial" for something still being tried out.
+export component Tag inherits Rectangle {
+    in property <string> text;
+    height: label.preferred-height + Tokens.space-1;
+    width: label.preferred-width + 2 * Tokens.space-2;
+    border-radius: Tokens.radius-round;
+    background: Tokens.amber-bg;
+    label := Text {
+        x: Tokens.space-2;
+        y: (parent.height - self.height) / 2;
+        text: root.text;
+        font-size: Tokens.font-label;
+        color: Tokens.amber-text;
+    }
+}
+
+export component Section inherits VerticalLayout {
+    in property <string> title;
+    in property <string> tag;
+    spacing: Tokens.space-2;
+    HorizontalLayout {
+        alignment: start;
+        spacing: Tokens.space-2;
+        SectionTitle { text: root.title; }
+        if root.tag != "": VerticalLayout {
+            alignment: center;
+            Tag { text: root.tag; }
+        }
+    }
+    Rectangle {
+        background: Tokens.well;
+        border-radius: Tokens.radius-card;
+        VerticalLayout {
+            padding: Tokens.space-2;
+            @children
+        }
+    }
+}
+
+// One setting: label and hint on the left, the control on the right.
+export component SettingRow inherits Rectangle {
+    in property <string> label;
+    in property <string> hint;
+    // Shows the hint as a warning (amber) instead of quiet text.
+    in property <bool> hint-warning;
+    min-height: Tokens.h-row;
+    HorizontalLayout {
+        padding-left: Tokens.space-3;
+        padding-right: Tokens.space-3;
+        padding-top: Tokens.space-1;
+        padding-bottom: Tokens.space-1;
+        spacing: Tokens.space-4;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text { text: root.label; font-size: Tokens.font-body; color: Tokens.text; }
+            if root.hint != "": Hint {
+                text: root.hint;
+                color: root.hint-warning ? Tokens.amber-text : Tokens.muted;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                alignment: end;
+                @children
+            }
+        }
+    }
+}
+
+// A key combination, drawn as a keycap. `waiting` asks for a new one.
+export component Keycap inherits Rectangle {
+    in property <string> text;
+    in property <bool> waiting;
+    height: Tokens.h-control;
+    preferred-width: Tokens.label-w / 2;
+    border-radius: Tokens.radius-control;
+    border-width: Tokens.hairline;
+    border-color: root.waiting ? Tokens.cyan : Tokens.line-strong;
+    background: Tokens.control;
+    Text {
+        x: Tokens.space-3;
+        y: (parent.height - self.height) / 2;
+        width: parent.width - 2 * Tokens.space-3;
+        horizontal-alignment: center;
+        overflow: elide;
+        text: root.waiting ? "Press keys…" : root.text;
+        font-size: Tokens.font-body;
+        color: root.waiting ? Tokens.cyan-text : Tokens.subtle;
+    }
+}
+
+// A selectable card (activation style, pointer shape).
+export component Card inherits Rectangle {
+    in property <bool> selected;
+    callback clicked;
+    border-radius: Tokens.radius-card;
+    background: root.selected || area.has-hover ? Tokens.control : Tokens.raised;
+    border-width: root.selected ? Tokens.hairline : 0px;
+    border-color: Tokens.cyan-text;
+    VerticalLayout {
+        padding: Tokens.space-3;
+        spacing: Tokens.space-1;
+        @children
+    }
+    area := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// One thing in a list (a character on the desktop): its picture and name, its
+// size, a switch, and a mark that opens the rest of its settings below.
+export component EntryRow inherits Rectangle {
+    in property <image> picture;
+    in property <string> label;
+    in property <string> hint;
+    in property <bool> open;
+    in-out property <bool> checked;
+    in-out property <float> value;
+    in property <float> minimum;
+    in property <float> maximum: 1;
+    in property <string> value-text;
+    callback toggled(bool);
+    callback ranged(float);
+    callback clicked;
+    min-height: Tokens.h-row;
+    border-radius: Tokens.radius-control;
+    background: root.open ? Tokens.raised : Tokens.none;
+    HorizontalLayout {
+        padding-left: Tokens.space-3;
+        padding-right: Tokens.space-3;
+        padding-top: Tokens.space-1;
+        padding-bottom: Tokens.space-1;
+        spacing: Tokens.space-3;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: Tokens.avatar;
+                height: Tokens.avatar;
+                border-radius: Tokens.radius-small;
+                background: Tokens.control;
+                if root.picture.width > 0: Image {
+                    source: root.picture;
+                    width: parent.width;
+                    height: parent.height;
+                    image-fit: contain;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            width: Tokens.label-w / 2;
+            Text {
+                text: root.label;
+                font-size: Tokens.font-body;
+                color: Tokens.text;
+                overflow: elide;
+            }
+            if root.hint != "": Hint { text: root.hint; wrap: no-wrap; }
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Range {
+                value <=> root.value;
+                minimum: root.minimum;
+                maximum: root.maximum;
+                changed(v) => { root.ranged(v); }
+            }
+        }
+        Text {
+            width: Tokens.value-w;
+            text: root.value-text;
+            font-size: Tokens.font-body;
+            color: Tokens.muted;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+        }
+        VerticalLayout {
+            alignment: center;
+            Toggle {
+                checked <=> root.checked;
+                toggled(c) => { root.toggled(c); }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: Tokens.h-control;
+                height: Tokens.h-control;
+                border-radius: Tokens.radius-control;
+                background: more.has-hover || root.open ? Tokens.hover : Tokens.none;
+                // Three dots: more settings for this one.
+                Icon {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    commands: "M2.6 8 h1.6 M7.2 8 h1.6 M11.8 8 h1.6";
+                    ink: root.open ? Tokens.cyan-text : Tokens.muted;
+                    stroke-width: 2 * Tokens.stroke;
+                }
+                more := TouchArea {
+                    clicked => { root.clicked(); }
+                }
+            }
+        }
+    }
+}
+
+// A row in a list of items (characters on the desktop, reactions, packs).
+export component ListRow inherits Rectangle {
+    in property <bool> selected;
+    callback clicked;
+    height: Tokens.h-row;
+    border-radius: Tokens.radius-control;
+    background: root.selected ? Tokens.cyan-bg : (area.has-hover ? Tokens.hover : Tokens.none);
+    HorizontalLayout {
+        padding: Tokens.space-3;
+        spacing: Tokens.space-3;
+        @children
+    }
+    area := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// An inline message. `warning` uses amber, otherwise cyan.
+export component Notice inherits Rectangle {
+    in property <string> text;
+    in property <bool> warning;
+    border-radius: Tokens.radius-control;
+    background: root.warning ? Tokens.amber-bg : Tokens.cyan-bg;
+    HorizontalLayout {
+        padding: Tokens.space-3;
+        Text {
+            text: root.text;
+            wrap: word-wrap;
+            font-size: Tokens.font-body;
+            color: root.warning ? Tokens.amber-text : Tokens.cyan-text;
+        }
+    }
+}
+
+// Bottom bar for drafts (the studio). Settings pages save at once and do not use it.
+export component SaveBar inherits Rectangle {
+    in property <bool> dirty;
+    callback save;
+    callback revert;
+    height: Tokens.h-row;
+    background: Tokens.header;
+    HorizontalLayout {
+        padding: Tokens.space-3;
+        spacing: Tokens.space-2;
+        alignment: end;
+        if root.dirty: Hint { text: "Unsaved changes"; vertical-alignment: center; }
+        Btn { text: "Revert"; enabled: root.dirty; clicked => { root.revert(); } }
+        Btn { text: "Save"; primary: true; enabled: root.dirty; clicked => { root.save(); } }
+    }
+}
+
+// ---- Choosing and scrolling ------------------------------------------------
+
+// A pick from a list that is too long for Segmented. Opens a list below it.
+export component Select inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> current;
+    in property <bool> enabled: true;
+    callback selected(int);
+    height: Tokens.h-control;
+    preferred-width: Tokens.label-w;
+    border-radius: Tokens.radius-control;
+    border-width: Tokens.hairline;
+    border-color: Tokens.line-strong;
+    background: !root.enabled ? Tokens.raised : area.has-hover ? Tokens.hover : Tokens.control;
+    Text {
+        x: Tokens.space-3;
+        y: (parent.height - self.height) / 2;
+        width: parent.width - 3 * Tokens.space-3 - Tokens.space-2;
+        overflow: elide;
+        text: root.current >= 0 && root.current < root.options.length ? root.options[root.current] : "";
+        font-size: Tokens.font-body;
+        color: root.enabled ? Tokens.text : Tokens.disabled;
+    }
+    Text {
+        x: parent.width - Tokens.space-3 - self.width;
+        y: (parent.height - self.height) / 2;
+        text: "▾";
+        font-size: Tokens.font-body;
+        color: Tokens.muted;
+    }
+    area := TouchArea {
+        enabled: root.enabled;
+        clicked => { list.show(); }
+    }
+    list := PopupWindow {
+        x: 0px;
+        y: root.height + Tokens.space-1;
+        width: root.width;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Tokens.raised;
+            border-radius: Tokens.radius-control;
+            border-width: Tokens.hairline;
+            border-color: Tokens.line-strong;
+            VerticalLayout {
+                padding: Tokens.space-1;
+                for option[i] in root.options: Rectangle {
+                    height: Tokens.h-control;
+                    border-radius: Tokens.radius-small;
+                    background: i == root.current ? Tokens.cyan-bg : (row.has-hover ? Tokens.hover : Tokens.none);
+                    Text {
+                        x: Tokens.space-3;
+                        y: (parent.height - self.height) / 2;
+                        text: option;
+                        font-size: Tokens.font-body;
+                        color: i == root.current ? Tokens.cyan-text : Tokens.text;
+                    }
+                    row := TouchArea {
+                        clicked => {
+                            root.current = i;
+                            root.selected(i);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A row of colours to pick from; the current one is ringed.
+export component Swatches inherits HorizontalLayout {
+    in property <[color]> colors;
+    in-out property <int> current;
+    callback selected(int);
+    spacing: Tokens.space-2;
+    alignment: start;
+    for swatch[i] in root.colors: Rectangle {
+        width: Tokens.h-control;
+        height: Tokens.h-control;
+        border-radius: Tokens.radius-round;
+        background: swatch;
+        border-width: i == root.current ? Tokens.ring : Tokens.hairline;
+        border-color: i == root.current ? Tokens.text : Tokens.line-strong;
+        TouchArea {
+            clicked => {
+                root.current = i;
+                root.selected(i);
+            }
+        }
+    }
+}
+
+// A level from 0 to 1 as a bar.
+export component Meter inherits Rectangle {
+    in property <float> level;
+    height: Tokens.rail * 2;
+    border-radius: Tokens.radius-round;
+    background: Tokens.track;
+    Rectangle {
+        x: 0px;
+        width: parent.width * max(0, min(1, root.level));
+        border-radius: Tokens.radius-round;
+        background: Tokens.cyan-text;
+    }
+}
+
+// One source to choose among (what music response listens to): an icon, its
+// name, how loud it is now, and whether it is the chosen one.
+export component SourceRow inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <float> level;
+    in property <string> status;
+    in property <bool> selected;
+    callback clicked;
+    min-height: Tokens.h-row;
+    border-radius: Tokens.radius-control;
+    background: area.has-hover ? Tokens.hover : Tokens.none;
+    area := TouchArea {
+        clicked => { root.clicked(); }
+    }
+    HorizontalLayout {
+        padding-left: Tokens.space-3;
+        padding-right: Tokens.space-3;
+        spacing: Tokens.space-3;
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                commands: root.icon;
+                ink: root.selected ? Tokens.cyan-text : Tokens.muted;
+            }
+        }
+        Text {
+            width: Tokens.label-w;
+            text: root.label;
+            font-size: Tokens.font-body;
+            color: Tokens.text;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Meter { level: root.level; }
+        }
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 2 * Tokens.value-w;
+                height: Tokens.toggle-h;
+                border-radius: Tokens.radius-small;
+                background: root.selected ? Tokens.cyan-bg : Tokens.none;
+                Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: root.status;
+                    font-size: Tokens.font-label;
+                    color: root.selected ? Tokens.cyan-text : Tokens.muted;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+// Pictures with a name under each, to pick one. A picture of no size is shown
+// as a round badge instead.
+export component Cards inherits Rectangle {
+    in property <[image]> pictures;
+    in property <[string]> names;
+    in-out property <int> current;
+    // The last card makes a new one: it shows a plus instead of a picture.
+    in property <bool> last-adds;
+    callback selected(int);
+    // As many to a row as fit; the rest wrap onto further rows.
+    property <int> columns: max(1, floor((root.width + Tokens.space-2) / (Tokens.card-w + Tokens.space-2)));
+    property <int> rows: max(1, ceil(root.names.length / root.columns));
+    horizontal-stretch: 1;
+    min-width: Tokens.card-w;
+    height: root.rows * Tokens.card-h + (root.rows - 1) * Tokens.space-2;
+    Rectangle {
+        for name[i] in root.names: Rectangle {
+            x: mod(i, root.columns) * (Tokens.card-w + Tokens.space-2);
+            y: floor(i / root.columns) * (Tokens.card-h + Tokens.space-2);
+            width: Tokens.card-w;
+            height: Tokens.card-h;
+            border-radius: Tokens.radius-card;
+            border-width: i == root.current ? Tokens.ring : Tokens.hairline;
+            border-color: i == root.current ? Tokens.cyan-text : Tokens.line-strong;
+            background: card.has-hover ? Tokens.hover : Tokens.control;
+            if root.pictures[i].width > 0: Image {
+                source: root.pictures[i];
+                x: (parent.width - self.width) / 2;
+                y: Tokens.space-3;
+                width: 64px;
+                height: 52px;
+                image-fit: contain;
+            }
+            if root.last-adds && i == root.names.length - 1: Icon {
+                x: (parent.width - self.width) / 2;
+                y: Tokens.space-5;
+                commands: "M8 2.5 V13.5 M2.5 8 H13.5";
+                ink: Tokens.muted;
+            }
+            if root.pictures[i].width == 0 && !(root.last-adds && i == root.names.length - 1): Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: Tokens.space-3 + 6px;
+                width: 40px;
+                height: 40px;
+                border-radius: Tokens.radius-round;
+                background: Tokens.danger-bg;
+                Text {
+                    text: "◎";
+                    font-size: Tokens.font-body;
+                    color: Tokens.danger;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+            Text {
+                x: Tokens.space-1;
+                y: parent.height - self.height - Tokens.space-3;
+                width: parent.width - 2 * Tokens.space-1;
+                text: name;
+                font-size: Tokens.font-label;
+                color: i == root.current ? Tokens.text : Tokens.muted;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+            card := TouchArea {
+                clicked => {
+                    root.current = i;
+                    root.selected(i);
+                }
+            }
+        }
+    }
+}
+
+// A page body that scrolls when it is taller than the window.
+export component Scroller inherits Flickable {
+    content-height: inner.preferred-height;
+    inner := VerticalLayout {
+        width: root.width;
+        alignment: start;
+        @children
+    }
+}

@@ -1,3 +1,19 @@
+## Standing face restored — 16 November 2026
+
+Standing uses its original `music/standing-head-v2.png` at native scale and stage position, with the original neck pivot. The sitting head and tracking-eye layers are not assigned to standing. Its painted eye pair is the complete standing face. Sitting retains its own original head/eyes and painted paws.
+
+## Fixed-paw sitting restored — 16 November 2026
+
+The active sitting recipe uses the original `sit/body.png` with painted arms/paws. It has no separate arm/item assignments and cannot wave. Nod, gaze/blink and tail motion remain available. The experimental split seated body/arms remain unused library assets. Hand movement and Wave are separate per-pose options; a pose needs deliberately authored artwork before Wave is enabled. See [the pose-set design](../../../../docs/character-pose-set-design.md).
+
+## Shared composition update — 16 November 2026
+
+`character.json` now contains the authoritative `composition` library. Each awake pose has one active face and eye pair. A compatible `head.front`, `eyes.front`, tail and items are reused; sitting and standing now use their own arm/holding variants and pose-local joints. `pose-arm-prompts.json` records the corrected artwork requirements. Pose offsets align compatible parts. `music/standing-body-shared.png` removes the old embedded arm and tail; its generation instructions are retained in `shared-artwork-prompt.txt`. The older standing images remain archived sources for compatibility and comparison.
+
+The two complete sleeping pictures and `held.png` are named recipes. Complete recipes have no extra head, eyes or limbs stacked over them. Replacing a shared image changes every pose using it; Make variant copies the selected variant and assigns the copy to the current pose.
+
+See [the artwork inventory](../../../../docs/character-shared-artwork-inventory.md) and [the editor implementation status](../../../../docs/character-editor-improvement-plan.md#implemented-baseline).
+
 # Yohta mohawk chibi
 
 Yohta **sits at rest and stands only for music**, using the approved saturated

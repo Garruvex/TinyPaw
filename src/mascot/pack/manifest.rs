@@ -4,7 +4,7 @@ use super::*;
 
 // ---- Manifest ---------------------------------------------------------------
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(in crate::mascot) struct Manifest {
     pub(in crate::mascot) id: String,
     pub(in crate::mascot) name: String,
@@ -24,6 +24,7 @@ pub(in crate::mascot) struct Manifest {
     /// How it bops to music, if not the default nod.
     pub(in crate::mascot) bop: Option<Bop>,
     pub(in crate::mascot) music_art: Option<MusicArtwork>,
+    pub(in crate::mascot) composition: Option<super::super::composition::Composition>,
     /// The pack's reaction defaults (`reactions`); the user's changes are
     /// overrides on top.
     pub(in crate::mascot) reactions: super::super::reactions::Config,
@@ -123,6 +124,7 @@ pub(in crate::mascot) struct PartDef {
 
 #[derive(Debug, Clone)]
 pub(in crate::mascot) struct EyeDef {
+    pub(in crate::mascot) static_image: bool,
     pub(in crate::mascot) white: String,
     pub(in crate::mascot) pupil: String,
     pub(in crate::mascot) mask: String,
@@ -173,8 +175,8 @@ impl Pose {
                                 "speed": p.motion.speed,
                             },
                         });
-                        if p.parent.is_some() {
-                            part["parent"] = json!("head");
+                        if let Some(parent) = p.parent {
+                            part["parent"] = json!(parent);
                         }
                         let faces: serde_json::Map<String, Json> = FACES
                             .iter()
@@ -194,12 +196,16 @@ impl Pose {
                 self.eyes
                     .iter()
                     .map(|e| {
-                        let mut eye = json!({
-                            "white": e.white,
-                            "pupil": e.pupil,
-                            "mask": e.mask,
-                            "max_offset": [e.max_offset.0, e.max_offset.1],
-                        });
+                        let mut eye = if e.static_image {
+                            json!({"image":e.white})
+                        } else {
+                            json!({
+                                "white": e.white,
+                                "pupil": e.pupil,
+                                "mask": e.mask,
+                                "max_offset": [e.max_offset.0, e.max_offset.1],
+                            })
+                        };
                         if let Some(b) = &e.blink {
                             eye["blink"] = json!(b);
                         }
@@ -290,7 +296,7 @@ pub(in crate::mascot) fn parse_part(
             kind,
             image,
             pivot,
-            parent: None,
+            parent: v["parent"].as_u64().map(|p| p as usize),
             behind,
             motion,
             faces,
@@ -301,6 +307,21 @@ pub(in crate::mascot) fn parse_part(
 
 pub(in crate::mascot) fn parse_eye(v: &Json, n: usize) -> Result<EyeDef, String> {
     let what = format!("eye {n}");
+    if !v["image"].is_null() {
+        let image = asset_field(&v["image"], &what)?;
+        return Ok(EyeDef {
+            static_image: true,
+            white: image.clone(),
+            pupil: image.clone(),
+            mask: image,
+            blink: if v["blink"].is_null() {
+                None
+            } else {
+                Some(asset_field(&v["blink"], "closed eye")?)
+            },
+            max_offset: (0.0, 0.0),
+        });
+    }
     let max_offset = match v["max_offset"].as_array().map(Vec::as_slice) {
         None => (0.012, 0.009),
         Some([x, y]) => (
@@ -315,6 +336,7 @@ pub(in crate::mascot) fn parse_eye(v: &Json, n: usize) -> Result<EyeDef, String>
         ));
     }
     Ok(EyeDef {
+        static_image: false,
         white: asset_field(&v["white"], &format!("{what}'s white"))?,
         pupil: asset_field(&v["pupil"], &format!("{what}'s pupil"))?,
         mask: asset_field(&v["mask"], &format!("{what}'s mask"))?,
@@ -408,13 +430,23 @@ pub(in crate::mascot) fn parse_layers(
                     | PartType::StickGlow
             )
         }) {
-            if part.parent.is_some()
-                || arm.parent.is_some()
-                || (part.pivot.0 - arm.pivot.0).abs() > 0.0001
-                || (part.pivot.1 - arm.pivot.1).abs() > 0.0001
+            if part.parent.is_none()
+                && (arm.parent.is_some()
+                    || (part.pivot.0 - arm.pivot.0).abs() > 0.0001
+                    || (part.pivot.1 - arm.pivot.1).abs() > 0.0001)
             {
                 return Err("Music items, glow and grip fingers must be root layers with the same shoulder pivot as holding_arm.".into());
             }
+        }
+    }
+    for index in 0..parts.len() {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut current = Some(index);
+        while let Some(n) = current {
+            if n >= parts.len() || !seen.insert(n) {
+                return Err("part attachments need valid parents and no cycles".into());
+            }
+            current = parts[n].parent;
         }
     }
     let eyes = match &pose["eyes"] {
@@ -453,6 +485,13 @@ impl Manifest {
                 }
             }
         }
+        if let Some(composition) = &self.composition {
+            for image in composition.files() {
+                if !out.contains(&image) {
+                    out.push(image);
+                }
+            }
+        }
         // Held poses and artwork reactions: canvas-sized, like any layer,
         // so they count against the image and memory limits too.
         if let Some(art) = &self.music_art {
@@ -480,9 +519,10 @@ impl Manifest {
             .collect();
         for art in self.reactions.artwork() {
             if let (SoundRef::Pack(path), Some([w, h])) = (&art.image, art.source_size)
-                && let Some(resource) = out.iter_mut().find(|(name, _)| *name == path) {
-                    resource.1 = (w, h);
-                }
+                && let Some(resource) = out.iter_mut().find(|(name, _)| *name == path)
+            {
+                resource.1 = (w, h);
+            }
         }
         out.extend(self.editor.iter().map(|r| (r.source.as_str(), r.size)));
         out
@@ -591,6 +631,9 @@ impl Manifest {
         self.lines.write(&mut m, false);
         if !self.reactions.is_empty() {
             m["reactions"] = self.reactions.to_json();
+        }
+        if let Some(composition) = &self.composition {
+            m["composition"] = composition.to_json();
         }
         if let Some(bop) = self.bop {
             m["music"] = json!({ "bop": bop.name() });
@@ -703,15 +746,15 @@ pub(in crate::mascot) fn valid_asset(path: &str) -> bool {
 }
 
 pub(in crate::mascot) fn parse_manifest(text: &str) -> Result<Manifest, String> {
-    let m: Json = serde_json::from_str(text).map_err(|e| format!("character.json: {e}"))?;
+    let mut m: Json = serde_json::from_str(text).map_err(|e| format!("character.json: {e}"))?;
     if m["schema_version"].as_u64() != Some(1) {
         return Err("character.json must use schema_version 1".into());
     }
-    let id = m["id"].as_str().unwrap_or_default();
-    if !valid_id(id) {
+    let id = m["id"].as_str().unwrap_or_default().to_owned();
+    if !valid_id(&id) {
         return Err("the id must be 1–40 lowercase letters, digits or dashes".into());
     }
-    let name = m["name"].as_str().unwrap_or_default().trim();
+    let name = m["name"].as_str().unwrap_or_default().trim().to_owned();
     if name.is_empty() || name.chars().count() > 60 {
         return Err("the name must be 1–60 characters".into());
     }
@@ -730,12 +773,22 @@ pub(in crate::mascot) fn parse_manifest(text: &str) -> Result<Manifest, String> 
             "canvas must be [width, height], each 1–{MAX_SIDE} pixels"
         ));
     };
+    let composition = super::super::composition::Composition::parse(&m["composition"])?;
+    if let Some(composition) = &composition {
+        if composition.files().iter().any(|file| !valid_asset(file)) {
+            return Err("composition images must be PNGs inside the pack folder".into());
+        }
+        m["poses"] = composition.compile((w, h))?;
+        composition.resolve_reactions(&mut m["reactions"])?;
+    }
     let Some(poses_json) = m["poses"].as_object().filter(|p| !p.is_empty()) else {
         return Err("the character needs at least one pose".into());
     };
     let mut poses = Vec::new();
     for (pose_name, pose) in poses_json {
-        if !POSES.contains(&pose_name.as_str()) {
+        if !POSES.contains(&pose_name.as_str())
+            && !(composition.is_some() && ["doze", "curled", "held"].contains(&pose_name.as_str()))
+        {
             return Err(format!("unknown pose `{pose_name}`; use sit or stand"));
         }
         let ground = pose["ground_anchor"]
@@ -818,12 +871,18 @@ pub(in crate::mascot) fn parse_manifest(text: &str) -> Result<Manifest, String> 
         // A style this version doesn't know bops the default way.
         bop: m["music"]["bop"].as_str().and_then(Bop::parse),
         music_art: MusicArtwork::parse(&m["music"]["artwork"])?,
+        composition,
         reactions: super::super::reactions::Config::parse(&m["reactions"], false)?,
     };
     manifest.editor =
         super::super::placement::parse(&m["editor"], manifest.canvas, &manifest.assets())?;
-    if manifest.assets().len() > MAX_IMAGES {
-        return Err(format!("a character can use at most {MAX_IMAGES} images"));
+    let image_limit = if manifest.composition.is_some() {
+        64
+    } else {
+        MAX_IMAGES
+    };
+    if manifest.assets().len() > image_limit {
+        return Err(format!("a character can use at most {image_limit} images"));
     }
     // Bound decoded RGBA storage across the entire rig, not just each file.
     let decoded = u64::from(manifest.canvas.0)
@@ -840,6 +899,25 @@ pub(in crate::mascot) fn parse_manifest(text: &str) -> Result<Manifest, String> 
                 * 4
                 * art.assets().len() as u64
         });
+    let decoded = if manifest.composition.is_some() {
+        // Archived sources and unused variants are copied, never decoded by
+        // the running character. Reused files count once across recipes.
+        let active: std::collections::BTreeSet<_> = manifest
+            .poses
+            .iter()
+            .flat_map(|pose| pose.assets())
+            .chain(manifest.reactions.images().into_iter().filter_map(|image| {
+                if let SoundRef::Pack(file) = image {
+                    Some(file.as_str())
+                } else {
+                    None
+                }
+            }))
+            .collect();
+        active.len() as u64 * u64::from(w) * u64::from(h) * 4
+    } else {
+        decoded
+    };
     let editor_bytes: u64 = manifest
         .editor
         .iter()

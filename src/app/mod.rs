@@ -6,6 +6,7 @@ mod input;
 mod mascot;
 mod music;
 mod pointing;
+mod settings_window;
 mod studio;
 use studio::Studio;
 
@@ -68,7 +69,7 @@ pub enum Message {
     ReferencePicked(Option<PathBuf>),
     ReferenceResults(Vec<PathBuf>),
     /// The artwork draft built as a rig for Test character, by request.
-    DraftRig(u64, Box<crate::mascot::rig::Rig>),
+    DraftRig(u64, Box<crate::mascot::editor::DraftArtwork>),
     CharacterExportPicked(Option<PathBuf>),
     /// A dialogue file to import.
     DialoguePicked(Option<PathBuf>),
@@ -84,7 +85,9 @@ pub enum Message {
     TextChanged(String),
     TextSubmit,
     Still(Ticket, Result<Vec<(OutputId, image::Handle)>, String>),
-    Mascot(crate::mascot::Msg),
+    /// Keeps the app-owned inputs to the character stage in step.
+    #[cfg(windows)]
+    MascotTick,
     /// An overlay just started taking input: keep it from occluding apps.
     Unoccluding(window::Id),
     Frame,
@@ -122,11 +125,14 @@ pub struct App {
     started: Instant,
     overlays: Vec<Overlay>,
     displays: Vec<Display>,
+    /// The Slint Settings process, while open.
+    settings_child: Option<std::process::Child>,
+    /// Settings was asked for again while open: bring it forward.
+    settings_focus: bool,
     settings_window: Option<window::Id>,
     /// Whether Settings uses the merged Windows header.
     settings_framed: bool,
     helper_hwnds: std::collections::BTreeMap<window::Id, isize>,
-    first_run_window: Option<window::Id>,
     page: Page,
     character_tab: view::settings::CharacterTab,
     notice: Option<String>,
@@ -152,20 +158,20 @@ pub struct App {
     /// The character voice: cooldowns, idle deadline, what's playing.
     voice: crate::mascot::reactions::Voice,
     /// The desktop character's reaction sounds.
-    reaction_sounds: crate::mascot::reactions::Sounds,
+    reaction_sounds: std::collections::HashMap<&'static str, crate::mascot::reactions::Sounds>,
     /// The voice's monotonic clock.
     voice_clock: Instant,
     /// The playback meter, while music response is on and needed.
     #[cfg(windows)]
-    music: Option<platform::music::Meter>,
+    music: Option<Arc<platform::music::Meter>>,
     /// The Follow beat trial's loopback analysis, while it's on.
     #[cfg(windows)]
-    beat: Option<platform::beat::Follower>,
+    beat: Option<Arc<platform::beat::Follower>>,
     /// Eases between followed tempos and the steady pace, so the music
     /// motion never jumps. Stepped by wall time wherever the phase is read.
-    beat_clock: std::cell::Cell<(crate::mascot::music::BeatClock, Option<Instant>)>,
+    #[cfg(windows)]
+    beat_clock: crate::stage::SharedClock,
     editing_pack: Option<&'static str>,
-    rebinding: Option<&'static str>,
     alt_down: bool,
     #[cfg(windows)]
     lens: platform::lens::Controller,
@@ -177,7 +183,16 @@ pub struct App {
     spot_cursor: Option<(OutputId, Pt)>,
     /// The desktop character window, while enabled.
     #[cfg(windows)]
-    mascot: Option<crate::mascot::desktop::Desktop>,
+    mascots: Vec<mascot::MascotStage>,
+    /// The characters on the desktop, each an instance with its own place and size.
+    instances: crate::instances::Instances,
+    /// What the characters share: where each stands and whose turn it is to speak.
+    crowd: Arc<crate::mascot::crowd::Crowd>,
+    /// Which free character gets the next idle sound.
+    idle_turn: usize,
+    /// Each character's own music pose and hand position, read once from its
+    /// overrides; `None` follows the app-wide values.
+    music_fits: std::cell::RefCell<std::collections::HashMap<String, Option<characters::MusicFit>>>,
     #[cfg(windows)]
     sources: Vec<platform::windows::WindowSource>,
     /// Why overlays cannot open on this desktop; settings stay usable.
@@ -386,6 +401,7 @@ impl App {
             Value::Bool(platform::autostart::enabled()),
         );
         let tool = registry.default_tool();
+        let instances = crate::instances::Instances::load(&loaded.values);
         let session = Session::new(tool.id, tool.factory, loaded.values);
         let hotkeys = match platform::hotkeys::register(&registry) {
             Ok(h) => {
@@ -409,10 +425,11 @@ impl App {
             started: Instant::now(),
             overlays: Vec::new(),
             displays: displays::list(),
+            settings_child: None,
+            settings_focus: false,
             settings_window: None,
             settings_framed: false,
             helper_hwnds: std::collections::BTreeMap::new(),
-            first_run_window: None,
             page: Page::default(),
             character_tab: Default::default(),
             notice: None,
@@ -439,7 +456,6 @@ impl App {
             beat_clock: Default::default(),
             pointer_draft: None,
             editing_pack: None,
-            rebinding: None,
             alt_down: false,
             #[cfg(windows)]
             lens: platform::lens::Controller::default(),
@@ -447,7 +463,11 @@ impl App {
             spotlight_anywhere: HeldToggle::default(),
             spot_cursor: None,
             #[cfg(windows)]
-            mascot: None,
+            mascots: Vec::new(),
+            instances,
+            crowd: Arc::default(),
+            idle_turn: 0,
+            music_fits: Default::default(),
             #[cfg(windows)]
             sources: platform::windows::window_sources(),
             #[cfg(target_os = "linux")]
@@ -489,9 +509,8 @@ impl App {
         let task = if loaded.first_run {
             // Saving now means the card shows once.
             app.preference_writer.schedule(app.session.settings());
-            let (id, open) = open_panel(Size::new(420.0, 330.0), None, false);
-            app.first_run_window = Some(id);
-            open
+            app.open_first_run();
+            Task::none()
         } else {
             Task::none()
         };
@@ -506,7 +525,7 @@ impl App {
 
     fn title(&self, window: window::Id) -> String {
         if Some(window) == self.settings_window {
-            "TinyPaw Settings".into()
+            "TinyPaw Character studio".into()
         } else {
             "TinyPaw".into()
         }
@@ -524,7 +543,7 @@ impl App {
         let mut tasks = Vec::new();
 
         if let Message::NativeReady(id, hwnd) = &message
-            && (Some(*id) == self.settings_window || Some(*id) == self.first_run_window)
+            && Some(*id) == self.settings_window
         {
             self.helper_hwnds.insert(*id, *hwnd);
         }
@@ -576,8 +595,8 @@ impl App {
             }
             Message::External(External::DisplaysChanged) => {
                 #[cfg(windows)]
-                if let Some(m) = &mut self.mascot {
-                    m.displays_changed();
+                for m in &self.mascots {
+                    m.stage.send(crate::stage::Intent::DisplaysChanged);
                 }
                 let displays = displays::list();
                 if self.displays != displays {
@@ -640,76 +659,49 @@ impl App {
                 out.collect(self.dispatch(system::MASTER_TOGGLE, now).ok());
             }
             Message::External(External::Cli { line, reply }) => {
-                let (answer, result) = self.cli(&line, now);
-                out.collect(result);
-                let _ = reply.send(answer);
+                if line.trim() == "settings-state" {
+                    let _ = reply.send(self.settings_state());
+                } else if let Some(rest) = line.trim().strip_prefix("instance-set ") {
+                    let _ = reply.send(self.settings_instance(rest));
+                } else if let Some(rest) = line.trim().strip_prefix("shortcut-bind ") {
+                    let _ = reply.send(self.settings_bind(rest));
+                } else if let Some(name) = line.trim().strip_prefix("settings-action ") {
+                    let answer = self.settings_action(name.trim(), now, &mut out, &mut tasks);
+                    let _ = reply.send(answer);
+                } else {
+                    let (answer, result) = self.cli(&line, now);
+                    out.collect(result);
+                    let _ = reply.send(answer);
+                }
             }
             Message::Command(id) => {
                 self.ui.close_menus();
                 self.run(id, now, &mut out);
             }
             Message::Set(id, value) => out.sets.push((id, value)),
-            Message::Mascot(msg) => self.mascot_message(msg, now, &mut out, &mut tasks),
+            #[cfg(windows)]
+            Message::External(External::Character(instance, event)) => {
+                self.character_event(instance, event, now, &mut out, &mut tasks)
+            }
+            #[cfg(windows)]
+            Message::MascotTick => {
+                self.sync_mascot_audio();
+                // An idle sound for whichever free character is next in turn.
+                let free: Vec<u32> = self
+                    .mascots
+                    .iter()
+                    .filter(|m| m.free)
+                    .map(|m| m.id)
+                    .collect();
+                if !free.is_empty() {
+                    self.idle_turn = self.idle_turn.wrapping_add(1);
+                    let id = free[self.idle_turn % free.len()];
+                    self.play_mascot_sound(id, Vec::new(), None);
+                }
+            }
             Message::Ui(ui) => tasks.push(self.ui_message(ui, now, &mut out)),
             Message::Key(key, modifiers, window) => {
-                if Some(window) == self.settings_window && self.rebinding.is_some() {
-                    if matches!(
-                        key.as_ref(),
-                        keyboard::Key::Named(
-                            Named::Control | Named::Shift | Named::Alt | Named::Super
-                        )
-                    ) {
-                        return Task::none();
-                    }
-                    let command = self.rebinding.take().unwrap();
-                    if !matches!(key.as_ref(), keyboard::Key::Named(Named::Escape)) {
-                        let base = match key.as_ref() {
-                            keyboard::Key::Character(c) => Some(c.to_uppercase()),
-                            keyboard::Key::Named(Named::Alt) => Some("Alt".into()),
-                            keyboard::Key::Named(n) => Some(format!("{n:?}")),
-                            _ => None,
-                        };
-                        if let Some(base) = base {
-                            let binding = if base == "Alt" {
-                                base
-                            } else {
-                                format!(
-                                    "{}{}{}{}",
-                                    if modifiers.control() { "Ctrl+" } else { "" },
-                                    if modifiers.alt() { "Alt+" } else { "" },
-                                    if modifiers.shift() { "Shift+" } else { "" },
-                                    base
-                                )
-                            };
-                            let old = self.registry.clone();
-                            match self.registry.rebind(command, &binding) {
-                                Err(e) => self.notice = Some(e),
-                                Ok(()) => {
-                                    self.hotkeys = None;
-                                    match platform::hotkeys::register(&self.registry) {
-                                        Ok(h) if !h.taken.contains(&command) => {
-                                            self.hotkeys = Some(h);
-                                            self.notice =
-                                                preferences::save_shortcuts(&self.registry)
-                                                    .err()
-                                                    .map(|e| e.to_string());
-                                        }
-                                        result => {
-                                            drop(result);
-                                            self.registry = old;
-                                            self.hotkeys =
-                                                platform::hotkeys::register(&self.registry).ok();
-                                            self.notice = Some(
-                                                "Shortcut unavailable; kept the previous binding"
-                                                    .into(),
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else if Some(window) == self.settings_window
+                if Some(window) == self.settings_window
                     && self.studio.character_job.is_none()
                     && self.studio.art.is_some()
                 {
@@ -795,7 +787,7 @@ impl App {
             }
             Message::WindowOpened(id) => {
                 #[cfg(windows)]
-                if Some(id) == self.settings_window || Some(id) == self.first_run_window {
+                if Some(id) == self.settings_window {
                     tasks.push(window::run(id, move |w| {
                         use iced::window::raw_window_handle::RawWindowHandle;
                         let hwnd = match w.window_handle().map(|h| h.as_raw()) {
@@ -803,17 +795,6 @@ impl App {
                             _ => 0,
                         };
                         Message::NativeReady(id, hwnd)
-                    }));
-                }
-                #[cfg(windows)]
-                if self.mascot.as_ref().is_some_and(|m| m.id == id) {
-                    tasks.push(window::run(id, |w| {
-                        use iced::window::raw_window_handle::RawWindowHandle;
-                        let hwnd = match w.window_handle().map(|h| h.as_raw()) {
-                            Ok(RawWindowHandle::Win32(h)) => h.hwnd.get(),
-                            _ => 0,
-                        };
-                        Message::Mascot(crate::mascot::Msg::Native(hwnd))
                     }));
                 }
                 if let Some(o) = self.overlays.iter_mut().find(|o| o.id == id) {
@@ -841,11 +822,6 @@ impl App {
                     } else {
                         tasks.push(self.close_settings());
                     }
-                } else if Some(id) == self.first_run_window {
-                    self.first_run_window = None;
-                    tasks.push(window::close(id));
-                } else if self.mascot_window() == Some(id) {
-                    out.sets.push((character::ENABLED, Value::Bool(false)));
                 }
             }
             Message::Tick => {
@@ -1021,24 +997,6 @@ impl App {
             e.checkpoint();
         }
         match ui {
-            UiMsg::RefreshSources => {
-                #[cfg(windows)]
-                {
-                    self.sources = platform::windows::window_sources();
-                }
-            }
-            UiMsg::Rebind(id) => {
-                self.rebinding = Some(id);
-                self.notice = Some("Press the new shortcut (Escape cancels)".into());
-            }
-            UiMsg::ResetShortcuts => {
-                self.registry = Registry::build(crate::features::BUILTINS).expect("builtins");
-                self.hotkeys = None;
-                self.hotkeys = platform::hotkeys::register(&self.registry).ok();
-                self.notice = preferences::save_shortcuts(&self.registry)
-                    .err()
-                    .map(|e| e.to_string());
-            }
             UiMsg::ImportPack => {
                 return Task::perform(
                     rfd::AsyncFileDialog::new()
@@ -1089,12 +1047,11 @@ impl App {
             }
             UiMsg::ResetMascotPosition => {
                 #[cfg(windows)]
-                if let Some(m) = &mut self.mascot {
-                    m.reset_position();
+                for m in &self.mascots {
+                    m.stage.send(crate::stage::Intent::ResetPosition);
                 }
-                let unplaced = Value::Float(character::UNPLACED);
-                out.sets.push((character::X, unplaced.clone()));
-                out.sets.push((character::Y, unplaced));
+                self.instances.unplace_all();
+                self.save_instances();
             }
             UiMsg::AddPressed => {
                 return Task::perform(
@@ -1160,10 +1117,6 @@ impl App {
                         .into(),
                 );
                 return iced::clipboard::write(packs::FOREARM_PROMPT.to_owned());
-            }
-            UiMsg::PickPack(id) => {
-                out.sets.push((point::STYLE, Value::Choice("paw")));
-                out.sets.push((point::PACK, Value::Choice(id)));
             }
             UiMsg::AddPointer => {
                 return Task::perform(
@@ -1240,21 +1193,6 @@ impl App {
                         .pick_file(),
                     |file| Message::WavPicked(file.map(|f| f.path().to_path_buf())),
                 );
-            }
-            UiMsg::TurnOn => {
-                if !self.session.is_enabled() {
-                    out.collect(self.dispatch(system::MASTER_TOGGLE, now).ok());
-                }
-                if let Some(id) = self.first_run_window.take() {
-                    return window::close(id);
-                }
-            }
-            UiMsg::OpenSettings => {
-                let open = self.open_settings();
-                return match self.first_run_window.take() {
-                    Some(id) => window::close(id).chain(open),
-                    None => open,
-                };
             }
             other => return self.character_ui(other, now, out),
         }
@@ -1354,6 +1292,46 @@ impl App {
     }
 
     fn open_settings(&mut self) -> Task<Message> {
+        self.open_slint_settings();
+        Task::none()
+    }
+
+    /// Rebinds a command's shortcut, keeping the old one when the new one is
+    /// taken or cannot be registered with the desktop.
+    pub(super) fn rebind_shortcut(
+        &mut self,
+        command: &'static str,
+        binding: &str,
+    ) -> Result<(), String> {
+        let old = self.registry.clone();
+        self.registry.rebind(command, binding)?;
+        self.hotkeys = None;
+        match platform::hotkeys::register(&self.registry) {
+            Ok(h) if !h.taken.contains(&command) => {
+                self.hotkeys = Some(h);
+                preferences::save_shortcuts(&self.registry).map_err(|e| e.to_string())
+            }
+            result => {
+                drop(result);
+                self.registry = old;
+                self.hotkeys = platform::hotkeys::register(&self.registry).ok();
+                Err("Shortcut unavailable; kept the previous binding".into())
+            }
+        }
+    }
+
+    /// Back to the built-in shortcuts.
+    pub(super) fn reset_shortcuts(&mut self) {
+        self.registry = Registry::build(crate::features::BUILTINS).expect("builtins");
+        self.hotkeys = None;
+        self.hotkeys = platform::hotkeys::register(&self.registry).ok();
+        self.notice = preferences::save_shortcuts(&self.registry)
+            .err()
+            .map(|e| e.to_string());
+    }
+
+    /// The Iced Settings window, until every page has moved to Slint.
+    fn open_classic_settings(&mut self) -> Task<Message> {
         if let Some(id) = self.settings_window {
             return window::gain_focus(id);
         }
@@ -1409,7 +1387,11 @@ impl App {
             return (format!("ok: {}", self.status()), None);
         }
         if name == "set" {
-            let rest = line.trim_start().strip_prefix("set").unwrap_or("").trim_start();
+            let rest = line
+                .trim_start()
+                .strip_prefix("set")
+                .unwrap_or("")
+                .trim_start();
             let Some((id, text)) = rest.split_once(char::is_whitespace) else {
                 return ("error: usage: tinypaw set <setting> <value>".into(), None);
             };
@@ -1472,11 +1454,7 @@ impl App {
             || self.spotlight_anywhere.on()
             || self.lens_anywhere.on()
             || self.studio.motion_preview.is_some()
-            || self
-                .mascot
-                .as_ref()
-                .and_then(|m| m.poll_interval(&self.mascot_options()))
-                .is_some_and(|every| every < Duration::from_millis(100))
+            || self.mascots.iter().any(|m| m.animating)
     }
 
     fn sync_tray(&mut self) {
@@ -1517,8 +1495,8 @@ impl App {
             if selected.is_empty() {
                 self.session.handle(Event::Interrupted, self.now());
                 self.notice = Some("The selected display is unavailable. Choose a display.".into());
-                self.page = Page::Display;
-                return self.open_settings();
+                self.open_slint_settings_on("display");
+                return Task::none();
             }
             if want == OverlayState::Interactive {
                 self.previous_focus = platform::foreground_window();
@@ -1585,6 +1563,7 @@ impl App {
                 registry: &self.registry,
                 session: &self.session,
                 ink: &o.ink,
+                pack: self.current_pack(),
                 ui: &self.ui,
                 output: o.display.id,
                 now: self.now(),
@@ -1599,24 +1578,16 @@ impl App {
                             .map(|(_, h)| h)
                     }),
                 notice: self.overlay_notice.as_ref().map(|(text, _)| text.as_str()),
-                pack: self.current_pack(),
                 spotlight: self.spotlight(),
             });
         }
         if Some(window) == self.settings_window {
             let built = std::time::Instant::now();
             let element = view::settings::view(view::settings::SettingsView {
-                registry: &self.registry,
                 session: &self.session,
-                displays: &self.displays,
                 #[cfg(windows)]
-                sources: &self.sources,
                 page: self.page,
                 character_tab: self.character_tab,
-                has_custom_sound: self.audio.has_custom(),
-                taken: self.hotkeys.as_ref().map_or(&[], |h| h.taken.as_slice()),
-                packs: &self.packs,
-                pack: self.current_pack(),
                 draft: self.pointer_draft.as_ref(),
                 editing: self.editing_pack.is_some(),
                 notice: self.notice.as_deref(),
@@ -1637,6 +1608,7 @@ impl App {
                 unsaved: self.character_unsaved(),
                 leaving: self.studio.leaving.is_some(),
                 music: self.music_status(),
+                music_fit: self.music_fit(self.current_character().id),
                 music_source: self.music_source(),
                 music_rows: self.music_rows(),
                 music_inputs: self.music_inputs(),
@@ -1650,26 +1622,7 @@ impl App {
             }
             return element;
         }
-        #[cfg(windows)]
-        if let Some(m) = self.mascot.as_ref().filter(|m| m.id == window) {
-            return m.view(self.mascot_menu(), &self.mascot_options());
-        }
-        if Some(window) == self.first_run_window {
-            return view::first_run::view(&self.registry);
-        }
         iced::widget::space().into()
-    }
-
-    /// Character animation steps at the frame rate chosen in Settings.
-    fn animation_ticks(&self) -> Subscription<()> {
-        let rate = self
-            .session
-            .settings()
-            .choice(crate::features::mascot::FRAME_RATE);
-        match crate::features::mascot::frame_period(rate) {
-            Some(every) => iced::time::every(every).map(|_| ()),
-            None => Subscription::run(platform::refresh_ticks),
-        }
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -1739,31 +1692,11 @@ impl App {
         if self.spotlight_anywhere.on() && !self.session.is_pointing() {
             subs.push(Subscription::run(platform::refresh_ticks).map(|_| Message::SpotTick));
         }
+        // The stage runs the character on its own clock. This slow tick (every five seconds) only
+        // keeps what the app owns in step: what is playing, and idle sounds.
         #[cfg(windows)]
-        if let Some(m) = &self.mascot
-            && let Some(every) = m.poll_interval(&self.mascot_options())
-        {
-            // Every message rebuilds every open window, and idle polling
-            // runs at the chosen frame rate (60 per second by default). While
-            // Settings is open, idle motion polls at 15 per second instead so
-            // its pages stay responsive; carried, thrown and popping states
-            // keep full rate.
-            let idle = every == Duration::from_millis(33) && !m.moving();
-            // Carried or thrown: every display frame, whatever the chosen
-            // rate, since the window itself is moving. Otherwise moving: at
-            // the chosen frame rate. Still: a slow timer.
-            subs.push(if m.moving() {
-                Subscription::run(platform::refresh_ticks)
-                    .map(|_| Message::Mascot(crate::mascot::Msg::Poll))
-            } else if idle && self.settings_window.is_some() {
-                iced::time::every(Duration::from_millis(66))
-                    .map(|_| Message::Mascot(crate::mascot::Msg::Poll))
-            } else if every < Duration::from_millis(100) {
-                self.animation_ticks()
-                    .map(|_| Message::Mascot(crate::mascot::Msg::Poll))
-            } else {
-                iced::time::every(every).map(|_| Message::Mascot(crate::mascot::Msg::Poll))
-            });
+        if !self.mascots.is_empty() {
+            subs.push(iced::time::every(Duration::from_secs(5)).map(|_| Message::MascotTick));
         }
         // The Motion tab's preview animates while it's open.
         if self.studio.motion_preview.is_some() {
@@ -1860,7 +1793,10 @@ fn character_pictures(c: &Character) -> crate::mascot::desktop::Pictures {
         click: picture(reactions::art(&pack, &user, Event::Click)),
         drop: picture(reactions::art(&pack, &user, Event::Drop)),
         headpat: picture(reactions::art(&pack, &user, Event::Headpat)),
-        sleep_poses: reactions::sleep_poses(&pack, &user).into_iter().filter_map(|p| Some((picture(Some(p.art))?, p.mouth))).collect(),
+        sleep_poses: reactions::sleep_poses(&pack, &user)
+            .into_iter()
+            .filter_map(|p| Some((picture(Some(p.art))?, p.mouth)))
+            .collect(),
         sleep: picture(reactions::art(&pack, &user, Event::Sleep)),
         wake: picture(reactions::art(&pack, &user, Event::Wake)),
         settings: reactions::companionship(&pack, &user),

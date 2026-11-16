@@ -191,6 +191,32 @@ impl Character {
             None => bundled_manifest().canvas,
             Some(folder) => read_manifest(folder).ok()?.canvas,
         };
+        if let (Some(folder), SoundRef::Pack(_file)) = (&self.folder, &art.image) {
+            let manifest = read_manifest(folder).ok()?;
+            if let Some(composition) = &manifest.composition
+                && let Some(recipe) = art
+                    .pose
+                    .as_deref()
+                    .filter(|name| composition.poses.contains_key(*name))
+            {
+                let pose = manifest.poses.iter().find(|p| p.name == recipe)?;
+                let rig = build_pose_rig(&manifest, pose, &|asset| read_png(folder, asset, canvas))
+                    .ok()?;
+                let mut raster = super::surface::Raster::new(canvas.0, canvas.1)?;
+                rig.draw_pose(
+                    &mut raster,
+                    &super::motion::Pose {
+                        expression: if recipe == "held" {
+                            super::motion::Expression::Dragging
+                        } else {
+                            super::motion::Expression::Blink
+                        },
+                        ..Default::default()
+                    },
+                );
+                return RgbaImage::from_raw(canvas.0, canvas.1, raster.to_straight_rgba());
+            }
+        }
         let path = self.sound_path(&art.image)?;
         let bytes = fs::read(&path).ok()?;
         decode_png(
@@ -273,11 +299,41 @@ impl Character {
 }
 
 /// A rig from a manifest's default pose, reading images through `png`.
-fn build_rig(m: &Manifest, png: impl Fn(&str) -> Result<RgbaImage, String>) -> Result<Rig, String> {
-    let pose = m.default_pose();
+pub(in crate::mascot) fn build_rig(
+    m: &Manifest,
+    png: impl Fn(&str) -> Result<RgbaImage, String>,
+) -> Result<Rig, String> {
+    let mut rig = build_pose_rig(m, m.default_pose(), &png)?;
+    if m.composition.is_some()
+        && m.default_pose != "stand"
+        && let Some(standing) = m.poses.iter().find(|p| p.name == "stand")
+    {
+        rig.set_standing_pose(build_pose_rig(m, standing, &png)?);
+    }
+    Ok(rig)
+}
+
+pub(in crate::mascot) fn build_pose_rig(
+    m: &Manifest,
+    pose: &Pose,
+    read: &impl Fn(&str) -> Result<RgbaImage, String>,
+) -> Result<Rig, String> {
+    let png = |asset: &str| {
+        let image = read(asset)?;
+        let placement = m
+            .composition
+            .as_ref()
+            .map(|c| c.image_placement(&pose.name, asset, m.canvas))
+            .transpose()?
+            .unwrap_or_default();
+        Ok::<_, String>(super::placement::bake(&image, placement, m.canvas))
+    };
     let body = png(&pose.body)?;
     if pose.parts.is_empty() && pose.eyes.is_empty() {
         let mut rig = Rig::sprite(body, pose.ground);
+        if let Some(composition) = &m.composition {
+            rig.set_wave_enabled(composition.wave_enabled(&pose.name));
+        }
         if let Some(w) = pose.whole {
             rig.set_motion(&[w]);
         }
@@ -318,9 +374,17 @@ fn build_rig(m: &Manifest, png: impl Fn(&str) -> Result<RgbaImage, String>) -> R
     for eye in &pose.eyes {
         eyes.push(EyeArt {
             white: png(&eye.white)?,
-            pupil: png(&eye.pupil)?,
-            mask: png(&eye.mask)?,
-            blink: eye.blink.as_deref().map(&png).transpose()?,
+            pupil: if eye.static_image {
+                RgbaImage::new(m.canvas.0, m.canvas.1)
+            } else {
+                png(&eye.pupil)?
+            },
+            mask: if eye.static_image {
+                RgbaImage::new(m.canvas.0, m.canvas.1)
+            } else {
+                png(&eye.mask)?
+            },
+            blink: eye.blink.as_deref().map(png).transpose()?,
             max_offset: eye.max_offset,
         });
     }
@@ -330,6 +394,9 @@ fn build_rig(m: &Manifest, png: impl Fn(&str) -> Result<RgbaImage, String>) -> R
         parts,
         eyes,
     });
+    if let Some(composition) = &m.composition {
+        rig.set_wave_enabled(composition.wave_enabled(&pose.name));
+    }
     rig.set_bop(m.bop.unwrap_or_default());
     if let Some(art) = &m.music_art {
         rig.set_music_art(
@@ -640,6 +707,7 @@ fn install_into_guarded(
         lines: Lines::default(),
         bop: None,
         music_art: None,
+        composition: None,
         reactions: super::reactions::new_character(),
     };
     let art = draft.art.clone();
@@ -1143,12 +1211,58 @@ fn motion_file(root: &Path, id: &str) -> PathBuf {
     root.join(".overrides").join(format!("{id}.json"))
 }
 
+/// How one character holds itself to music: its pose while music plays and
+/// where its waving hand sits. A character without one follows the app-wide
+/// values (`mascot.music_pose`, `mascot.wave_*`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MusicFit {
+    /// 0 follows the music's energy, 1 seated, 2 standing.
+    pub pose: u8,
+    /// Hand offset, percent of the artwork canvas.
+    pub hand_x: f32,
+    pub hand_y: f32,
+    /// Degrees.
+    pub hand_angle: f32,
+    /// Percent of the usual wave.
+    pub wave_range: f32,
+}
+
+impl MusicFit {
+    const POSES: [&'static str; 3] = ["auto", "sit", "stand"];
+
+    fn parse(v: &Json) -> Option<Self> {
+        let number =
+            |key: &str, min: f32, max: f32| v[key].as_f64().map(|n| (n as f32).clamp(min, max));
+        Some(Self {
+            pose: Self::POSES
+                .iter()
+                .position(|p| v["pose"].as_str() == Some(p))? as u8,
+            hand_x: number("hand_x", -15.0, 15.0)?,
+            hand_y: number("hand_y", -15.0, 15.0)?,
+            hand_angle: number("hand_angle", -45.0, 45.0)?,
+            wave_range: number("wave_range", 0.0, 200.0)?,
+        })
+    }
+
+    fn to_json(self) -> Json {
+        json!({
+            "pose": Self::POSES[usize::from(self.pose.min(2))],
+            "hand_x": self.hand_x,
+            "hand_y": self.hand_y,
+            "hand_angle": self.hand_angle,
+            "wave_range": self.wave_range,
+        })
+    }
+}
+
 /// What the user changed for a character, kept beside its pack.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Overrides {
     pub motion: Option<Vec<MotionSpec>>,
     pub lines: Option<Lines>,
     pub bop: Option<Bop>,
+    /// Its own music pose and hand position, once the user set them.
+    pub music: Option<MusicFit>,
     /// The user's reaction layer; `user:` sounds live beside the overrides.
     pub reactions: Option<super::reactions::Config>,
 }
@@ -1194,6 +1308,7 @@ fn load_overrides_in(root: &Path, id: &str) -> Overrides {
         motion,
         lines,
         bop,
+        music: MusicFit::parse(&v["music"]),
         reactions,
     }
 }
@@ -1227,6 +1342,9 @@ fn save_overrides_in(root: &Path, id: &str, o: &Overrides) -> Result<(), String>
     }
     if let Some(bop) = o.bop {
         json["bop"] = json!(bop.name());
+    }
+    if let Some(fit) = o.music {
+        json["music"] = fit.to_json();
     }
     if let Some(r) = &o.reactions {
         json["reactions"] = r.to_json();

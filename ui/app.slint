@@ -1,0 +1,94 @@
+import { Tokens } from "tokens.slint";
+import { Page, Section, Notice } from "kit.slint";
+import { Scroller } from "kit.slint";
+import { SettingsShell, NavEntry } from "templates/settings_shell.slint";
+import { ItemView, ItemModel, SectionModel } from "pages/item.slint";
+import { FirstRunWindow } from "templates/first_run.slint";
+
+export { NavEntry, ItemModel, SectionModel, FirstRunWindow }
+
+// The Settings window the app opens: the shell, and one page built from the
+// sections the registry's page definitions produce.
+export component SettingsWindow inherits SettingsShell {
+    // Forwarded from the shell, whose own properties the Rust API does not show.
+    in property <[NavEntry]> nav-entries;
+    in-out property <int> current-page;
+    callback navigate-to(int);
+    entries: root.nav-entries;
+    current <=> root.current-page;
+    navigate(i) => { root.navigate-to(i); }
+    in property <bool> annotation-on;
+    callback annotation-toggled();
+    annotation: root.annotation-on;
+    toggle-annotation => { root.annotation-toggled(); }
+    in property <string> page-title;
+    in property <string> page-summary;
+    // The page's own master switch, when it has one: a setting's ID and label.
+    in property <string> page-switch-id;
+    in property <string> page-switch-label;
+    in property <bool> page-switch-on;
+    in property <[SectionModel]> sections;
+    // A message above the page: why a change was refused.
+    in property <string> notice;
+    // The shortcut row waiting for a new key combination, if any.
+    in-out property <string> capturing-id;
+    callback key-captured(string, string, bool, bool, bool);
+    callback toggled(string, bool);
+    callback ranged(string, float);
+    callback chosen(string, int);
+    callback pressed(string);
+    Rectangle {
+        background: Tokens.surface;
+        scope := FocusScope {
+            key-pressed(event) => {
+                if (root.capturing-id != "") {
+                    root.key-captured(root.capturing-id, event.text, event.modifiers.control, event.modifiers.alt, event.modifiers.shift);
+                    return accept;
+                }
+                return reject;
+            }
+            Scroller {
+                Page {
+                    title: root.page-title;
+                    summary: root.page-summary;
+                    switch-label: root.page-switch-label;
+                    switch-on: root.page-switch-on;
+                    switched(on) => { root.toggled(root.page-switch-id, on); }
+                    if root.notice != "": Notice {
+                        text: root.notice;
+                        warning: true;
+                    }
+                    for section in root.sections: Section {
+                        title: section.title;
+                        tag: section.tag;
+                        for item[i] in section.items: ItemView {
+                            item: item;
+                            // A hairline between rows; notes sit with the row above.
+                            divider: i > 0 && item.kind != 4;
+                            capturing: root.capturing-id == item.id;
+                            toggled(on) => { root.toggled(item.id, on); }
+                            // An entry's slider is its own setting, named in its options.
+                            ranged(v) => { root.ranged(item.kind == 10 ? item.options[0] : item.id, v); }
+                            chosen(i) => { root.chosen(item.id, i); }
+                            pressed => {
+                                if (item.kind == 5) {
+                                    if (root.capturing-id == item.id) {
+                                        root.capturing-id = "";
+                                    } else {
+                                        root.capturing-id = item.id;
+                                        scope.focus();
+                                    }
+                                } else if (item.kind == 10) {
+                                    // An entry's ID is its switch; the row itself opens it.
+                                    root.pressed("open:" + item.id);
+                                } else {
+                                    root.pressed(item.id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -4,6 +4,8 @@
 pub mod alignment;
 pub mod beat;
 pub mod companionship;
+pub mod composition;
+pub mod crowd;
 #[cfg(windows)]
 pub mod desktop;
 pub mod editor;
@@ -16,11 +18,19 @@ pub mod preview;
 pub mod reactions;
 pub mod reference;
 pub mod rest;
+// The pixel-buffer renderer is built ahead of its users: the stage engine
+// (plan step 3) and the studio preview (step 5).
+#[allow(dead_code)]
+pub mod render;
+#[cfg(all(test, not(feature = "gpu")))]
+mod render_tests;
 pub mod rig;
+pub mod surface;
+pub mod typeset;
 mod yohta_pack;
 
 /// Messages from the desktop character window.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Msg {
     /// Left button pressed on visible artwork.
     Pressed,

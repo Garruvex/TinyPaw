@@ -1,6 +1,13 @@
 {
   "author": "TinyPaw",
-  "reactions": { "companionship": { "mouth": [0.29, 0.54] } },
+  "reactions": {
+    "companionship": {
+      "mouth": [
+        0.29,
+        0.54
+      ]
+    }
+  },
   "canvas": [
     620,
     860
@@ -52,6 +59,17 @@
       },
       {
         "text": "Still here! // Just resting my eyes."
+      }
+    ],
+    "neighbor": [
+      {
+        "text": "Look at {other} go!"
+      },
+      {
+        "text": "{other}, are you okay?"
+      },
+      {
+        "text": "Careful with {other}!"
       }
     ]
   },

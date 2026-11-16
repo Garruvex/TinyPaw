@@ -7,6 +7,7 @@ use super::*;
 
 mod art;
 mod behavior;
+mod library;
 mod reference;
 #[cfg(test)]
 mod tests;
@@ -17,13 +18,6 @@ use behavior::*;
 use iced::widget::{column, row};
 use reference::*;
 use transfer::*;
-
-/// `mascot::FRAME_RATE` choices with their labels.
-const FRAME_RATES: [(&str, &str); 3] = [
-    ("30", "30 fps"),
-    ("60", "60 fps"),
-    ("display", "Match display"),
-];
 
 pub(super) fn character_page<'a>(
     v: &SettingsView<'a>,
@@ -72,40 +66,16 @@ fn leave_prompt<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     .into()
 }
 
-/// One Save and Discard for the behavior draft (motion, lines, bop).
-fn save_bar<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
-    if !v.unsaved {
-        return hint("Changes show in the preview straight away and on the desktop once saved.");
-    }
-    container(
-        row![
-            text("Unsaved changes").size(13).width(Length::Fill),
-            button(text("Discard").size(12))
-                .padding([5, 10])
-                .style(theme::secondary)
-                .on_press(Message::Ui(UiMsg::CharacterDiscard)),
-            button(text("Save").font(theme::MEDIUM).size(12))
-                .padding([5, 14])
-                .style(theme::primary)
-                .on_press_maybe((!v.character_busy).then_some(Message::Ui(UiMsg::CharacterSave))),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center),
-    )
-    .padding([6, 10])
-    .style(theme::fill(theme::WELL, 10.0))
-    .into()
-}
-
 /// Library and On desktop, then the Customize sections. One draft spans
 /// them all.
 fn navigator<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     let mut tabs = row![].spacing(4);
     for (tab, label) in [
         (CharacterTab::Library, "Library"),
-        (CharacterTab::Desktop, "On desktop"),
         (CharacterTab::Artwork, "Artwork"),
-        (CharacterTab::Behavior, "Behavior"),
+        (CharacterTab::Reactions, "Reactions"),
+        (CharacterTab::Speech, "Speech"),
+        (CharacterTab::Motion, "Motion"),
         (CharacterTab::Advanced, "Advanced"),
     ] {
         tabs = tabs.push(
@@ -171,7 +141,9 @@ fn character_body<'a>(
     if let Some(e) = v.art
         && matches!(tab, CharacterTab::Artwork | CharacterTab::Advanced)
     {
-        let body = if tab == CharacterTab::Artwork {
+        let body = if e.library.is_some() {
+            library::library_page(e)
+        } else if tab == CharacterTab::Artwork {
             art_page(e, v.character_busy)
         } else {
             advanced_page(e)
@@ -196,15 +168,13 @@ fn character_body<'a>(
     if matches!(tab, CharacterTab::Artwork | CharacterTab::Advanced) && v.character_draft.is_none()
     {
         return (
-            column![h1("Character"), navigator(v), artwork_closed(v)]
-                .spacing(22)
+            column![navigator(v), artwork_closed(v)]
+                .spacing(16)
                 .max_width(640)
                 .into(),
             v.motion.map(motion_preview),
         );
     }
-    let s = v.session.settings();
-    let size = s.float(mascot::HEIGHT);
     let selected = v
         .characters
         .iter()
@@ -293,23 +263,25 @@ fn character_body<'a>(
     };
     // The tabs sit directly under the title on every tab; they hide only
     // while Add character's draft is open beside the library.
-    let mut page = column![h1("Character")].spacing(22).max_width(640);
+    let mut page = column![].spacing(16).max_width(640);
     if v.character_draft.is_none() {
         page = page.push(navigator(v));
     }
     if let Some(m) = v.motion
-        && tab == CharacterTab::Behavior
+        && tab.is_behavior()
     {
-        page = page.push(save_bar(v));
         if let Some(t) = v.transfer {
             page = page.push(transfer_panel(t, name));
         }
-        return (page.push(behavior_section(v, m)).into(), side);
+        let body = match tab {
+            CharacterTab::Reactions => reactions_tab(v, m),
+            CharacterTab::Speech => speech_tab(v, m),
+            _ => motion_tab(v, m),
+        };
+        return (page.push(body).into(), side);
     }
-    if tab == CharacterTab::Behavior {
-        page = page.push(hint(
-            "Behavior opens once the character's preview is ready.",
-        ));
+    if tab.is_behavior() {
+        page = page.push(hint("This opens once the character's preview is ready."));
         return (page.into(), side);
     }
     if tab == CharacterTab::Library || v.character_draft.is_some() {
@@ -364,80 +336,5 @@ fn character_body<'a>(
         return (page.into(), side);
     }
 
-    // On desktop.
-    let tracks = v.motion.is_some_and(|m| m.rig().eye_point().is_some());
-    let eyes: Element<'a, Message> = if tracks {
-        check("Eyes follow the cursor", s.bool(mascot::EYES), mascot::EYES)
-    } else {
-        hint_link(
-            format!(
-                "{name}'s eyes are part of its artwork, so they can't follow the cursor. Tracking eyes need a head with separate white, pupil and mask art."
-            ),
-            "Artwork → Eyes",
-            Message::Ui(UiMsg::CharacterTab(CharacterTab::Artwork)),
-        )
-    };
-    page = page
-        .push(section(vec![
-            h2("Visibility"),
-            check(
-                "Show on the desktop",
-                s.bool(mascot::ENABLED),
-                mascot::ENABLED,
-            ),
-            hint(format!(
-                "Right-click {name} for its menu, click to see it react, and drag to move it. It stays while annotation is off and steps aside while you draw."
-            )),
-        ]))
-        .push(section(vec![
-            row![
-                h2("Size"),
-                space().width(Length::Fill),
-                text(format!("{size:.0} px tall")).size(13)
-            ]
-            .into(),
-            slider(v.registry.range(mascot::HEIGHT), size, |x| {
-                Message::Set(mascot::HEIGHT, Value::Float(x))
-            })
-            .step(4.0)
-            .style(theme::range)
-            .into(),
-        ]))
-        .push(section(vec![
-            h2("Liveliness"),
-            eyes,
-            check(
-                "Idle motion and blinking",
-                s.bool(mascot::IDLE),
-                mascot::IDLE,
-            ),
-            hint_link(
-                "Reduced motion also stops idle motion and blinking.",
-                "Motion settings",
-                Message::Ui(UiMsg::Nav(Page::Display)),
-            ),
-            row![
-                text("Frame rate").size(13).width(Length::Fill),
-                pick_list(FRAME_RATES.map(|(v, l)| Choice(v, l)), {
-                    Some(Choice::of(s.choice(mascot::FRAME_RATE), &FRAME_RATES))
-                }, |c| Message::Set(mascot::FRAME_RATE, Value::Choice(c.0)))
-                .text_size(13)
-                .padding([6, 10])
-                .style(theme::select),
-            ]
-            .spacing(10)
-            .align_y(Alignment::Center)
-            .into(),
-            hint("Higher is smoother but uses more CPU while the character moves."),
-        ]))
-        .push(
-            button(text("Reset position").size(13))
-                .padding([7, 12])
-                .style(theme::secondary)
-                .on_press_maybe(
-                    s.bool(mascot::ENABLED)
-                        .then_some(Message::Ui(UiMsg::ResetMascotPosition)),
-                ),
-        );
     (page.into(), side)
 }

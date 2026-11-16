@@ -1,5 +1,6 @@
 //! Shared, clock-driven headpat and sleep state. Platform adapters supply
 //! proximity, posed hit tests and external audio status.
+use super::surface::Surface;
 use iced::Point;
 use serde_json::{Value, json};
 
@@ -164,6 +165,12 @@ pub struct Controller {
     affection: Affection,
 }
 impl Controller {
+    /// Whether hearts are rising or sleep marks are drifting, which move
+    /// the picture without the pose changing.
+    pub fn animates_overlay(&self) -> bool {
+        !self.affection.hearts.is_empty() || matches!(self.state, State::Asleep | State::Waking)
+    }
+
     pub fn new(seed: u64) -> Self {
         Self {
             seed: seed.max(1),
@@ -202,19 +209,19 @@ impl Controller {
                 .motion_parts()
                 .iter()
                 .position(|p| p.kind == super::motion::PartType::Head)
-            {
-                if let Some(angle) = pose.angles.get_mut(index) {
-                    *angle += tilt;
-                }
-                pose.head_drop += amount * (0.008 + 0.006 * (now * 7.0).sin());
-                return;
+        {
+            if let Some(angle) = pose.angles.get_mut(index) {
+                *angle += tilt;
             }
+            pose.head_drop += amount * (0.008 + 0.006 * (now * 7.0).sin());
+            return;
+        }
         pose.lean += tilt * 0.35;
         pose.squash += amount * (0.08 + 0.06 * (now * 6.0).sin());
     }
-    pub fn draw_affection(
+    pub fn draw_affection<S: Surface>(
         &self,
-        frame: &mut iced::widget::canvas::Frame,
+        frame: &mut S,
         stage: iced::Size,
         bounds: iced::Rectangle,
         now: f32,
@@ -446,9 +453,10 @@ impl Controller {
                 }
                 self.stirring = self.touch_since.is_some();
                 if let Some(at) = self.touch_since
-                    && (stroke || i.now - at >= self.touch_delay) {
-                        return self.wake(i.now);
-                    }
+                    && (stroke || i.now - at >= self.touch_delay)
+                {
+                    return self.wake(i.now);
+                }
             } else {
                 let left = *self.touch_left.get_or_insert(i.now);
                 if i.now - left > 0.3 {
@@ -752,8 +760,8 @@ mod tests {
 }
 
 /// Sleep decoration in stage coordinates. Its bounds never participate in input.
-pub fn draw_zzz(
-    frame: &mut iced::widget::canvas::Frame,
+pub fn draw_zzz<S: Surface>(
+    frame: &mut S,
     stage: iced::Size,
     settings: &Settings,
     state: State,
@@ -798,7 +806,8 @@ pub fn draw_zzz(
             let opacity = (alpha * (1.0 - t) * 15.0).round().clamp(0.0, 15.0) as usize;
             frame.draw_image(
                 iced::Rectangle::new(Point::new(left, y), iced::Size::new(size * 0.6, size * 0.7)),
-                iced::widget::canvas::Image::new(zzz_images()[opacity].clone()),
+                &zzz_images()[opacity],
+                1.0,
             );
         }
     }
@@ -896,18 +905,23 @@ impl Affection {
                     origin: i
                         .cursor
                         .unwrap_or(Point::new(i.height * 0.5, i.height * 0.25)),
-                    side: if self.serial.is_multiple_of(2) { -1.0 } else { 1.0 },
+                    side: if self.serial.is_multiple_of(2) {
+                        -1.0
+                    } else {
+                        1.0
+                    },
                 });
             }
             self.next_heart = i.now + 0.45;
         }
     }
 }
-fn draw_heart(frame: &mut iced::widget::canvas::Frame, origin: Point, size: f32, alpha: f32) {
+fn draw_heart<S: Surface>(frame: &mut S, origin: Point, size: f32, alpha: f32) {
     let opacity = (alpha * 15.0).round().clamp(0.0, 15.0) as usize;
     frame.draw_image(
         iced::Rectangle::new(origin, iced::Size::new(size, size)),
-        iced::widget::canvas::Image::new(heart_images()[opacity].clone()),
+        &heart_images()[opacity],
+        1.0,
     );
 }
 fn heart_images() -> &'static Vec<iced::advanced::image::Handle> {

@@ -99,3 +99,23 @@ What changed:
 `cargo test stroke_quality_snapshot -- --ignored` with `TINYPAW_STROKE_PNG` set writes the old and new rendering of the same pointer-like stroke for comparison.
 
 **Not yet measured on screen:** presented frame rate, input-to-photon latency, and the desktop lens at 144/160 Hz. These are CPU draw times only.
+
+## Several characters on the desktop, 15 November 2026
+
+Release build, Windows 11, same machine (in use, so expect ±30% noise). One Yohta instance per stage window at 146 px, idle motion and eyes on, no music, nobody touching the characters; the resident app's whole process, measured over 20 s after 8 s of settling. Instances were added with `settings-action instance.add`. The script is not kept in the repo.
+
+| Instances | Stage windows | Working set | Private | Threads | Idle CPU (one core) |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 1 | 34 MiB | 14 MiB | 14 | 1.8% |
+| 10 | 10 | 115 MiB | 91 MiB | 23 | 7.9% |
+| 20 | 20 | 206 MiB | 177 MiB | 33 | 14.7% |
+
+About 9 MiB private and 0.7% of a core per additional character. All 20 windows were created, placed and visible, and (with the crowd) stood side by side without overlapping: four characters sat 121 px apart on the same ground line.
+
+Two things the first measurement found, both fixed before the table above:
+
+- **A hidden hand redrew the character forever.** The Light wave hand's swing was computed from time even while the hand was invisible, so the pose of a still character changed every step and was redrawn at the stage's 33 ms pace. It is now zero while the hand is down.
+- **Sub-pixel sway redrew too.** A frame is now drawn only when the picture would look different (angles within 0.004 rad, which is about a third of a pixel on a 150 px character, count as the same), except at the 16 ms pace, where every step is drawn. At 20 instances this took idle CPU from 38% to 15%.
+- Sending the music handles to a stage no longer wakes it unless they changed.
+
+Not measured: animating CPU with 10 or 20 characters moving at once, memory with large custom characters, and the full-screen-app and annotation transitions with many instances.

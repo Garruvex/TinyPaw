@@ -8,20 +8,25 @@ fn art_save_preserves_standing_music_assets() {
     let folder = root.join(character.id);
     std::fs::create_dir_all(folder.join("music")).unwrap();
     for name in ["body", "relaxed", "phone", "stick"] {
-        std::fs::copy(folder.join("sit/body.png"),folder.join(format!("music/{name}.png"))).unwrap();
+        std::fs::copy(
+            folder.join("sit/body.png"),
+            folder.join(format!("music/{name}.png")),
+        )
+        .unwrap();
     }
     let path = folder.join("character.json");
-    let mut manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     manifest["music"] = serde_json::json!({"bop":"light_wave","artwork":{
         "body":"music/body.png","relaxed_arm":"music/relaxed.png",
         "phone_arm":"music/phone.png","stick_arm":"music/stick.png","pivot":[0.5,0.6]}});
-    std::fs::write(&path,serde_json::to_string(&manifest).unwrap()).unwrap();
-    let editor = Editor::open_in(&root,&character).unwrap();
+    std::fs::write(&path, serde_json::to_string(&manifest).unwrap()).unwrap();
+    let editor = Editor::open_in(&root, &character).unwrap();
     let saved = editor.save_into(&root).unwrap();
-    assert_eq!(saved.rig().unwrap().music_items(),3);
+    assert_eq!(saved.rig().unwrap().music_items(), 3);
     let reopened = read_manifest(&folder).unwrap();
     reopened.validate_files(&folder).unwrap();
-    assert_eq!(reopened.music_art.unwrap().pivot,(0.5,0.6));
+    assert_eq!(reopened.music_art.unwrap().pivot, (0.5, 0.6));
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -589,4 +594,248 @@ fn retyping_and_removing_the_head_unhooks_its_riders() {
     e.remove_part(0);
     assert!(!e.parts[0].on_head);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn shared_library_migration_edit_undo_save_and_reopen() {
+    let dir =
+        std::env::temp_dir().join(format!("tinypaw-library-roundtrip-{}", std::process::id()));
+    let (root, character) = test_install_folder(&dir, OnDuplicate::Ask);
+    let mut editor = Editor::open_in(&root, &character).unwrap();
+    editor.parts.push(EditPart {
+        name: "Head".into(),
+        kind: PartType::Head,
+        layer: editor.body.clone(),
+        pivot: (0.5, 0.5),
+        on_head: false,
+        behind: false,
+        motion: MotionSpec::default_for(PartType::Head),
+        faces: Default::default(),
+    });
+    editor.library_action(LibraryAction::Upgrade).unwrap();
+    assert!(
+        editor.validation_error().is_none(),
+        "{:?}",
+        editor.validation_error()
+    );
+    editor
+        .library_action(LibraryAction::NewPose("stand".into()))
+        .unwrap();
+    let head = super::super::composition::Composition::variant_id(
+        &editor.library.as_ref().unwrap().composition.poses["sit"]["slots"]["head"],
+    )
+    .unwrap()
+    .to_owned();
+    editor
+        .library_action(LibraryAction::Variant(head.clone()))
+        .unwrap();
+    editor.library_action(LibraryAction::MakeVariant).unwrap();
+    let independent = editor.library.as_ref().unwrap().variant.clone();
+    editor
+        .library_action(LibraryAction::Assign("head".into(), independent.clone()))
+        .unwrap();
+    editor.library_action(LibraryAction::Pivot(0, 0.4)).unwrap();
+    assert_eq!(
+        editor.library.as_ref().unwrap().composition.variants[&head]["pivot"][0],
+        serde_json::json!(0.5)
+    );
+    editor.undo();
+    assert_ne!(
+        editor.library.as_ref().unwrap().composition.variants[&independent]["pivot"][0],
+        serde_json::json!(0.4)
+    );
+    editor.redo();
+    editor
+        .library_action(LibraryAction::Placement("head".into(), 0, 0.1))
+        .unwrap();
+    let saved = editor.save_into(&root).unwrap();
+    let reopened = Editor::open_in(&root, &saved).unwrap();
+    let library = reopened.library.as_ref().unwrap();
+    assert_eq!(library.composition.uses(&head), vec!["sit"]);
+    assert_eq!(library.composition.uses(&independent), vec!["stand"]);
+    assert!(
+        (library.composition.poses["stand"]["slots"]["head"]["placement"][0]
+            .as_f64()
+            .unwrap()
+            - 0.1)
+            .abs()
+            < 0.0001
+    );
+    assert_eq!(
+        library.composition.to_json(),
+        editor.library.as_ref().unwrap().composition.to_json()
+    );
+    assert!(saved.rig().is_ok());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn new_character_can_convert_without_an_installed_pack() {
+    let dir = std::env::temp_dir().join(format!("tinypaw-new-library-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let body = dir.join("body.png");
+    RgbaImage::from_pixel(32, 32, image::Rgba([120, 80, 220, 255]))
+        .save(&body)
+        .unwrap();
+    let mut editor = Editor::from_body_into(&dir, &body, &[]).unwrap();
+    editor.library_action(LibraryAction::Upgrade).unwrap();
+    assert!(
+        editor.validation_error().is_none(),
+        "{:?}",
+        editor.validation_error()
+    );
+    editor.save_into(&dir).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn shared_replacement_preserves_the_original_png_and_updates_both_poses() {
+    let dir = std::env::temp_dir().join(format!("tinypaw-shared-png-{}", std::process::id()));
+    let (root, character) = test_install_folder(&dir, OnDuplicate::Ask);
+    let mut editor = Editor::open_in(&root, &character).unwrap();
+    editor.library_action(LibraryAction::Upgrade).unwrap();
+    editor
+        .library_action(LibraryAction::NewPose("stand".into()))
+        .unwrap();
+    let source = dir.join("replacement.png");
+    let pixels = RgbaImage::from_pixel(40, 60, image::Rgba([200, 40, 120, 255]));
+    pixels.save(&source).unwrap();
+    editor
+        .set_image(Target::LibraryImage(0, 0), &source)
+        .unwrap();
+    let saved = editor.save_into(&root).unwrap();
+    let manifest = read_manifest(&root.join(saved.id)).unwrap();
+    let default = manifest.default_pose();
+    assert_eq!(
+        default.body,
+        manifest
+            .poses
+            .iter()
+            .find(|p| p.name == "stand")
+            .unwrap()
+            .body
+    );
+    let original = manifest
+        .editor
+        .iter()
+        .find(|record| record.target == default.body)
+        .unwrap();
+    assert_eq!(original.size, (40, 60));
+    assert_eq!(
+        image::open(root.join(saved.id).join(&original.source))
+            .unwrap()
+            .to_rgba8(),
+        pixels
+    );
+    manifest.validate_files(&root.join(saved.id)).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn copied_pose_owns_its_arms_and_joint_edits_are_local_even_for_reused_art() {
+    let dir = std::env::temp_dir().join(format!("tinypaw-pose-joint-{}", std::process::id()));
+    let (root, character) = test_install_folder(&dir, OnDuplicate::Ask);
+    let mut editor = Editor::open_in(&root, &character).unwrap();
+    editor.parts.push(EditPart {
+        name: "Holding arm".into(),
+        kind: PartType::HoldingArm,
+        layer: editor.body.clone(),
+        pivot: (0.5, 0.5),
+        on_head: false,
+        behind: false,
+        motion: MotionSpec::default_for(PartType::HoldingArm),
+        faces: Default::default(),
+    });
+    editor.library_action(LibraryAction::Upgrade).unwrap();
+    let sitting = super::super::composition::Composition::variant_id(
+        &editor.library.as_ref().unwrap().composition.poses["sit"]["slots"]["holding_arm"],
+    )
+    .unwrap()
+    .to_owned();
+    editor
+        .library_action(LibraryAction::NewPose("stand".into()))
+        .unwrap();
+    let standing = super::super::composition::Composition::variant_id(
+        &editor.library.as_ref().unwrap().composition.poses["stand"]["slots"]["holding_arm"],
+    )
+    .unwrap()
+    .to_owned();
+    assert_ne!(
+        sitting, standing,
+        "a copied posture starts with independently editable arms"
+    );
+    editor
+        .library_action(LibraryAction::Assign("holding_arm".into(), sitting.clone()))
+        .unwrap();
+    editor
+        .library_action(LibraryAction::Joint("holding_arm".into(), 0, 0.6))
+        .unwrap();
+    let library = editor.library.as_ref().unwrap();
+    assert_eq!(
+        library.composition.variants[&sitting]["pivot"][0],
+        serde_json::json!(0.5)
+    );
+    assert!(library.composition.poses["sit"]["slots"]["holding_arm"]["pivot"].is_null());
+    let compiled = library.composition.compile(editor.canvas).unwrap();
+    assert!((compiled["stand"]["parts"][0]["pivot"][0].as_f64().unwrap() - 0.6).abs() < 0.0001);
+    let saved = editor.save_into(&root).unwrap();
+    let reopened = Editor::open_in(&root, &saved).unwrap();
+    assert!((reopened.library.as_ref().unwrap().composition.poses["stand"]["slots"]["holding_arm"]["pivot"][0].as_f64().unwrap()-0.6).abs()<0.0001);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn fixed_hands_hide_attachments_and_restoring_them_does_not_enable_wave() {
+    let dir = std::env::temp_dir().join(format!("tinypaw-hand-options-{}", std::process::id()));
+    let (root, character) = test_install_folder(&dir, OnDuplicate::Ask);
+    let mut editor = Editor::open_in(&root, &character).unwrap();
+    editor.parts.push(EditPart {
+        name: "Arm".into(),
+        kind: PartType::HoldingArm,
+        layer: editor.body.clone(),
+        pivot: (0.5, 0.5),
+        on_head: false,
+        behind: false,
+        motion: MotionSpec::default_for(PartType::HoldingArm),
+        faces: Default::default(),
+    });
+    editor.library_action(LibraryAction::Upgrade).unwrap();
+    editor.library_action(LibraryAction::Hands(false)).unwrap();
+    let library = editor.library.as_ref().unwrap();
+    assert!(!library.composition.movable_hands("sit"));
+    assert!(!library.composition.wave_enabled("sit"));
+    assert!(library.composition.poses["sit"]["slots"]["holding_arm"].is_null());
+    editor.library_action(LibraryAction::Hands(true)).unwrap();
+    assert!(
+        editor
+            .library
+            .as_ref()
+            .unwrap()
+            .composition
+            .movable_hands("sit")
+    );
+    assert!(
+        !editor
+            .library
+            .as_ref()
+            .unwrap()
+            .composition
+            .wave_enabled("sit")
+    );
+    assert!(
+        !editor.library.as_ref().unwrap().composition.poses["sit"]["slots"]["holding_arm"]
+            .is_null()
+    );
+    editor.library_action(LibraryAction::Hands(false)).unwrap();
+    let saved = editor.save_into(&root).unwrap();
+    let reopened = Editor::open_in(&root, &saved).unwrap();
+    assert!(
+        !reopened
+            .library
+            .as_ref()
+            .unwrap()
+            .composition
+            .movable_hands("sit")
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }

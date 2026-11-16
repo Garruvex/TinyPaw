@@ -1,0 +1,3 @@
+Correction, 16 November 2026: this historical prompt produced only the standing torso. The current arms are posture-specific; use pose-arm-prompts.json. Do not reuse sitting arms to fit standing. Each pose has one active face/eye system.
+
+Using standing-torso-v2.png as the reference, keep the exact character style, blue torso and legs, cream chest, shorts markings and purple feet. Remove the painted left arm and tail entirely. No head, arms, hands, tail or props. Preserve the original transparent 1024 square stage and ground baseline. This produces the standing body for a reusable composition; the canonical seated head, eye pair, tail, arms and items are assigned separately. Generated at 1280 and resized to 1024 for integration; a pose offset aligns the feet.

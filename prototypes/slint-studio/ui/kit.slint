@@ -1,0 +1,82 @@
+import { Tokens } from "tokens.slint";
+
+// The component kit: pages and tabs are built only from these.
+
+export component Btn inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary;
+    callback clicked;
+    height: Tokens.h-control;
+    preferred-width: label.preferred-width + 24px;
+    border-radius: Tokens.radius-control;
+    border-width: root.primary ? 0px : 1px;
+    border-color: Tokens.line-strong;
+    background: root.primary ? Tokens.cyan : (area.has-hover ? Tokens.hover : Tokens.control);
+    label := Text {
+        x: 12px;
+        y: (parent.height - self.height) / 2;
+        text: root.text;
+        font-size: Tokens.font-body;
+        font-weight: root.primary ? 600 : 400;
+        color: root.primary ? #06262B : Tokens.text;
+    }
+    area := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component NavItem inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    height: Tokens.h-nav;
+    border-radius: Tokens.radius-control;
+    background: root.selected ? Tokens.cyan-bg : (area.has-hover ? Tokens.hover : transparent);
+    Text {
+        x: 12px;
+        y: (parent.height - self.height) / 2;
+        text: root.text;
+        font-size: Tokens.font-nav;
+        font-weight: root.selected ? 600 : 400;
+        color: root.selected ? Tokens.cyan-text : Tokens.subtle;
+    }
+    area := TouchArea { }
+}
+
+export component NavGroup inherits Text {
+    font-size: Tokens.font-label;
+    color: Tokens.muted;
+}
+
+export component PageTitle inherits Text {
+    font-size: Tokens.font-h1;
+    font-weight: 700;
+    color: Tokens.text;
+}
+
+export component SectionTitle inherits Text {
+    font-size: Tokens.font-h2;
+    font-weight: 600;
+    color: Tokens.text-soft;
+}
+
+export component Hint inherits Text {
+    font-size: Tokens.font-label;
+    color: Tokens.muted;
+    wrap: word-wrap;
+}
+
+export component Tab inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    preferred-width: label.preferred-width + 24px;
+    height: 30px;
+    border-radius: 7px;
+    background: root.selected ? Tokens.control : transparent;
+    label := Text {
+        x: 12px;
+        y: (parent.height - self.height) / 2;
+        text: root.text;
+        font-size: Tokens.font-body;
+        color: root.selected ? Tokens.text : Tokens.muted;
+    }
+}

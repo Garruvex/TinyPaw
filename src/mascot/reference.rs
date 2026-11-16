@@ -21,6 +21,11 @@ pub enum EyeLayer {
 pub enum Role {
     /// The complete character, or the body with separate parts removed.
     Body,
+    StandingBody,
+    StandingLeftArm,
+    StandingRightArm,
+    StandingHoldingArm,
+    StandingGrip,
     /// A separate head, so it can tilt and nod on its own.
     Head,
     /// A separate tail, for Sway, Wag or Hang.
@@ -70,6 +75,11 @@ impl Role {
     pub fn file(self) -> &'static str {
         match self {
             Role::Body => "body.png",
+            Role::StandingBody => "body_standing.png",
+            Role::StandingLeftArm => "standing_left_arm.png",
+            Role::StandingRightArm => "standing_right_arm.png",
+            Role::StandingHoldingArm => "standing_holding_arm.png",
+            Role::StandingGrip => "standing_grip.png",
             Role::Head => "head.png",
             Role::Tail => "tail.png",
             Role::LeftEye => "left_eye.png",
@@ -119,6 +129,11 @@ impl Role {
     pub fn label(self) -> &'static str {
         match self {
             Role::Body => "Body",
+            Role::StandingBody => "Standing body",
+            Role::StandingLeftArm => "Standing left arm",
+            Role::StandingRightArm => "Standing right arm",
+            Role::StandingHoldingArm => "Standing holding arm",
+            Role::StandingGrip => "Standing grip fingers",
             Role::Head => "Head",
             Role::Tail => "Tail",
             Role::LeftEye => "Left eye",
@@ -167,6 +182,11 @@ impl Role {
     pub fn guess(path: &Path) -> Option<Role> {
         let name = path.file_stem()?.to_str()?.to_lowercase();
         for role in [
+            Role::StandingBody,
+            Role::StandingLeftArm,
+            Role::StandingRightArm,
+            Role::StandingHoldingArm,
+            Role::StandingGrip,
             Role::LeftArm,
             Role::RightArm,
             Role::HoldingArm,
@@ -261,6 +281,7 @@ pub struct Request {
     pub head: bool,
     pub tail: bool,
     pub dance: bool,
+    pub seated_hands: bool,
     /// Separate eye and eyebrow images instead of painted-in ones.
     pub eyes: bool,
     pub tracking: bool,
@@ -284,6 +305,7 @@ impl Request {
             head: false,
             tail: false,
             dance: false,
+            seated_hands: false,
             eyes: false,
             tracking: false,
             brows: false,
@@ -332,15 +354,17 @@ impl Request {
         }
         if self.dance {
             out.extend([
-                Role::LeftArm,
-                Role::RightArm,
-                Role::HoldingArm,
-                Role::Grip,
+                Role::StandingBody,
+                Role::StandingLeftArm,
+                Role::StandingRightArm,
+                Role::StandingHoldingArm,
+                Role::StandingGrip,
                 Role::Phone,
                 Role::GlowStick,
-                Role::PhoneGlow,
-                Role::StickGlow,
             ]);
+        }
+        if self.seated_hands {
+            out.extend([Role::LeftArm, Role::RightArm]);
         }
         out.extend(self.extras.iter().copied());
         out
@@ -396,7 +420,7 @@ impl Request {
                 "the head (keep the neck, with a little painted overlap where the head joins)",
             );
         }
-        if self.dance {
+        if self.seated_hands {
             removed.push("both arms, with clean painted overlap at the shoulders");
         }
         if self.tail {
@@ -408,6 +432,13 @@ impl Request {
             )
         };
         match role {
+            Role::StandingBody => "only the standing torso and legs, including the exposed neck and shoulder overlap; fit its own standing arms, shoulder joints and grip. Reuse a front head and eye pair only when their viewing angle and geometry fit; never force sitting arm anatomy onto this body. Keep the same canvas, apparent head scale and floor baseline".into(),
+            Role::StandingLeftArm => "only the relaxed viewer-left arm for the STANDING body, fitted to its own standing shoulder; do not reuse the sitting silhouette. Include a completely painted rounded shoulder cap overlapping under the torso, no cut socket or joint seam".into(),
+            Role::StandingRightArm => "only the relaxed viewer-right arm for the STANDING body, fitted to its own standing shoulder; match its standing upper-arm length, elbow and paw, with rounded painted overlap beneath the torso".into(),
+            Role::StandingHoldingArm => "only the lowered viewer-right holding arm for the STANDING body, with its own shoulder pivot, elbow silhouette and hand grip. Do not rotate or stretch the sitting arm to fake a standing arm. Paint a full round shoulder cap with overlap beneath the torso. No item or front grip fingers".into(),
+            Role::StandingGrip => "only the foreground grip fingers for standing_holding_arm.png, fitted to its standing hand. Use its own measured grip position; do not copy the sitting fingers' placement".into(),
+            Role::Body if self.dance => format!("only the sitting torso and legs at rest, with {} left out entirely; the standing torso is a separate file, and each pose has one compatible head and eye pair, with no duplicate facial layers; keep the seated arms and paws painted into body.png unless separate sitting hands were selected",removed.join(" and ")),
+            Role::Body if self.seated_hands && !self.needs_head() => format!("the complete SITTING character with {face}, but with both arms and paws left out; separate authored seated arms attach at rounded shoulder overlaps"),
             Role::Body if removed.is_empty() => format!("the whole character standing or sitting at rest, {face}"),
             Role::Body if self.needs_head() => format!(
                 "the character's body at rest with {} left out entirely, so nothing of the face is in this file",
@@ -420,9 +451,9 @@ impl Request {
             Role::Head => format!(
                 "only the head, at the exact position it has on the body, {face}, with a little extra painted at the neck so it overlaps the body"
             ),
-            Role::LeftArm => "only the relaxed left arm as seen by the viewer, from shoulder to fingertips; match the full shared canvas, and keep all other pixels transparent".into(),
-            Role::RightArm => "only the relaxed right arm as seen by the viewer, from shoulder to fingertips; match the full shared canvas, and keep all other pixels transparent".into(),
-            Role::HoldingArm => "only the viewer-right arm in its lowered resting position, elbow slightly bent and hand shaped to hold an upright item; omit the front grip fingers, supplied separately; match the full shared canvas, and keep all other pixels transparent".into(),
+            Role::LeftArm => "only the relaxed left arm for the SITTING body as seen by the viewer, from its sitting shoulder to fingertips, with a rounded painted cap overlapping under the torso; match the full shared canvas, and keep all other pixels transparent".into(),
+            Role::RightArm => "only the relaxed right arm for the SITTING body as seen by the viewer, from its sitting shoulder to fingertips, with a rounded painted cap overlapping under the torso; match the full shared canvas, and keep all other pixels transparent".into(),
+            Role::HoldingArm => "only the SITTING viewer-right arm in its lowered resting position, fitted to its own seated shoulder with a fully painted rounded overlap cap, elbow slightly bent and hand shaped to hold an upright item; omit the front grip fingers, supplied separately; match the full shared canvas, and keep all other pixels transparent".into(),
             Role::Grip => "only the fingers overlapping the front of the held item on holding_arm.png; match the full shared canvas, and keep all other pixels transparent".into(),
             Role::Phone => "only an upright phone with a lit screen facing the viewer, positioned in the lowered holding hand; match the full shared canvas, and keep all other pixels transparent".into(),
             Role::GlowStick => "only an upright warm yellow glow stick positioned in the same lowered holding hand as the phone; match the full shared canvas, and keep all other pixels transparent".into(),
@@ -465,7 +496,7 @@ impl Request {
         )
     }
 
-    fn manifest(&self) -> serde_json::Value {
+    pub(in crate::mascot) fn manifest(&self) -> serde_json::Value {
         use super::motion::{MotionSpec, PartType};
         use super::pack::{EyeDef, PartDef, Pose, slug};
         use serde_json::json;
@@ -473,6 +504,14 @@ impl Request {
         let roles = self.roles();
         let mut parts = Vec::new();
         for role in &roles {
+            if self.dance
+                && matches!(
+                    role,
+                    Role::Phone | Role::GlowStick | Role::PhoneGlow | Role::StickGlow
+                )
+            {
+                continue;
+            }
             let kind = match role {
                 Role::Head => PartType::Head,
                 Role::Tail => PartType::Tail,
@@ -515,6 +554,7 @@ impl Request {
                 [false, true]
                     .into_iter()
                     .map(|right| EyeDef {
+                        static_image: false,
                         white: Role::Tracking(right, EyeLayer::White).file().into(),
                         pupil: Role::Tracking(right, EyeLayer::Pupil).file().into(),
                         mask: Role::Tracking(right, EyeLayer::Mask).file().into(),
@@ -567,8 +607,101 @@ impl Request {
                 }
             }
         }
-        if self.head {
+        if self.head || self.dance {
             manifest["music"] = json!({"bop": "nod"});
+        }
+        {
+            let mut standing = pose.clone();
+            standing.name = "stand".into();
+            standing.body = Role::StandingBody.file().into();
+            for part in &mut standing.parts {
+                let role = match part.kind {
+                    PartType::LeftArm => Some(Role::StandingLeftArm),
+                    PartType::RightArm => Some(Role::StandingRightArm),
+                    PartType::HoldingArm => Some(Role::StandingHoldingArm),
+                    PartType::Grip => Some(Role::StandingGrip),
+                    _ => None,
+                };
+                if let Some(role) = role {
+                    part.image = role.file().into();
+                }
+            }
+            if self.dance {
+                for (kind, role) in [
+                    (PartType::LeftArm, Role::StandingLeftArm),
+                    (PartType::RightArm, Role::StandingRightArm),
+                    (PartType::HoldingArm, Role::StandingHoldingArm),
+                    (PartType::Grip, Role::StandingGrip),
+                    (PartType::Phone, Role::Phone),
+                    (PartType::GlowStick, Role::GlowStick),
+                ] {
+                    if !standing.parts.iter().any(|part| part.kind == kind) {
+                        standing.parts.push(PartDef {
+                            kind,
+                            image: role.file().into(),
+                            pivot: (0.5, 0.5),
+                            parent: None,
+                            behind: kind.behind_by_default(),
+                            motion: MotionSpec::default_for(kind),
+                            faces: Default::default(),
+                        });
+                    }
+                }
+            }
+            let mut composition = super::composition::Composition::from_poses(&if self.dance {
+                vec![pose, standing]
+            } else {
+                vec![pose]
+            });
+            if self.eyes && !self.tracking {
+                composition.group_static_eyes(Role::LeftEye.file(), Role::RightEye.file());
+            }
+            for variant in composition
+                .variants
+                .values_mut()
+                .filter(|v| v["kind"] == "head")
+            {
+                variant["eye_mode"] = json!(if self.eyes || self.tracking {
+                    "separate"
+                } else {
+                    "embedded"
+                });
+            }
+            composition.add_complete_reactions(&manifest["reactions"]);
+            for recipe in composition
+                .poses
+                .values_mut()
+                .filter(|r| r["slots"]["holding_arm"].is_string())
+            {
+                for slot in ["phone", "glow_stick", "grip"] {
+                    let id = recipe["slots"][slot].clone();
+                    recipe["slots"][slot] = json!({"variant":id,"parent":"holding_arm"});
+                }
+            }
+            for (name, recipe) in &mut composition.poses {
+                recipe["hands"] = json!(if name == "stand" || name == "sit" && self.seated_hands {
+                    "movable"
+                } else {
+                    "embedded"
+                });
+                recipe["wave"] = json!(name == "stand" && self.dance);
+            }
+            let bodies: Vec<_> = composition
+                .poses
+                .iter()
+                .filter_map(|(name, recipe)| {
+                    super::composition::Composition::variant_id(&recipe["slots"]["body"])
+                        .map(|id| (id.to_owned(), name.clone(), recipe["hands"].clone()))
+                })
+                .collect();
+            for (id, name, hands) in bodies {
+                composition.variants.get_mut(&id).unwrap()["hands"] = hands;
+                composition.variants.get_mut(&id).unwrap()["pose"] = json!(name);
+            }
+            manifest["poses"] = composition
+                .compile((self.canvas, self.canvas))
+                .expect("reference pose assignments");
+            manifest["composition"] = composition.to_json();
         }
         manifest
     }
@@ -583,7 +716,6 @@ impl Request {
                 self.canvas, self.canvas
             ));
         }
-        let pose = manifest.default_pose();
         let mapped = manifest.files();
         let missing: Vec<_> = self
             .roles()
@@ -598,14 +730,26 @@ impl Request {
             ));
         }
         let expected = self.manifest();
-        let actual = pose.to_json();
-        let expected_pose = &expected["poses"]["sit"];
-        // Match the layer relationships, preserving the creator's measured coordinates.
-        for key in ["body", "parts", "eyes"] {
-            if !mapping_contains(&actual[key], &expected_pose[key]) {
-                return Err(format!(
-                    "character.json has an incomplete {key} mapping for the selected features."
-                ));
+        // Check each posture, so declaring standing files without assigning
+        // them cannot silently retain sitting arms in the standing recipe.
+        for name in if self.dance {
+            &["sit", "stand"][..]
+        } else {
+            &["sit"][..]
+        } {
+            let actual = manifest
+                .poses
+                .iter()
+                .find(|pose| pose.name == *name)
+                .ok_or_else(|| format!("assign the {name} pose"))?
+                .to_json();
+            let expected_pose = &expected["poses"][*name];
+            for key in ["body", "parts", "eyes"] {
+                if !mapping_contains(&actual[key], &expected_pose[key]) {
+                    return Err(format!(
+                        "character.json has an incomplete {name} {key} mapping for the selected features."
+                    ));
+                }
             }
         }
         if self.held
@@ -624,13 +768,13 @@ impl Request {
                     .and_then(|e| e.art.as_ref())
                     .map(|a| &a.image)
                     != Some(&super::lines::SoundRef::Pack(role.file().into()))
-                {
-                    return Err(format!(
-                        "{} must map to the {} reaction",
-                        role.file(),
-                        event.key()
-                    ));
-                }
+            {
+                return Err(format!(
+                    "{} must map to the {} reaction",
+                    role.file(),
+                    event.key()
+                ));
+            }
         }
         manifest.validate_files(folder)
     }
@@ -661,7 +805,7 @@ impl Request {
         ));
         out.push_str("\nDeliver an actual character.json file inside the downloadable folder. Measure placement from the finished artwork and write the final numeric coordinates yourself. Each PNG must retain the full shared canvas, so its x/y placement is already encoded by transparent padding. Never trim or centre individual layers. Measure ground_anchor at the feet, each head pivot at the neck joint, each tail pivot at its attachment, and eye max_offset from the safe pupil travel inside its mask. Coordinates [x, y] are canvas fractions from the top left: divide pixel x by canvas width and pixel y by canvas height. For held_pose, include a measured grip: [x_fraction, y_fraction] on the intended pickup point in held.png, and include place: [0, 0, 1] for shared-canvas alignment, or measured [x_offset, y_offset, scale] if needed. Replace the example anchor, pivot and eye travel numbers below with measured values. Keep every selected feature and all filename mappings. Stack the resting layers to verify alignment, confirm eyes have a background/pupil/alpha mask each, and confirm each expression and held pose is mapped. Deliver every required file together.\n\n");
         if self.dance {
-            out.push_str("Music artwork alignment: left_arm and right_arm are relaxed arms. holding_arm replaces right_arm during Light wave. Place both interchangeable items in its grip, and draw grip fingers in front of the item. For holding_arm, grip, phone, glow_stick and both glow layers, set the SAME pivot at the viewer-right SHOULDER, with parent omitted. The runtime rotates these aligned layers together. Give left_arm its own shoulder pivot. Keep the halo separate from the item. Leave enough canvas padding for the raised arm and both swing extremes. Stack and rotate the layers together to verify the grip.\n\n");
+            out.push_str("Music artwork alignment: left_arm and right_arm are relaxed arms. holding_arm replaces right_arm during Light wave. Place both interchangeable items in its grip, and draw grip fingers in front of the item. Standing uses its own authored movable arms and grip. Sitting keeps paws painted into body.png unless separate sitting hands were explicitly selected. With fixed paws, never add arm layers or enable wave for sitting. Movable arms alone do not authorize wave: set wave:true only for a pose designed and checked for it. Each movable pose has independently measured shoulder/grip pivots. Never force identical arms across postures. Each pose has exactly one active face and eye pair: separate eyes belong on a plain head; a painted-face expression replaces those eye layers. Blink/doze reuse the closed-eye pair, with no redundant full-head blink image. A compatible head/eye pair and the phone/glow stick may be reused across poses; reuse is optional when anatomy or viewing angle changes. Set the holding arm pivot at the viewer-right shoulder. Place the phone and glow stick at its grip and attach both items and the foreground grip fingers to holding_arm in the pose slots. Their image coordinates remain aligned on the shared canvas. Give each pose's left_arm its own shoulder pivot. Preview shoulder overlap while resting and throughout the full wave arc. The arm, item and grip fingers must rotate together without counter-rotating the item away from its fingers. TinyPaw can animate the item light; additional halo images are optional. Leave enough canvas padding for the raised arm and both swing extremes. Stack and rotate the layers together to verify the grip.\n\n");
         }
         out.push_str(&serde_json::to_string_pretty(&self.manifest()).unwrap());
         out
@@ -924,6 +1068,77 @@ mod tests {
             assert_eq!(Role::guess(Path::new(name)), Some(role), "{name}");
         }
         assert_eq!(Role::guess(Path::new("eye.png")), None, "no side, no guess");
+    }
+
+    #[test]
+    fn music_uses_posture_arms_and_one_eye_system_per_pose() {
+        let mut request = Request::new("ref.png".into());
+        request.dance = true;
+        request.tracking = true;
+        request.blink = true;
+        let fixed = request.manifest();
+        assert_eq!(fixed["composition"]["poses"]["sit"]["hands"], "embedded");
+        assert_eq!(fixed["composition"]["poses"]["sit"]["wave"], false);
+        assert!(fixed["composition"]["poses"]["sit"]["slots"]["holding_arm"].is_null());
+        assert!(!request.roles().contains(&Role::LeftArm));
+        request.seated_hands = true;
+        let roles = request.roles();
+        for role in [
+            Role::StandingLeftArm,
+            Role::StandingRightArm,
+            Role::StandingHoldingArm,
+            Role::StandingGrip,
+        ] {
+            assert!(roles.contains(&role));
+            assert_eq!(Role::guess(Path::new(role.file())), Some(role));
+        }
+        assert!(
+            !roles.contains(&Role::HeadBlink),
+            "the closed eye pair already provides blink"
+        );
+        assert!(!request.roles().contains(&Role::HoldingArm));
+        assert!(!request.roles().contains(&Role::Grip));
+        let value = request.manifest();
+        let c = &value["composition"];
+        for slot in ["left_arm", "right_arm"] {
+            let sit = super::super::composition::Composition::variant_id(
+                &c["poses"]["sit"]["slots"][slot],
+            )
+            .unwrap();
+            let stand = super::super::composition::Composition::variant_id(
+                &c["poses"]["stand"]["slots"][slot],
+            )
+            .unwrap();
+            assert_ne!(sit, stand);
+            assert_ne!(c["variants"][sit]["image"], c["variants"][stand]["image"]);
+        }
+        for name in ["sit", "stand"] {
+            assert_eq!(value["poses"][name]["eyes"].as_array().unwrap().len(), 2);
+            assert_eq!(
+                value["poses"][name]["parts"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|p| p["type"] == "head")
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn movable_sitting_hands_do_not_require_standing_or_wave_artwork() {
+        let mut request = Request::new("ref.png".into());
+        request.seated_hands = true;
+        assert_eq!(
+            request.roles(),
+            vec![Role::Body, Role::LeftArm, Role::RightArm]
+        );
+        let value = request.manifest();
+        assert_eq!(value["composition"]["poses"]["sit"]["hands"], "movable");
+        assert_eq!(value["composition"]["poses"]["sit"]["wave"], false);
+        assert!(value["composition"]["poses"]["stand"].is_null());
+        super::super::pack::parse_manifest(&value.to_string()).unwrap();
     }
 
     #[test]

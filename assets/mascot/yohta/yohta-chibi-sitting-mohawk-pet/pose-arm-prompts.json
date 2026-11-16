@@ -1,0 +1,30 @@
+{
+  "generator": "built-in image_gen",
+  "prompts": [
+    {
+      "name": "sitting-holding-arm-v2",
+      "prompt": "Use case: precise-object-edit. Production 2D character arm cutout on a transparent square stage. Image 1 is ONLY the sitting torso reference, not to be included in output. Image 2 is the arm style reference. Output ONLY ONE viewer-right holding arm for the SITTING pose, no body, head, eyes, feet, tail or item. Match exact bright royal-blue fur, dark purple paw, orange and indigo diamond markings and thick clean black cartoon outline. Preserve 1024x1024 stage coordinates: shoulder joint center (530,620), softly bent elbow around (555,690), paw/grip centered (610,735). This is the lowered REST position, NOT an already raised waving arm. Build a FULL rounded painted shoulder cap radius 28 pixels around the pivot, with 18 pixels overlap for the torso to cover; do not draw a cut/open socket or black seam across the shoulder. A compact natural seated upper arm, not a stretched standing arm. Paw is a small natural cupped holding fist, clear grip for upright phone/glow stick; no giant mitten, no extra fingers or holes. Keep all surrounding pixels genuinely transparent, and leave generous empty padding. No text, labels, joint marker, panel or shadow. Exact stage alignment is crucial; do not center the arm as a standalone object.",
+      "reference_images": [
+        "music/body.png",
+        "music/holding_arm.png"
+      ]
+    },
+    {
+      "name": "standing-holding-arm-v2",
+      "prompt": "Use case: precise-object-edit. Production 2D character arm cutout on a transparent square stage. Image 1 is the STANDING torso reference (DO NOT output it). Image 2 is the standing arm anatomy/style reference. Image 3 is a holding-hand style reference only, not the seated silhouette to reuse. Output ONLY ONE viewer-right holding arm specifically for the STANDING pose, no body/head/eyes/feet/tail/item. Match royal-blue fur, dark-purple paw, orange and indigo diamond markings, thick clean black cartoon outlines. Full 1024x1024 stage: anatomical shoulder pivot at (540,605), compact arm bends gently outward through elbow (570,675), cupped holding paw/grip center (620,710). This is the lowered rest position; animation will raise it from the shoulder. A short plush standing upper arm, distinct from the sitting arm. FULL rounded painted shoulder cap radius 26 pixels, with ample 18px painted overlap beneath torso; no exposed cut socket or black seam across attachment. Natural small holding paw for upright phone or glow stick, no giant fist, extra digits or hole. Do not output a prop or its glow. Background genuinely transparent, no labels/markers/shadows, preserve coordinates and transparent padding, do not enlarge/recenter the arm.",
+      "reference_images": [
+        "music/standing-body-shared.png",
+        "music/standing-relaxed-arm.png",
+        "music/holding_arm.png"
+      ]
+    },
+    {
+      "name": "standing-left-arm-v2",
+      "prompt": "Use case: precise-object-edit. Create a single transparent production PNG cutout of ONLY the viewer-left relaxed arm for this blue standing chibi character. Image 1 is the standing torso proportion reference and must NOT appear in output. Image 2 is the viewer-right relaxed arm style/proportion reference; make the opposite-side standing arm with anatomically consistent marking placement. Exact 1024x1024 full stage: shoulder pivot centered (390,605), relaxed plush blue upper arm descending with a small outward lean, dark purple paw centered (360,730). Upper cap is completely rounded and painted, radius 26px, with 18px overlap under torso; no open shoulder socket, severed cut line or black seam. Royal blue fur, orange and indigo diamond markings, same thick clean black outline. Standing anatomy, short compact arm, NOT the longer seated arm. No torso/head/eyes/tail/feet/props, no text/joint dot/shadow, transparent background. Preserve full stage positioning, do not crop or center this isolated arm.",
+      "reference_images": [
+        "music/standing-body-shared.png",
+        "music/standing-relaxed-arm.png"
+      ]
+    }
+  ]
+}

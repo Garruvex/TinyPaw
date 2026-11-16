@@ -9,15 +9,60 @@ fn mohawk_yohta_artwork_covers_reactions_and_sleep_positions() {
     assert_eq!(manifest.bop, Some(Bop::LightWave));
     assert_eq!(manifest.lines.total(), 74);
     assert_eq!(manifest.default_pose().body, "sit/body.png");
-    assert_eq!(manifest.default_pose().parts.len(), 2);
-    assert_eq!(manifest.music_art.as_ref().unwrap().pivot, (540.0/1024.0,583.0/1024.0));
-    let bottom = |file: &str| {
-        let pixels = image::open(source.join(file)).unwrap().to_rgba8();
-        (0..pixels.height()).rev().find(|&y|
-            (0..pixels.width()).any(|x| pixels.get_pixel(x,y)[3] >= 32)).unwrap() + 1
-    };
-    assert_eq!(bottom("sit/body.png"), bottom("music/standing-torso-v2.png"),
-        "standing and sitting feet share the ground baseline");
+    assert_eq!(
+        manifest.default_pose().parts.len(),
+        2,
+        "sitting retains its original body/paws, head and tail"
+    );
+    assert!(
+        manifest.music_art.is_none(),
+        "standing uses the ordinary pose renderer"
+    );
+    let composition = manifest.composition.as_ref().unwrap();
+    let standing = &composition.poses["stand"]["slots"];
+    assert_eq!(
+        super::super::composition::Composition::variant_id(&standing["head"]),
+        Some("head.stand")
+    );
+    assert!(
+        standing["eyes"].is_null(),
+        "standing's painted eye pair must not receive the sitting eyes"
+    );
+    assert_eq!(
+        composition.variants["head.stand"]["image"],
+        "music/standing-head-v2.png"
+    );
+    let stand = manifest
+        .poses
+        .iter()
+        .find(|pose| pose.name == "stand")
+        .unwrap();
+    let head = stand
+        .parts
+        .iter()
+        .find(|part| part.kind == PartType::Head)
+        .unwrap();
+    assert_eq!(head.pivot, (470.0 / 1024.0, 570.0 / 1024.0));
+    assert!(stand.eyes.is_empty());
+    let placement = composition
+        .image_placement("stand", "music/standing-head-v2.png", manifest.canvas)
+        .unwrap();
+    assert_eq!(
+        placement,
+        super::super::placement::Placement::default(),
+        "original standing head keeps its native scale and stage position"
+    );
+    for slot in ["left_arm", "right_arm", "holding_arm", "grip"] {
+        assert_ne!(
+            super::super::composition::Composition::variant_id(
+                &composition.poses["sit"]["slots"][slot]
+            ),
+            super::super::composition::Composition::variant_id(
+                &composition.poses["stand"]["slots"][slot]
+            ),
+            "{slot} belongs to its posture"
+        );
+    }
     assert!(inspect_folder(&source).unwrap().misfits.is_empty());
     let poses = super::super::reactions::sleep_poses(
         &manifest.reactions,
@@ -33,25 +78,60 @@ fn mohawk_yohta_artwork_covers_reactions_and_sleep_positions() {
         panic!("fresh character installs");
     };
     assert!(character.rig().is_ok());
+    for recipe in ["doze", "curled", "held"] {
+        let reactions = character.pack_reactions();
+        let art = if recipe == "held" {
+            super::super::reactions::held(&reactions, &super::super::reactions::Config::default())
+                .unwrap()
+        } else {
+            super::super::reactions::sleep_poses(
+                &reactions,
+                &super::super::reactions::Config::default(),
+            )
+            .into_iter()
+            .find(|p| p.art.pose.as_deref() == Some(recipe))
+            .unwrap()
+            .art
+        };
+        assert!(
+            character.reaction_image(&art).is_some(),
+            "resolved {recipe} renders"
+        );
+    }
     let out = dir.join("out");
     fs::create_dir_all(&out).unwrap();
     // Verify authored defaults independently of this machine's saved preferences.
     let exported = export_with(&character, &out, &Overrides::default(), |_| None).unwrap();
     let reopened = read_manifest(&exported).unwrap();
     reopened.validate_files(&exported).unwrap();
-    assert_eq!(reopened.music_art.as_ref().unwrap().head.as_deref(), Some("music/standing-head-v2.png"));
-    assert_eq!(reopened.music_art.as_ref().unwrap().head_pivot, Some((470.0/1024.0,570.0/1024.0)));
-    for asset in ["held.png", "reactions/click.png", "reactions/drop.png",
-        "reactions/headpat.png", "reactions/sleep.png", "reactions/sleep-curled.png",
-        "reactions/wake.png", "sit/part-1-head-petted.png"] {
+    assert_eq!(
+        reopened.composition.as_ref().unwrap().to_json(),
+        composition.to_json()
+    );
+    assert!(reopened.music_art.is_none());
+    for asset in [
+        "held.png",
+        "reactions/click.png",
+        "reactions/drop.png",
+        "reactions/headpat.png",
+        "reactions/sleep.png",
+        "reactions/sleep-curled.png",
+        "reactions/wake.png",
+        "sit/part-1-head-petted.png",
+    ] {
         assert!(exported.join(asset).is_file(), "export keeps {asset}");
     }
-    for name in ["standing-head-v2", "standing-torso-v2", "standing-relaxed-arm", "standing-phone-arm", "standing-stick-arm"] {
+    for name in [
+        "standing-head-v2",
+        "standing-torso-v2",
+        "standing-relaxed-arm",
+        "standing-phone-arm",
+        "standing-stick-arm",
+    ] {
         assert!(exported.join(format!("music/{name}.png")).is_file());
     }
     assert_eq!(reopened.bop, Some(Bop::LightWave));
     assert_eq!(reopened.lines.total(), 74);
-    assert_eq!(reopened.music_art.as_ref().unwrap().body, "music/standing-torso-v2.png");
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -59,15 +139,23 @@ fn mohawk_yohta_artwork_covers_reactions_and_sleep_positions() {
 #[test]
 #[ignore = "writes Yohta music preview and thumbnail"]
 fn render_mohawk_yohta_music_artwork() {
-    use image::imageops;
-    use iced::advanced::{Renderer as _, graphics::{Viewport, geometry::Renderer as _}};
+    use iced::advanced::{
+        Renderer as _,
+        graphics::{Viewport, geometry::Renderer as _},
+    };
     use iced::widget::canvas::Frame;
     use iced::{Color, Rectangle, Size};
+    use image::imageops;
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("assets/mascot/yohta/yohta-chibi-sitting-mohawk-pet");
     let rig = load_folder(&source).unwrap().rig().unwrap();
     let parts = rig.motion_parts();
-    let render = |angle: f32, phone: bool, active: bool, raised: bool, sample: Option<&super::super::motion::Pose>, background: Color| {
+    let render = |angle: f32,
+                  phone: bool,
+                  active: bool,
+                  raised: bool,
+                  sample: Option<&super::super::motion::Pose>,
+                  background: Color| {
         let viewport = Viewport::with_physical_size(Size::new(512, 512), 1.0);
         let mut renderer = iced::Renderer::new(iced::Font::DEFAULT, 14.0.into());
         let bounds = Rectangle::with_size(viewport.logical_size());
@@ -79,11 +167,18 @@ fn render_mohawk_yohta_music_artwork() {
             light_phone: phone,
             music_active: active,
             light_swing: (angle + 1.8) / 0.45,
-            angles: parts.iter().map(|p| match p.kind {
-                PartType::HoldingArm | PartType::Grip | PartType::Phone |
-                PartType::GlowStick | PartType::PhoneGlow | PartType::StickGlow => angle,
-                _ => 0.0,
-            }).collect(),
+            angles: parts
+                .iter()
+                .map(|p| match p.kind {
+                    PartType::HoldingArm
+                    | PartType::Grip
+                    | PartType::Phone
+                    | PartType::GlowStick
+                    | PartType::PhoneGlow
+                    | PartType::StickGlow => angle,
+                    _ => 0.0,
+                })
+                .collect(),
             ..Default::default()
         };
         if let Some(sample) = sample {
@@ -96,55 +191,112 @@ fn render_mohawk_yohta_music_artwork() {
         renderer.draw_geometry(frame.into_geometry());
         let mut pixels = tiny_skia::Pixmap::new(512, 512).unwrap();
         let mut mask = tiny_skia::Mask::new(512, 512).unwrap();
-        renderer.draw(&mut pixels.as_mut(), &mut mask, &viewport, &[bounds], background);
-        RgbaImage::from_fn(512, 512, |x,y| {
-            let p = pixels.pixel(x,y).unwrap().demultiply();
+        renderer.draw(
+            &mut pixels.as_mut(),
+            &mut mask,
+            &viewport,
+            &[bounds],
+            background,
+        );
+        RgbaImage::from_fn(512, 512, |x, y| {
+            let p = pixels.pixel(x, y).unwrap().demultiply();
             image::Rgba([p.blue(), p.green(), p.red(), p.alpha()])
         })
     };
-    let mut review = RgbaImage::new(2048,1024);
-    for (column, (angle, phone, active, raised)) in [(0.0,false,false,false),
-        (0.0,false,true,false),(-1.35,true,true,true),(-2.25,true,true,true),
-        (-1.35,false,true,true),(-1.8,false,true,true),(-2.25,false,true,true),
-        (0.0,false,false,false)].into_iter().enumerate() {
-        imageops::replace(&mut review,
-            &render(angle,phone,active,raised,None,Color::from_rgb8(28,32,43)),
-            (column % 4) as i64*512, (column / 4) as i64*512);
+    let mut review = RgbaImage::new(2048, 1024);
+    for (column, (angle, phone, active, raised)) in [
+        (0.0, false, false, false),
+        (0.0, false, true, false),
+        (-1.35, true, true, true),
+        (-2.25, true, true, true),
+        (-1.35, false, true, true),
+        (-1.8, false, true, true),
+        (-2.25, false, true, true),
+        (0.0, false, false, false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        imageops::replace(
+            &mut review,
+            &render(
+                angle,
+                phone,
+                active,
+                raised,
+                None,
+                Color::from_rgb8(28, 32, 43),
+            ),
+            (column % 4) as i64 * 512,
+            (column / 4) as i64 * 512,
+        );
     }
     review.save(source.join("music-preview.png")).unwrap();
     let sample = |animator: &mut super::super::motion::Animator, phase: f32| {
-        animator.step(&parts, &super::super::motion::Inputs {
-            music: 1.0, beat: Some(phase), bop: Bop::Nod,
-            music_items: rig.music_items(),
-            dance: super::super::motion::Dance { pose: 2, ..Default::default() },
-            dt: 1.0 / 30.0, ..Default::default()
-        })
+        animator.step(
+            &parts,
+            &super::super::motion::Inputs {
+                music: 1.0,
+                beat: Some(phase),
+                bop: Bop::Nod,
+                music_items: rig.music_items(),
+                dance: super::super::motion::Dance {
+                    pose: 2,
+                    ..Default::default()
+                },
+                dt: 1.0 / 30.0,
+                ..Default::default()
+            },
+        )
     };
-    let mut nod_review = RgbaImage::new(2048,512);
+    let mut nod_review = RgbaImage::new(2048, 512);
     for (column, phase) in [0.0, 0.3, 0.58, 0.9].into_iter().enumerate() {
         let pose = sample(&mut super::super::motion::Animator::default(), phase);
-        imageops::replace(&mut nod_review,
-            &render(0.0,false,true,false,Some(&pose),Color::from_rgb8(28,32,43)),
-            column as i64*512, 0);
+        imageops::replace(
+            &mut nod_review,
+            &render(
+                0.0,
+                false,
+                true,
+                false,
+                Some(&pose),
+                Color::from_rgb8(28, 32, 43),
+            ),
+            column as i64 * 512,
+            0,
+        );
     }
-    nod_review.save(source.join("standing-nod-preview.png")).unwrap();
+    nod_review
+        .save(source.join("standing-nod-preview.png"))
+        .unwrap();
     let frames = Path::new(env!("CARGO_MANIFEST_DIR")).join(".work/nod-reference-frames");
     fs::create_dir_all(&frames).unwrap();
     let mut animator = super::super::motion::Animator::default();
     for n in 0..60 {
         let pose = sample(&mut animator, (n % 15) as f32 / 15.0);
-        let mut frame = RgbaImage::new(1024,512);
-        for (column, standing) in [false,true].into_iter().enumerate() {
-            imageops::replace(&mut frame,
-                &render(0.0,false,standing,false,Some(&pose),Color::from_rgb8(28,32,43)),
-                column as i64*512, 0);
+        let mut frame = RgbaImage::new(1024, 512);
+        for (column, standing) in [false, true].into_iter().enumerate() {
+            imageops::replace(
+                &mut frame,
+                &render(
+                    0.0,
+                    false,
+                    standing,
+                    false,
+                    Some(&pose),
+                    Color::from_rgb8(28, 32, 43),
+                ),
+                column as i64 * 512,
+                0,
+            );
         }
         frame.save(frames.join(format!("{n:03}.png"))).unwrap();
     }
 
-    let resting = render(0.0,false,false,false,None,Color::TRANSPARENT);
+    let resting = render(0.0, false, false, false, None, Color::TRANSPARENT);
     imageops::resize(&resting, 96, 96, imageops::FilterType::Lanczos3)
-        .save(source.join("thumb.png")).unwrap();
+        .save(source.join("thumb.png"))
+        .unwrap();
 }
 
 #[test]
@@ -155,7 +307,7 @@ fn bundled_yohta_is_an_ordinary_pack_that_exports_and_copies() {
     assert!(rig.eye_point().is_some(), "his eyes still track the cursor");
     assert!(Character::builtin().thumbnail().is_some());
     let lines = Character::builtin().pack_lines();
-    assert_eq!(lines.total(), 12, "Yohta has a few things to say");
+    assert_eq!(lines.total(), 15, "Yohta has a few things to say");
     assert!(lines.sounds().is_empty());
     // Export writes a folder Import folder accepts as another character.
     let out = dir.join("out");
@@ -299,16 +451,27 @@ fn reference_prompt_folders_pass_import_with_every_requested_image_mapped() {
         request.validate_folder(&source).unwrap();
         prepare_folder_into(&dir.join("library"), &source, None).unwrap();
         let mut changed: Json = serde_json::from_str(json).unwrap();
-        let items = changed["poses"]["sit"]["parts"].as_array_mut().unwrap();
-        let phone = items.iter_mut().find(|p| p["type"] == "phone").unwrap();
-        phone["pivot"] = json!([0.25, 0.25]);
+        changed["composition"]["poses"]["stand"]["slots"]["phone"]["parent"] = json!("missing-arm");
         fs::write(source.join("character.json"), changed.to_string()).unwrap();
-        assert!(request.validate_folder(&source).is_err(), "a detached item pivot must fail");
+        assert!(
+            request.validate_folder(&source).is_err(),
+            "a missing item attachment must fail"
+        );
+        fs::write(source.join("character.json"), json).unwrap();
+
+        let mut changed: Json = serde_json::from_str(json).unwrap();
+        changed["composition"]["poses"]["stand"]["slots"]["left_arm"] =
+            changed["composition"]["poses"]["stand"]["slots"]["right_arm"].clone();
+        fs::write(source.join("character.json"), changed.to_string()).unwrap();
+        assert!(
+            request.validate_folder(&source).is_err(),
+            "declaring standing files without assigning them cannot reuse the seated arm"
+        );
         fs::write(source.join("character.json"), json).unwrap();
 
         if tracking {
             let mut changed: Json = serde_json::from_str(json).unwrap();
-            changed["poses"]["sit"]["eyes"][0]["mask"] = json!("body.png");
+            changed["composition"]["variants"]["eyes.front"]["eyes"][0]["mask"] = json!("body.png");
             fs::write(source.join("character.json"), changed.to_string()).unwrap();
             assert!(
                 request.validate_folder(&source).is_err(),
@@ -827,6 +990,7 @@ fn motion_overrides_round_trip_and_must_fit_the_rig() {
         motion: Some(specs.to_vec()),
         lines: None,
         bop: Some(Bop::Groove),
+        music: None,
         reactions: None,
     };
     save_overrides_in(&dir, BUILTIN, &o).unwrap();
@@ -848,6 +1012,7 @@ fn motion_overrides_round_trip_and_must_fit_the_rig() {
         motion: None,
         lines: Some(Lines::default()),
         bop: None,
+        music: None,
         reactions: None,
     };
     save_overrides_in(&dir, BUILTIN, &quiet).unwrap();
@@ -1010,12 +1175,24 @@ fn held_poses_are_pack_images_that_install_and_export() {
         folder.join("reactions/art-5.png").exists() && folder.join("reactions/held.png").exists()
     );
     let exported = read_manifest(&folder).unwrap();
-    let exported_art = exported.reactions.entry(Event::Drop).unwrap().art.as_ref().unwrap();
+    let exported_art = exported
+        .reactions
+        .entry(Event::Drop)
+        .unwrap()
+        .art
+        .as_ref()
+        .unwrap();
     assert_eq!(exported_art.source_size, Some([60, 30]));
     assert_eq!(exported_art.grip, Some([0.3, 0.2]));
-    let restored = image::open(folder.join("reactions/art-5.png")).unwrap().to_rgba8();
+    let restored = image::open(folder.join("reactions/art-5.png"))
+        .unwrap()
+        .to_rgba8();
     assert_eq!(restored, original);
-    let Imported::Installed(reopened) = import_folder_into(&dir.join("reopened"), &folder, &[], OnDuplicate::Ask).unwrap() else { panic!("reimported"); };
+    let Imported::Installed(reopened) =
+        import_folder_into(&dir.join("reopened"), &folder, &[], OnDuplicate::Ask).unwrap()
+    else {
+        panic!("reimported");
+    };
     assert_eq!(reopened.reaction_image(exported_art).unwrap(), original);
     // A held pose on another stage size is refused.
     RgbaImage::new(50, 50)
@@ -1137,6 +1314,7 @@ fn export_carries_motion_lines_and_sounds_and_imports_the_same() {
         motion: Some(motion.clone()),
         lines: Some(lines),
         bop: Some(Bop::RubberHose),
+        music: None,
         reactions: None,
     };
     let out = dir.join("out");
@@ -1172,6 +1350,7 @@ fn export_carries_motion_lines_and_sounds_and_imports_the_same() {
         }]),
         lines: None,
         bop: None,
+        music: None,
         reactions: None,
     };
     let folder = export_with(&plain, &out, &o, |_| None).unwrap();
@@ -1195,6 +1374,7 @@ fn replacing_a_pack_keeps_the_users_overrides() {
         }]),
         lines: Some(Lines::default()),
         bop: None,
+        music: None,
         reactions: None,
     };
     let (root, c) = test_install_folder(&dir, OnDuplicate::Ask);
@@ -1212,4 +1392,180 @@ fn replacing_a_pack_keeps_the_users_overrides() {
         "replace keeps what the user changed"
     );
     fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_characters_own_music_pose_and_hand_are_saved_beside_its_other_overrides() {
+    let dir = scratch("music-fit");
+    let fit = MusicFit {
+        pose: 2,
+        hand_x: 4.0,
+        hand_y: -3.0,
+        hand_angle: 12.0,
+        wave_range: 150.0,
+    };
+    let o = Overrides {
+        bop: Some(Bop::Groove),
+        music: Some(fit),
+        ..Overrides::default()
+    };
+    save_overrides_in(&dir, BUILTIN, &o).unwrap();
+    assert_eq!(load_overrides_in(&dir, BUILTIN), o);
+    // Dropping it leaves the rest, and the character follows the app again.
+    let without = Overrides { music: None, ..o };
+    save_overrides_in(&dir, BUILTIN, &without).unwrap();
+    assert_eq!(load_overrides_in(&dir, BUILTIN).music, None);
+    assert_eq!(load_overrides_in(&dir, BUILTIN).bop, Some(Bop::Groove));
+    // Values outside the sliders are pulled back in; a broken one is ignored.
+    let path = dir.join(".overrides/yohta.json");
+    std::fs::write(
+        &path,
+        r#"{"schema_version":1,"music":{"pose":"sit","hand_x":99,"hand_y":0,"hand_angle":-90,"wave_range":50}}"#,
+    )
+    .unwrap();
+    let loaded = load_overrides_in(&dir, BUILTIN).music.unwrap();
+    assert_eq!(
+        (loaded.pose, loaded.hand_x, loaded.hand_angle),
+        (1, 15.0, -45.0)
+    );
+    std::fs::write(&path, r#"{"schema_version":1,"music":{"pose":"fly"}}"#).unwrap();
+    assert_eq!(load_overrides_in(&dir, BUILTIN).music, None);
+}
+
+#[test]
+#[ignore = "writes shared composition review"]
+fn render_shared_composition_review() {
+    use super::super::{
+        motion::{Animator, Dance, Inputs},
+        surface::{Raster, Surface},
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("assets/mascot/yohta/yohta-chibi-sitting-mohawk-pet");
+    let manifest = read_manifest(&source).unwrap();
+    let rig = build_rig(&manifest, |file| read_png(&source, file, manifest.canvas)).unwrap();
+    let parts = rig.motion_parts();
+    let mut review = RgbaImage::new(1536, 1024);
+    for (col, (standing, style)) in [(false, Bop::Nod), (true, Bop::Nod), (true, Bop::LightWave)]
+        .into_iter()
+        .enumerate()
+    {
+        let mut animator = Animator::default();
+        for step in 0..120 {
+            let mut pose = animator.step(
+                &parts,
+                &Inputs {
+                    music: 1.0,
+                    beat: Some((step % 30) as f32 / 30.0),
+                    bop: style,
+                    music_items: rig.music_items(),
+                    seated_wave: rig.seated_wave(),
+                    wave_capabilities: rig.wave_capabilities(),
+                    dance: Dance {
+                        pose: if standing { 2 } else { 1 },
+                        ..Default::default()
+                    },
+                    dt: 1.0 / 60.0,
+                    ..Default::default()
+                },
+            );
+            if step == 90 || step == 119 {
+                pose.music_active = standing;
+                pose.music_mix = None;
+                let mut raster = Raster::new(512, 512).unwrap();
+                raster.scale(0.5);
+                rig.draw_pose(&mut raster, &pose);
+                let image = RgbaImage::from_raw(512, 512, raster.to_straight_rgba()).unwrap();
+                image::imageops::replace(
+                    &mut review,
+                    &image,
+                    (col * 512) as i64,
+                    if step == 90 { 0 } else { 512 },
+                );
+            }
+        }
+    }
+    review.save(".work/shared-composition-review.png").unwrap();
+}
+
+#[test]
+#[ignore = "installs the explicitly prepared local review pack"]
+fn install_prepared_shared_review() {
+    let source = std::env::var_os("TINYPAW_REVIEW_PACK")
+        .expect("set TINYPAW_REVIEW_PACK to the prepared pack");
+    let source = PathBuf::from(source);
+    let manifest = read_manifest(&source).unwrap();
+    manifest.validate_files(&source).unwrap();
+    let root = user_dir().unwrap();
+    let Imported::Installed(character) =
+        import_folder_into(&root, &source, &[&manifest.id], OnDuplicate::Replace).unwrap()
+    else {
+        panic!("replace installs");
+    };
+    let rig = character.rig().unwrap();
+    assert!(rig.eye_point().is_some());
+    assert!(
+        !rig.seated_wave(),
+        "the restored seated pose has fixed paws"
+    );
+    assert_eq!(rig.wave_capabilities(), Some([false, true]));
+    assert_eq!(character.pack_lines().total(), manifest.lines.total());
+}
+
+#[test]
+#[ignore = "writes posture-specific arm and grip review"]
+fn render_pose_arm_review() {
+    use super::super::{
+        motion::{Animator, Dance, Inputs},
+        surface::{Raster, Surface},
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("assets/mascot/yohta/yohta-chibi-sitting-mohawk-pet");
+    let manifest = read_manifest(&source).unwrap();
+    let mut board = RgbaImage::new(1536, 1024);
+    for (row, name) in ["sit", "stand"].into_iter().enumerate() {
+        let pose = manifest.poses.iter().find(|p| p.name == name).unwrap();
+        let rig = build_pose_rig(&manifest, pose, &|file| {
+            read_png(&source, file, manifest.canvas)
+        })
+        .unwrap();
+        let parts = rig.motion_parts();
+        for column in 0..3 {
+            let mut animator = Animator::default();
+            let mut pose = super::super::motion::Pose::default();
+            for n in 0..180 {
+                pose = animator.step(
+                    &parts,
+                    &Inputs {
+                        music: 1.0,
+                        bop: if column == 0 {
+                            Bop::Nod
+                        } else {
+                            Bop::LightWave
+                        },
+                        seated_wave: rig.seated_wave(),
+                        wave_capabilities: rig.wave_capabilities(),
+                        beat: Some((n % 30) as f32 / 30.0),
+                        dt: 1.0 / 60.0,
+                        dance: Dance {
+                            item: if column == 1 { 1 } else { 0 },
+                            pose: 1,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                );
+            }
+            let mut raster = Raster::new(512, 512).unwrap();
+            raster.fill_rectangle(
+                iced::Point::ORIGIN,
+                iced::Size::new(512.0, 512.0),
+                iced::Color::from_rgb8(28, 32, 43),
+            );
+            raster.scale(0.5);
+            rig.draw_pose(&mut raster, &pose);
+            let image = RgbaImage::from_raw(512, 512, raster.to_straight_rgba()).unwrap();
+            image::imageops::replace(&mut board, &image, column * 512, row as i64 * 512);
+        }
+    }
+    board.save(".work/pose-arm-review.png").unwrap();
 }

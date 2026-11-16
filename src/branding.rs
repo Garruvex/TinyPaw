@@ -11,6 +11,12 @@ fn pixels() -> &'static image::RgbaImage {
     })
 }
 
+/// The app logo as RGBA, for windows that draw it themselves.
+pub fn logo_rgba() -> (u32, u32, &'static [u8]) {
+    let image = pixels();
+    (image.width(), image.height(), image.as_raw())
+}
+
 pub fn window_icon() -> iced::window::Icon {
     let image = pixels();
     iced::window::icon::from_rgba(image.as_raw().clone(), image.width(), image.height())

@@ -1,35 +1,28 @@
-//! Settings window: header with the master switch, a left navigation column
-//! and one section at a time. Every control edits a registered setting through
-//! the same typed update path as the CLI and quick bar.
+//! The Character studio window: a header, a toolbar (which editor, which
+//! character, Save and Discard) and one page at a time. Settings itself is the Slint
+//! window in `settings_ui`; this window holds the editors that have not moved.
 
 use iced::widget::{
     Column, button, canvas, checkbox, column, container, pick_list, row, scrollable, slider, space,
-    text, toggler, tooltip,
+    text, toggler,
 };
 use iced::{Alignment, Color, Element, Length, Theme};
 
 use super::icons::{Glyph, icon};
-use super::{PreviewTile, UiMsg, theme};
+use super::{UiMsg, theme};
 use crate::app::Message;
-use crate::features::{display, mascot, point, sound, system};
+use crate::features::{mascot, point};
 use crate::packs::{Draft, Pack};
-use crate::registry::{Registry, ShortcutContext, Value};
-use crate::session::{ActivationStyle, Session};
+use crate::registry::{Registry, Value};
+use crate::session::Session;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 /// In navigation order: Annotate, then Desktop, then App.
 pub enum Page {
     #[default]
+    /// The pointer editor, while a pointer is being added or re-aimed.
     Pointer,
-    /// Ink and text labels.
-    Ink,
-    /// Spotlight and Lens, which also work outside annotation.
-    Tools,
     Character,
-    /// How drawing starts, and every shortcut.
-    Shortcuts,
-    Sound,
-    Display,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -37,15 +30,24 @@ pub enum CharacterTab {
     /// Pick, add, export or remove characters.
     #[default]
     Library,
-    /// The selected character on the desktop: shown, size, eyes, idle.
-    Desktop,
     /// Customize → Artwork: arrange layers in the Arrange preview.
     Artwork,
-    /// Customize → Behavior: reactions, lines, moving parts and music,
-    /// tried in the Test character preview.
-    Behavior,
+    /// What it shows and plays when touched, petted or left alone.
+    Reactions,
+    /// The speech bubble and the lines it says.
+    Speech,
+    /// Moving parts and how it moves to music.
+    Motion,
     /// Customize → Advanced: resting point and stage size.
     Advanced,
+}
+
+impl CharacterTab {
+    /// The tabs that edit the behavior draft and are tried in the Test
+    /// character preview.
+    pub fn is_behavior(self) -> bool {
+        matches!(self, Self::Reactions | Self::Speech | Self::Motion)
+    }
 }
 
 /// The merged Windows header: sizes shared with the native hit test, and the
@@ -56,8 +58,8 @@ pub mod caption {
     /// Width of each caption button in logical pixels.
     pub const BUTTON_W: f32 = 46.0;
     /// Logical width left of the caption buttons that holds clickable
-    /// controls (the Annotation switch); the rest of the header drags.
-    pub const CONTROLS_W: f32 = 270.0;
+    /// controls; the rest of the header drags. The studio has none.
+    pub const CONTROLS_W: f32 = 0.0;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Button {
@@ -121,20 +123,10 @@ pub enum LeaveChoice {
 }
 
 pub struct SettingsView<'a> {
-    pub registry: &'a Registry,
     pub session: &'a Session,
     pub page: Page,
     pub character_tab: CharacterTab,
-    pub displays: &'a [crate::platform::displays::Display],
-    #[cfg(windows)]
-    pub sources: &'a [crate::platform::windows::WindowSource],
-    pub has_custom_sound: bool,
-    /// Commands whose global shortcut is held by another app.
-    pub taken: &'a [&'static str],
     pub notice: Option<&'a str>,
-    pub packs: &'a [Pack],
-    /// The pack the Point tool draws with.
-    pub pack: Option<&'a Pack>,
     /// "Add your pointer" in progress.
     pub draft: Option<&'a Draft>,
     pub editing: bool,
@@ -153,6 +145,8 @@ pub struct SettingsView<'a> {
     pub transfer: Option<&'a Transfer>,
     /// The Art tab's open character, while editing.
     pub art: Option<&'a crate::mascot::editor::Editor>,
+    /// The selected character's music pose and hand position.
+    pub music_fit: crate::mascot::pack::MusicFit,
     /// The Motion tab's live preview, on the Character page.
     pub motion: Option<&'a crate::mascot::preview::MotionPreview>,
     /// Create from reference in progress, with the reference's thumbnail.
@@ -178,16 +172,10 @@ pub struct SettingsView<'a> {
 
 mod character;
 mod controls;
-mod display_tab;
-mod ink;
 mod pointer;
-mod sound_tab;
 use character::character_page;
 use controls::*;
-use display_tab::*;
-use ink::*;
 use pointer::*;
-use sound_tab::*;
 
 fn h1<'a>(label: &'a str) -> Element<'a, Message> {
     text(label)
@@ -205,36 +193,17 @@ fn h2<'a>(label: &'a str) -> Element<'a, Message> {
         .into()
 }
 
-/// How to use and adjust a Lens or Spotlight anywhere shortcut, with its
-/// current binding.
-fn anywhere_hint(
-    registry: &crate::registry::Registry,
-    id: &str,
-    fallback: &str,
-    size: &str,
-    more: &str,
-) -> String {
-    let key = registry
-        .shortcut_label(id)
-        .unwrap_or_else(|| fallback.to_owned());
-    format!(
-        "Anywhere: tap {key} to toggle, or hold it to show until release.          While holding, Up/Down change the {size} and +/− the {more}.          In annotation, scroll for {size}, Shift+scroll for {more}."
-    )
-}
-
 fn hint<'a>(label: impl text::IntoFragment<'a>) -> Element<'a, Message> {
     text(label).size(12).color(theme::MUTED).into()
 }
 
-fn keycap<'a>(label: String) -> Element<'a, Message> {
-    container(text(label.replace('+', " ")).size(12).color(theme::SUBTLE))
-        .padding([3, 8])
-        .style(theme::keycap)
-        .into()
-}
-
+/// A group of rows on a dark card.
 fn section<'a>(children: Vec<Element<'a, Message>>) -> Element<'a, Message> {
-    Column::with_children(children).spacing(10).into()
+    container(Column::with_children(children).spacing(10))
+        .padding(14)
+        .width(Length::Fill)
+        .style(theme::fill(theme::WELL, 10.0))
+        .into()
 }
 
 /// A library card's name, shortened to fit the 92 px card.
@@ -248,62 +217,11 @@ fn card_label(name: &str) -> String {
     short
 }
 
-/// An inline jump to the place a related setting lives.
-fn link<'a>(label: &'a str, msg: Message) -> Element<'a, Message> {
-    button(text(label).size(12).color(theme::CYAN_TEXT))
-        .padding([2, 4])
-        .style(theme::tool_button(theme::Tone::Plain))
-        .on_press(msg)
-        .into()
-}
-
-/// A hint followed by a link, on one line.
-fn hint_link<'a>(
-    label: impl text::IntoFragment<'a>,
-    link_label: &'a str,
-    msg: Message,
-) -> Element<'a, Message> {
-    row![hint(label), link(link_label, msg)]
-        .spacing(6)
-        .align_y(Alignment::Center)
-        .wrap()
-        .into()
-}
-
-/// When ink and tap stamps fade; one setting shared by both.
-fn fade_picker<'a>(s: &crate::registry::SettingValues) -> Element<'a, Message> {
-    pick_list(
-        [FadeChoice::Keep, FadeChoice::ThreeSeconds],
-        Some(if s.choice(system::INK_FADE) == "3s" {
-            FadeChoice::ThreeSeconds
-        } else {
-            FadeChoice::Keep
-        }),
-        |f| Message::Set(system::INK_FADE, Value::Choice(f.id())),
-    )
-    .text_size(13)
-    .padding([8, 10])
-    .style(theme::select)
-    .into()
-}
-
-fn later<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
-    tooltip(
-        content,
-        container(text("Coming in a later alpha").size(12))
-            .padding([6, 10])
-            .style(theme::fill(theme::HOVER, 8.0)),
-        tooltip::Position::Top,
-    )
-    .into()
-}
-
 pub fn view(v: SettingsView<'_>) -> Element<'_, Message> {
     let panel = iced::widget::keyed_column([(v.page, main(&v))])
         .width(Length::Fill)
         .height(Length::Fill);
-    let body = row![nav(v.page), panel].height(Length::Fill);
-    container(column![header(&v), body])
+    container(column![header(&v), toolbar(&v), panel])
         .width(Length::Fill)
         .height(Length::Fill)
         .style(theme::fill(theme::SURFACE, 0.0))
@@ -311,7 +229,6 @@ pub fn view(v: SettingsView<'_>) -> Element<'_, Message> {
 }
 
 fn header<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
-    let on = v.session.is_enabled();
     let logo = container(
         iced::widget::image(crate::branding::logo())
             .width(30)
@@ -321,23 +238,7 @@ fn header<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     .height(30)
     .align_x(Alignment::Center)
     .align_y(Alignment::Center);
-    let switch = toggler(on)
-        .label("Annotation")
-        .text_size(14)
-        .size(22)
-        .spacing(10)
-        .font(theme::MEDIUM)
-        .style(theme::master_toggler)
-        .on_toggle(|_| Message::Command(system::MASTER_TOGGLE));
-    let mut right = row![].spacing(14).align_y(Alignment::Center);
-    if let Some(label) = v.registry.shortcut_label(system::MASTER_TOGGLE) {
-        right = right.push(keycap(label));
-    }
-    right = right.push(container(switch).padding([6, 12]).style(theme::outlined(
-        theme::CONTROL,
-        999.0,
-        theme::LINE,
-    )));
+    let right = row![].spacing(14).align_y(Alignment::Center);
     if let Some(frame) = v.frame {
         return framed_header(logo, right, frame);
     }
@@ -389,7 +290,9 @@ fn framed_header<'a>(
             space().width(14),
             logo.into(),
             space().width(10),
-            text("TinyPaw Settings").font(theme::HEADING).size(14),
+            text("TinyPaw Character studio")
+                .font(theme::HEADING)
+                .size(14),
             space().width(Length::Fill),
             container(controls)
                 .width(CONTROLS_W)
@@ -413,51 +316,97 @@ fn framed_header<'a>(
     .into()
 }
 
-fn nav<'a>(page: Page) -> Element<'a, Message> {
-    let item = |p: Page, glyph: Glyph, label: &'static str| {
-        let on = page == p;
+/// A character in the toolbar's picker.
+#[derive(Debug, Clone, PartialEq)]
+struct Named(&'static str, String);
+
+impl std::fmt::Display for Named {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.1)
+    }
+}
+
+/// Under the header: which editor, which character, and the one Save and
+/// Discard for the character's draft.
+fn toolbar<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
+    let editor = |p: Page, glyph: Glyph, label: &'static str| {
+        let on = v.page == p;
         button(
             row![
                 icon(
                     glyph,
-                    18.0,
+                    15.0,
                     if on { theme::CYAN_TEXT } else { theme::SUBTLE }
                 ),
-                text(label)
-                    .size(14)
-                    .font(if on { theme::MEDIUM } else { theme::BODY }),
+                text(label).size(13),
             ]
-            .spacing(10)
+            .spacing(7)
             .align_y(Alignment::Center),
         )
-        .width(Length::Fill)
-        .height(40)
-        .padding([10, 12])
-        .style(theme::nav_button(on))
+        .padding([6, 10])
+        .style(theme::segment(on))
         .on_press(Message::Ui(UiMsg::Nav(p)))
     };
-    container(
-        column![
-            hint("Annotate"),
-            item(Page::Pointer, Glyph::Pointer, "Pointer"),
-            item(Page::Ink, Glyph::Pen, "Ink & text"),
-            item(Page::Tools, Glyph::Lens, "Spotlight & lens"),
-            space().height(10),
-            hint("Desktop"),
-            item(Page::Character, Glyph::Head, "Character"),
-            space().height(10),
-            hint("App"),
-            item(Page::Shortcuts, Glyph::Controls, "Shortcuts"),
-            item(Page::Sound, Glyph::Sound, "Sound"),
-            item(Page::Display, Glyph::Display, "Display & motion"),
-        ]
-        .spacing(4),
-    )
-    .width(208)
-    .height(Length::Fill)
-    .padding([16, 12])
-    .style(theme::outlined(theme::NAV, 0.0, theme::LINE))
-    .into()
+    let mut bar = row![
+        container(
+            row![
+                editor(Page::Character, Glyph::Head, "Character"),
+                editor(Page::Pointer, Glyph::Pointer, "Pointer"),
+            ]
+            .spacing(2)
+        )
+        .padding(3)
+        .style(theme::fill(theme::WELL, 9.0)),
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center);
+    if v.page == Page::Character {
+        // Which character is being edited; changing it asks about unsaved work.
+        if v.character_draft.is_none() && v.reference.is_none() {
+            let all: Vec<Named> = v
+                .characters
+                .iter()
+                .map(|c| Named(c.id, c.name.clone()))
+                .collect();
+            let current = all.iter().find(|n| n.0 == v.character).cloned();
+            bar = bar.push(
+                pick_list(all, current, |n: Named| {
+                    Message::Ui(UiMsg::PickCharacter(n.0))
+                })
+                .text_size(13)
+                .padding([6, 10])
+                .style(theme::select),
+            );
+        }
+        bar = bar.push(space().width(Length::Fill));
+        if v.unsaved {
+            bar = bar
+                .push(text("Unsaved changes").size(13).color(theme::AMBER_TEXT))
+                .push(
+                    button(text("Discard").size(12))
+                        .padding([6, 12])
+                        .style(theme::secondary)
+                        .on_press(Message::Ui(UiMsg::CharacterDiscard)),
+                )
+                .push(
+                    button(text("Save").font(theme::MEDIUM).size(12))
+                        .padding([6, 16])
+                        .style(theme::primary)
+                        .on_press_maybe(
+                            (!v.character_busy).then_some(Message::Ui(UiMsg::CharacterSave)),
+                        ),
+                );
+        } else if v.motion.is_some() {
+            bar = bar.push(hint(
+                "Changes show in the preview at once, and on the desktop once saved.",
+            ));
+        }
+    }
+    container(bar)
+        .width(Length::Fill)
+        .padding([8, 20])
+        .style(theme::outlined(theme::NAV, 0.0, theme::LINE))
+        .into()
 }
 
 fn main<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
@@ -472,11 +421,6 @@ fn main<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     }
     let (body, side) = match v.page {
         Page::Pointer => pointer_page(v),
-        Page::Ink => (ink_page(v), None),
-        Page::Tools => (tools_page(v), None),
-        Page::Shortcuts => (controls(v), None),
-        Page::Display => (display_page(v), None),
-        Page::Sound => (sound_page(v), None),
         Page::Character => character_page(v),
     };
     content.push(body);
@@ -492,19 +436,31 @@ fn main<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     // with a side panel and one without (on the same Page) must not hand
     // one scroll area's widget state to a different widget.
     let has_side = side.is_some();
+    // The character's preview stays on the left, beside whichever tab is
+    // open; the pointer editor keeps its panel on the right.
+    let left = v.page == Page::Character;
     let side = match side {
+        Some(side) if left => container(side).padding(pad(24.0, 14.0)),
         Some(side) => container(side).padding(pad(14.0, 28.0)),
         None => container(space().width(0)),
     };
-    row![
-        scrollable(
-            container(Column::with_children(content).spacing(16))
-                .padding(pad(28.0, if has_side { 14.0 } else { 28.0 }))
-                .width(Length::Fill),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill),
-        scrollable(side).width(Length::Shrink).height(Length::Fill),
-    ]
-    .into()
+    let page = scrollable(
+        container(Column::with_children(content).spacing(16))
+            .padding(if !has_side {
+                pad(28.0, 28.0)
+            } else if left {
+                pad(14.0, 28.0)
+            } else {
+                pad(28.0, 14.0)
+            })
+            .width(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill);
+    let side = scrollable(side).width(Length::Shrink).height(Length::Fill);
+    if left {
+        row![side, page].into()
+    } else {
+        row![page, side].into()
+    }
 }

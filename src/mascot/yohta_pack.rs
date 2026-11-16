@@ -236,6 +236,11 @@ mod generate {
                     { "text": "Still here! // Just resting my eyes." },
                 ],
                 "annotation_end": [{ "text": "Nice drawing!" }, { "text": "All done?" }],
+                "neighbor": [
+                    { "text": "Look at {other} go!" },
+                    { "text": "{other}, are you okay?" },
+                    { "text": "Careful with {other}!" },
+                ],
             },
         });
         std::fs::write(

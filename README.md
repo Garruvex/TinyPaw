@@ -103,3 +103,7 @@ tinypaw set system.activation_style hold
 ```
 
 Set `TINYPAW_TRACE=1` to log every event the resident instance handles.
+
+## Licence
+
+The source code is licensed GPL-3.0-or-later (see `LICENSE`). The character artwork in `assets/mascot` is not covered by it; all rights are reserved (see `assets/mascot/NOTICE.md`).

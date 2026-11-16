@@ -19,6 +19,9 @@ pub(super) fn art_page<'a>(
         .spacing(12)
         .into();
     }
+    if e.library.is_some() {
+        return super::library::library_page(e);
+    }
     use crate::mascot::editor::{Selected, Target};
     use crate::mascot::motion::PartType;
     let small = |label: String, msg: Message| {
@@ -192,6 +195,12 @@ pub(super) fn art_page<'a>(
             .align_y(Alignment::Center)
             .into(),
             hint("To give it a moving tail, use a body with the painted tail removed and add the tail as a part."),
+        ]),
+        section(vec![
+            h2("Shared parts and poses"),
+            hint("Reuse the same head and eye pair across sitting and standing, and assign variants to each pose."),
+            button("Use shared parts…").style(theme::secondary)
+                .on_press(Message::Ui(UiMsg::ArtLibrary(crate::mascot::editor::LibraryAction::Upgrade))).into(),
         ]),
         section(vec![
             h2("Arrange"),
@@ -533,21 +542,30 @@ pub(super) fn art_preview<'a>(
     busy: bool,
 ) -> Element<'a, Message> {
     use crate::mascot::editor::Selected;
-    let placing = match e.selected {
-        _ if e.adjusting_rest => "Placing: resting point".to_owned(),
-        Selected::Body => "Selected: body".to_owned(),
-        Selected::Face(i, slot) => format!(
-            "Selected: head {} {}",
-            i + 1,
-            crate::mascot::editor::FACE_NAMES[slot]
-        ),
-        Selected::Part(i) => format!(
-            "Placing: pivot of {} {}",
-            i + 1,
-            e.parts.get(i).map_or("part".into(), |p| p.kind.to_string())
-        ),
+    let placing = if let Some(library) = &e.library {
+        format!("Pose: {} · Part: {}", library.pose, library.variant)
+    } else {
+        match e.selected {
+            _ if e.adjusting_rest => "Placing: resting point".to_owned(),
+            Selected::Body => "Selected: body".to_owned(),
+            Selected::Face(i, slot) => format!(
+                "Selected: head {} {}",
+                i + 1,
+                crate::mascot::editor::FACE_NAMES[slot]
+            ),
+            Selected::Part(i) => format!(
+                "Placing: pivot of {} {}",
+                i + 1,
+                e.parts.get(i).map_or("part".into(), |p| p.kind.to_string())
+            ),
+        }
     };
-    let mode = if e.adjusting_rest || e.mode == crate::mascot::editor::Mode::Pivot {
+    let mode = if e.library.is_some() {
+        mode_label(
+            "Arrange",
+            "Adjust the selected pose with its placement controls.",
+        )
+    } else if e.adjusting_rest || e.mode == crate::mascot::editor::Mode::Pivot {
         mode_label("Arrange", "Clicks place the point being adjusted.")
     } else {
         mode_label("Arrange", "Drag artwork to move the selected layer.")
@@ -563,7 +581,7 @@ pub(super) fn art_preview<'a>(
             .width(Length::Fill)
             .height(340),
         hint(placing),
-        hint("Drag visible artwork to arrange it. Adjust joint moves only the joint. Selecting a face previews that replacement."),
+        hint(if e.library.is_some() { "Use the pose assignments and placement controls to arrange this composition. Behavior tests use the same draft." } else { "Drag visible artwork to arrange it. Adjust joint moves only the joint. Selecting a face previews that replacement." }),
         hint(if e.clipped() { "Some source images extend outside the stage and will be clipped when saved." } else { "Artwork fits inside the stage." }),
     ]
     .spacing(10)
@@ -610,7 +628,7 @@ impl canvas::Program<Message> for ArtPreview<'_> {
     ) -> Option<canvas::Action<Message>> {
         use crate::mascot::editor::Mode;
         use iced::mouse::{Button, Event};
-        if self.busy {
+        if self.busy || self.editor.library.is_some() {
             state.drag = None;
             return None;
         }
@@ -687,6 +705,16 @@ impl canvas::Program<Message> for ArtPreview<'_> {
             }
         }
         let r = self.image_rect(size);
+        if let Some(library) = &e.library {
+            frame.with_save(|f| {
+                f.translate(iced::Vector::new(r.x, r.y));
+                f.scale(r.width / e.canvas.0 as f32);
+                library
+                    .preview
+                    .draw_pose(f, &crate::mascot::motion::Pose::default());
+            });
+            return vec![frame.into_geometry()];
+        }
         let clip = r
             .intersection(&iced::Rectangle::new(iced::Point::ORIGIN, size))
             .unwrap_or_default();

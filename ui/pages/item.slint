@@ -1,0 +1,182 @@
+import { Tokens } from "../tokens.slint";
+import { SettingRow, EntryRow, SourceRow, Toggle, Range, Select, Segmented, Swatches, Cards, Btn, Notice, Hint, Keycap } from "../kit.slint";
+
+// One setting as the registry's page definitions describe it. The Rust side
+// fills these in; the control shown depends on `kind`.
+export struct ItemModel {
+    id: string,
+    // 0 toggle, 1 range, 2 choice, 3 action button, 4 note, 5 shortcut,
+    // 6 segments, 7 swatches, 8 cards, 10 entry, 11 source
+    kind: int,
+    label: string,
+    hint: string,
+    on: bool,
+    value: float,
+    min: float,
+    max: float,
+    // The value as shown beside a range, a button's caption, or a note's text.
+    text: string,
+    options: [string],
+    index: int,
+    colors: [color],
+    pictures: [image],
+    enabled: bool,
+    warning: bool,
+    // Belongs to the open entry above it.
+    nested: bool,
+}
+
+export struct SectionModel {
+    title: string,
+    // A small label beside the title, such as "Trial".
+    tag: string,
+    items: [ItemModel],
+}
+
+// Controls keep a local copy so dragging and clicking feel immediate; a new
+// item from the app replaces it.
+export component ItemView inherits VerticalLayout {
+    in property <ItemModel> item;
+    // Draw a hairline above this row.
+    in property <bool> divider;
+    // A shortcut row is waiting for the new key combination.
+    in property <bool> capturing;
+    callback toggled(bool);
+    callback ranged(float);
+    callback chosen(int);
+    callback pressed();
+    in-out property <bool> on: item.on;
+    in-out property <float> value: item.value;
+    in-out property <int> index: item.index;
+    // A note's longer help is showing.
+    property <bool> more;
+    padding-left: root.item.nested ? Tokens.space-5 : 0px;
+    changed item => {
+        root.on = root.item.on;
+        root.value = root.item.value;
+        root.index = root.item.index;
+    }
+    // A warning stands out; any other note is quiet text under the rows.
+    if root.item.kind == 4 && root.item.warning: Notice {
+        text: root.item.text;
+        warning: true;
+    }
+    // A note's `hint` is longer help, folded behind More.
+    if root.item.kind == 4 && !root.item.warning: VerticalLayout {
+        padding-left: Tokens.space-3;
+        padding-right: Tokens.space-3;
+        padding-top: Tokens.space-1;
+        padding-bottom: Tokens.space-1;
+        spacing: Tokens.space-1;
+        Hint { text: root.item.text; }
+        if root.item.hint != "" && root.more: Hint { text: root.item.hint; }
+        if root.item.hint != "": HorizontalLayout {
+            alignment: start;
+            Text {
+                text: root.more ? "Less" : "More";
+                font-size: Tokens.font-label;
+                color: Tokens.cyan-text;
+                TouchArea {
+                    clicked => { root.more = !root.more; }
+                }
+            }
+        }
+    }
+    if root.divider: Rectangle {
+        height: Tokens.hairline;
+        background: Tokens.line;
+    }
+    if root.item.kind == 10: EntryRow {
+        picture: root.item.pictures[0];
+        label: root.item.label;
+        hint: root.item.hint;
+        open: root.item.index == 1;
+        checked <=> root.on;
+        value <=> root.value;
+        minimum: root.item.min;
+        maximum: root.item.max;
+        value-text: root.item.text;
+        toggled(c) => { root.toggled(c); }
+        ranged(v) => { root.ranged(v); }
+        clicked => { root.pressed(); }
+    }
+    if root.item.kind == 11: SourceRow {
+        icon: root.item.hint;
+        label: root.item.label;
+        level: root.item.value;
+        status: root.item.text;
+        selected: root.item.on;
+        clicked => { root.chosen(root.item.index); }
+    }
+    // Cards fill the row from the left instead of sitting beside a label.
+    if root.item.kind == 8: HorizontalLayout {
+        padding: Tokens.space-3;
+        Cards {
+            pictures: root.item.pictures;
+            names: root.item.options;
+            last-adds: root.item.warning;
+            current <=> root.index;
+            selected(i) => { root.chosen(i); }
+        }
+    }
+    if root.item.kind != 4 && root.item.kind != 8 && root.item.kind != 10 && root.item.kind != 11: SettingRow {
+        label: root.item.label;
+        hint: root.item.hint;
+        hint-warning: root.item.warning;
+        if root.item.kind == 5: HorizontalLayout {
+            spacing: Tokens.space-2;
+            Keycap {
+                text: root.item.text;
+                waiting: root.capturing;
+            }
+            Btn {
+                text: root.capturing ? "Cancel" : "Change";
+                clicked => { root.pressed(); }
+            }
+        }
+        if root.item.kind == 0: Toggle {
+            checked <=> root.on;
+            enabled: root.item.enabled;
+            toggled(c) => { root.toggled(c); }
+        }
+        if root.item.kind == 1: HorizontalLayout {
+            spacing: Tokens.space-3;
+            Range {
+                value <=> root.value;
+                minimum: root.item.min;
+                maximum: root.item.max;
+                enabled: root.item.enabled;
+                changed(v) => { root.ranged(v); }
+            }
+            Text {
+                width: Tokens.value-w;
+                text: root.item.text;
+                font-size: Tokens.font-body;
+                color: Tokens.muted;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+            }
+        }
+        if root.item.kind == 2: Select {
+            options: root.item.options;
+            current <=> root.index;
+            enabled: root.item.enabled;
+            selected(i) => { root.chosen(i); }
+        }
+        if root.item.kind == 6: Segmented {
+            options: root.item.options;
+            current <=> root.index;
+            selected(i) => { root.chosen(i); }
+        }
+        if root.item.kind == 7: Swatches {
+            colors: root.item.colors;
+            current <=> root.index;
+            selected(i) => { root.chosen(i); }
+        }
+        if root.item.kind == 3: Btn {
+            text: root.item.text;
+            enabled: root.item.enabled;
+            clicked => { root.pressed(); }
+        }
+    }
+}

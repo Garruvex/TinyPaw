@@ -293,7 +293,7 @@ pub enum Expression {
 }
 
 /// Shared dance choices from Music settings. Style stays saved per character.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Dance {
     /// 0 follows sustained energy, 1 seated, 2 standing while music plays.
     pub pose: u8,
@@ -345,6 +345,8 @@ pub struct Inputs {
     pub energy: Option<f32>,
     /// Bit 0: authored phone arm; bit 1: authored glow-stick arm.
     pub music_items: u8,
+    pub seated_wave: bool,
+    pub wave_capabilities: Option<[bool; 2]>,
     /// Where we are between followed beats (0 on the beat), while Follow
     /// beat has one; otherwise music bobs at a relaxed fixed pace.
     pub beat: Option<f32>,
@@ -354,7 +356,7 @@ pub struct Inputs {
 }
 
 /// Everything the renderer needs for one frame.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Pose {
     /// Rotation per part, in radians, relative to its parent.
     pub angles: Vec<f32>,
@@ -388,6 +390,51 @@ pub struct Pose {
     pub carry: Option<(iced::Point, f32)>,
 }
 
+impl Pose {
+    /// Whether `other` would draw the same picture, give or take less than a
+    /// pixel of movement. Slow idle sway changes the pose a little every step;
+    /// redrawing for each of those would cost a frame for nothing.
+    pub fn looks_like(&self, other: &Pose) -> bool {
+        // Radians; about a third of a pixel at the end of a 150 px character.
+        const ANGLE: f32 = 0.004;
+        const UNIT: f32 = 0.01;
+        let near = |a: f32, b: f32, eps: f32| (a - b).abs() <= eps;
+        self.angles.len() == other.angles.len()
+            && self
+                .angles
+                .iter()
+                .zip(&other.angles)
+                .all(|(a, b)| near(*a, *b, ANGLE))
+            && near(self.lean, other.lean, ANGLE)
+            && near(self.squash, other.squash, UNIT / 2.0)
+            && near(self.bounce, other.bounce, UNIT / 4.0)
+            && near(self.head_drop, other.head_drop, UNIT / 4.0)
+            && near(self.light_lift, other.light_lift, UNIT)
+            && near(self.light_swing, other.light_swing, ANGLE)
+            && self.light_phone == other.light_phone
+            && near(self.hand_offset.x, other.hand_offset.x, UNIT)
+            && near(self.hand_offset.y, other.hand_offset.y, UNIT)
+            && near(self.hand_angle, other.hand_angle, ANGLE)
+            && self.music_active == other.music_active
+            && self.music_mix.is_some() == other.music_mix.is_some()
+            && near(
+                self.music_mix.unwrap_or(0.0),
+                other.music_mix.unwrap_or(0.0),
+                UNIT,
+            )
+            && self.expression == other.expression
+            && near(self.gaze.x, other.gaze.x, UNIT * 2.0)
+            && near(self.gaze.y, other.gaze.y, UNIT * 2.0)
+            && match (self.carry, other.carry) {
+                (None, None) => true,
+                (Some((p, a)), Some((q, b))) => {
+                    near(p.x, q.x, UNIT) && near(p.y, q.y, UNIT) && near(a, b, ANGLE)
+                }
+                _ => false,
+            }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct Spring {
     angle: f32,
@@ -398,6 +445,7 @@ struct Spring {
 #[derive(Debug, Clone, Default)]
 pub struct Animator {
     selected: Bop,
+    active_bop: Bop,
     random_slot: u32,
     random_ready: bool,
     random_seed: u64,
@@ -438,6 +486,9 @@ const MAX_DT: f32 = 0.1;
 const CLICK_FACE: f32 = 0.35;
 
 impl Animator {
+    pub fn active_bop(&self) -> Bop {
+        self.active_bop
+    }
     /// A click (press and release without dragging) just happened.
     pub fn clicked(&mut self, now: f32) {
         self.react_until = now + CLICK_FACE;
@@ -548,11 +599,16 @@ impl Animator {
             self.standing_mix = 0.0;
         }
 
-        let supports_wave = (i.music_items != 0 && self.standing)
-            || parts.iter().any(|p| p.kind == PartType::HoldingArm)
+        let supports_wave = if let Some(allowed) = i.wave_capabilities {
+            allowed[usize::from(self.standing && i.music_items != 0)]
+        } else if i.music_items != 0 {
+            (i.music_items & 3 != 0 && self.standing) || i.seated_wave
+        } else {
+            parts.iter().any(|p| p.kind == PartType::HoldingArm)
                 && parts
                     .iter()
-                    .any(|p| matches!(p.kind, PartType::Phone | PartType::GlowStick));
+                    .any(|p| matches!(p.kind, PartType::Phone | PartType::GlowStick))
+        };
         let slot = self.beats / i.dance.every.max(1);
         let old_style = self.selected;
         if i.bop != Bop::Random {
@@ -620,12 +676,22 @@ impl Animator {
         if self.selected != Bop::LightWave {
             self.item_ready = false;
         }
-        let bop = if self.selected == Bop::LightWave && i.music_items != 0 && !self.standing {
+        let bop = if self.selected == Bop::LightWave
+            && (i.wave_capabilities.is_some() && !supports_wave
+                || i.wave_capabilities.is_none()
+                    && i.music_items != 0
+                    && !self.standing
+                    && !i.seated_wave)
+        {
             Bop::Nod
         } else {
             self.selected
         };
 
+        if self.active_bop != bop && self.transition.is_none() {
+            self.transition = self.previous_music_pose.clone().map(|pose| (pose, 0.0));
+        }
+        self.active_bop = bop;
         if i.reduced {
             self.light_lift = 0.0;
         } else {
@@ -640,14 +706,29 @@ impl Animator {
             }
         }
 
+        let linked_wave = parts.iter().enumerate().any(|(index, part)| {
+            part.kind == PartType::HoldingArm
+                && parts.iter().any(|child| {
+                    child.parent == Some(index)
+                        && matches!(child.kind, PartType::Phone | PartType::GlowStick)
+                })
+        });
         let mut angles = vec![0.0; parts.len()];
         if !i.reduced {
             // Parents first, so a child knows how far its parent just moved.
-            let order = parts
-                .iter()
-                .enumerate()
-                .filter(|(_, p)| p.parent.is_none())
-                .chain(parts.iter().enumerate().filter(|(_, p)| p.parent.is_some()));
+            let mut order: Vec<_> = parts.iter().enumerate().collect();
+            order.sort_by_key(|(index, _)| {
+                let mut depth = 0;
+                let mut parent = parts[*index].parent;
+                while let Some(n) = parent.filter(|n| *n < parts.len()) {
+                    depth += 1;
+                    if depth >= parts.len() {
+                        break;
+                    }
+                    parent = parts[n].parent;
+                }
+                depth
+            });
             for (n, part) in order {
                 let spec = part.spec;
                 let t = i.now * spec.speed.clamp(0.0, 2.0);
@@ -672,10 +753,25 @@ impl Animator {
                         | PartType::PhoneGlow
                         | PartType::StickGlow
                 ) {
-                    self.light_lift
-                        * (-1.8
-                            + i.dance.hand_angle
-                            + (beat.two * std::f32::consts::PI).cos() * 0.45 * i.dance.wave_range)
+                    if part.parent.is_some() {
+                        // The shoulder carries the entire grip. Counter-turning
+                        // only the item twists it out of the paw/fingers.
+                        0.0
+                    } else {
+                        // A linked lowered arm needs an outward shoulder arc;
+                        // the legacy pre-raised artwork keeps its old envelope.
+                        let (raise, swing) = if linked_wave {
+                            (-1.25, 0.25)
+                        } else {
+                            (-1.8, 0.45)
+                        };
+                        self.light_lift
+                            * (raise
+                                + i.dance.hand_angle
+                                + (beat.two * std::f32::consts::PI).cos()
+                                    * swing
+                                    * i.dance.wave_range)
+                    }
                 } else {
                     (base + drag + music) * k
                 };
@@ -754,7 +850,13 @@ impl Animator {
             hand_angle: i.dance.hand_angle * self.light_lift,
             music_active,
             music_mix: Some(self.standing_mix),
-            light_swing: (beat.two * std::f32::consts::PI).cos() * i.dance.wave_range,
+            // The raised hand is invisible until it lifts, and a pose that
+            // changes every step would redraw a still character forever.
+            light_swing: if self.light_lift > 0.01 {
+                (beat.two * std::f32::consts::PI).cos() * i.dance.wave_range
+            } else {
+                0.0
+            },
             expression,
             gaze: Vector::ZERO,
             carry: None,
@@ -972,7 +1074,12 @@ const COMPRESS_TIME: f32 = 0.28;
 /// Places the character for `pose`: the music bounce lifts it, and lean and
 /// squash turn and scale it around its feet so they stay on the ground.
 /// Shared by the desktop and the Settings preview.
-pub fn place(frame: &mut iced::widget::canvas::Frame, pose: &Pose, feet: iced::Point, height: f32) {
+pub fn place<S: super::surface::Surface>(
+    frame: &mut S,
+    pose: &Pose,
+    feet: iced::Point,
+    height: f32,
+) {
     if let Some((at, angle)) = pose.carry
         && angle.abs() > 0.0005
     {
@@ -1079,6 +1186,42 @@ fn blinking(now: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pose_that_drifts_by_less_than_a_pixel_looks_the_same_and_a_real_move_does_not() {
+        let mut a = Pose {
+            angles: vec![0.0, 0.03],
+            ..Pose::default()
+        };
+        let mut b = a.clone();
+        b.angles[1] += 0.002;
+        b.gaze = Vector::new(0.01, 0.0);
+        assert!(a.looks_like(&b));
+        b.angles[1] += 0.01;
+        assert!(!a.looks_like(&b));
+        a.expression = Expression::Blink;
+        assert!(!a.looks_like(&Pose {
+            angles: vec![0.0, 0.03],
+            ..Pose::default()
+        }));
+    }
+
+    #[test]
+    fn a_resting_character_pose_does_not_change_from_step_to_step() {
+        // The raised hand's swing used to tick along with time even while the
+        // hand was hidden, so a still character redrew forever.
+        let mut animator = Animator::default();
+        let input = |now: f32| Inputs {
+            now,
+            dt: 0.1,
+            idle: true,
+            ..Inputs::default()
+        };
+        let first = animator.step(&[], &input(1.0));
+        let later = animator.step(&[], &input(1.3));
+        assert_eq!(first.light_swing, 0.0);
+        assert_eq!(later.light_swing, 0.0);
+    }
 
     #[test]
     fn standing_music_survives_beat_gaps_then_rests_and_respects_input() {
@@ -1686,6 +1829,103 @@ mod tests {
         }
         assert_eq!(pose.light_lift, 0.0);
         assert!(!animator.settling());
+    }
+
+    #[test]
+    fn wave_permissions_follow_the_visible_authored_pose() {
+        let mut animator = Animator::default();
+        let mut input = Inputs {
+            music: 1.0,
+            bop: Bop::LightWave,
+            wave_capabilities: Some([false, true]),
+            music_items: 7,
+            dance: Dance {
+                pose: 1,
+                ..Default::default()
+            },
+            dt: 1.0 / 60.0,
+            ..Default::default()
+        };
+        for _ in 0..180 {
+            animator.step(&[], &input);
+        }
+        assert_eq!(
+            animator.active_bop(),
+            Bop::Nod,
+            "fixed sitting never waves even when explicitly selected"
+        );
+        input.bop = Bop::Random;
+        input.dance.included = [false, false, false, false, true];
+        for _ in 0..180 {
+            animator.step(&[], &input);
+            assert_eq!(animator.active_bop(), Bop::Nod);
+        }
+        input.bop = Bop::LightWave;
+        input.dance.pose = 2;
+        for _ in 0..180 {
+            animator.step(&[], &input);
+        }
+        assert_eq!(
+            animator.active_bop(),
+            Bop::LightWave,
+            "standing authored wave is eligible"
+        );
+        input.wave_capabilities = Some([true, false]);
+        input.music_items = 0;
+        for _ in 0..180 {
+            animator.step(&[], &input);
+        }
+        assert_eq!(
+            animator.active_bop(),
+            Bop::LightWave,
+            "a single authored pose has no standing alternative"
+        );
+        input.wave_capabilities = Some([false, false]);
+        for _ in 0..180 {
+            animator.step(&[], &input);
+        }
+        assert_eq!(animator.active_bop(), Bop::Nod);
+    }
+
+    #[test]
+    fn linked_wave_keeps_item_and_fingers_in_the_same_hand_space() {
+        let parts: Vec<_> = [PartType::HoldingArm, PartType::Phone, PartType::Grip]
+            .into_iter()
+            .enumerate()
+            .map(|(n, kind)| PartMotion {
+                kind,
+                spec: MotionSpec::default_for(kind),
+                parent: if n == 0 { None } else { Some(0) },
+            })
+            .collect();
+        let mut animator = Animator::default();
+        for n in 0..240 {
+            let pose = animator.step(
+                &parts,
+                &Inputs {
+                    music: 1.0,
+                    bop: Bop::LightWave,
+                    seated_wave: true,
+                    beat: Some((n % 30) as f32 / 30.0),
+                    dt: 1.0 / 60.0,
+                    ..Default::default()
+                },
+            );
+            if n > 120 {
+                assert!(
+                    pose.angles[0] < -0.9 && pose.angles[0] > -1.6,
+                    "outward wave avoids folding the paw into the face"
+                );
+                assert!(
+                    pose.angles[1].abs() < 0.0001,
+                    "item inherits the shoulder once"
+                );
+                assert!(
+                    pose.angles[2].abs() < 0.0001,
+                    "fingers stay with the item and paw"
+                );
+            }
+        }
     }
 
     #[test]

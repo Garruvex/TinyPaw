@@ -1,0 +1,61 @@
+import { Tokens } from "../tokens.slint";
+import { Btn, NavItem, Tab, Segmented, Toggle, Range, Card, ListRow, Notice, SaveBar, SectionTitle, Hint, Section, SettingRow, PageTitle } from "../kit.slint";
+
+// The gallery: every kit component in every state, for checking changes by eye.
+export component Gallery inherits Window {
+    title: "TinyPaw UI gallery";
+    background: Tokens.surface;
+    preferred-width: 900px; // guard:allow window size
+    preferred-height: 760px; // guard:allow window size
+    in-out property <int> seg: 1;
+    in-out property <bool> on: true;
+    in-out property <float> level: 40;
+    VerticalLayout {
+        padding: Tokens.space-5;
+        spacing: Tokens.space-3;
+        alignment: start;
+        PageTitle { text: "UI gallery"; }
+        SectionTitle { text: "Buttons"; }
+        HorizontalLayout {
+            spacing: Tokens.space-2;
+            alignment: start;
+            Btn { text: "Primary"; primary: true; }
+            Btn { text: "Secondary"; }
+            Btn { text: "Disabled"; enabled: false; }
+        }
+        SectionTitle { text: "Navigation and tabs"; }
+        HorizontalLayout {
+            spacing: Tokens.space-2;
+            alignment: start;
+            NavItem { text: "Selected"; selected: true; width: Tokens.nav-width; }
+            NavItem { text: "Idle"; width: Tokens.nav-width; }
+            Tab { text: "Selected"; selected: true; }
+            Tab { text: "Idle"; }
+        }
+        SectionTitle { text: "Controls"; }
+        HorizontalLayout {
+            spacing: Tokens.space-4;
+            alignment: start;
+            Toggle { checked <=> root.on; }
+            Toggle { checked: false; }
+            Toggle { checked: true; enabled: false; }
+            Range { value <=> root.level; width: Tokens.label-w; }
+            Range { value: 70; enabled: false; width: Tokens.label-w; }
+        }
+        Segmented { options: ["One", "Two", "Three"]; current <=> root.seg; }
+        SectionTitle { text: "Cards and rows"; }
+        HorizontalLayout {
+            spacing: Tokens.space-2;
+            Card { selected: true; Hint { text: "Selected card"; } }
+            Card { Hint { text: "Idle card"; } }
+            ListRow { selected: true; Hint { text: "Selected row"; vertical-alignment: center; } }
+        }
+        Notice { text: "Information notice."; }
+        Notice { text: "Warning notice."; warning: true; }
+        Section {
+            title: "Setting rows";
+            SettingRow { label: "A setting"; hint: "With a hint line."; Toggle { checked: true; } }
+        }
+        SaveBar { dirty: true; }
+    }
+}

@@ -1,0 +1,21 @@
+import { SettingsShell } from "templates/settings_shell.slint";
+import { SamplePage } from "pages/sample.slint";
+import { Gallery } from "pages/gallery.slint";
+import { StudioTab } from "templates/studio_tab.slint";
+
+// The sample page placed in the Settings shell.
+export component ShellDemo inherits SettingsShell {
+    entries: [
+        { group: "Annotate", name: "Pointer" },
+        { group: "App", name: "Sample" },
+    ];
+    current: 1;
+    SamplePage { }
+}
+
+// The studio tab template compiles here so a template error fails the build.
+export component StudioTabDemo inherits Window {
+    StudioTab { title: "Studio tab"; summary: "Template check."; }
+}
+
+export { Gallery }

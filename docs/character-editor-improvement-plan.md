@@ -1,14 +1,46 @@
 # Character and editor improvement plan
 
-Updated 14 November 2026. Planned work.
+Updated 16 November 2026. Shared-composition implementation and remaining editor polish.
 
 This is the main roadmap for consolidating TinyPaw's character artwork, editor and creation prompts. The [artwork rules](character-artwork-rules.md) define the composition contract. This document defines delivery order and acceptance criteria.
 
 The earlier creation, creator UI, behavior, sleep, alignment and bop plans provide historical decisions and supporting detail. For shared artwork, pose composition, editor organization and prompt requirements, this plan and the artwork rules take precedence.
 
+## Standing face restoration — 16 November 2026
+
+Standing uses `head.stand` / `music/standing-head-v2.png` at its original canvas coordinates and scale, with neck pivot (470, 570) on the 1024 stage. Its painted eye pair is the only active eye system for that pose; the sitting tracking eyes are not assigned to standing. Sitting retains its own head, eye set and original painted paws. A regression check covers the distinct head assignment, native transform, and absence of an extra standing eye overlay.
+
+## Current decision — fixed or movable hands
+
+Yohta sitting has been restored to its original `sit/body.png` with painted paws. Separate seated arm/item assignments are removed from the active recipe, and Wave is disabled. Head nodding, eye tracking/blink and tail motion remain available.
+
+Each pose now has an independent hand option and Wave permission. The editor hides arm controls for fixed hands, validates compatible body/attachments, and requires a deliberate Wave opt-in. Explicit and Random music playback use the visible pose's permissions. New reference prompts keep sitting paws painted by default; separate sitting hands are optional.
+
+The [authored pose-set design](character-pose-set-design.md) defines the complete workflow and the remaining architectural stages. It takes precedence over earlier suggestions to require arms or waving on every posture.
+
+## Posture and face correction — 16 November 2026
+
+The earlier proposal reused too much artwork across postures. The deduplication requirement is **one active face and one eye pair within each pose**, not identical limbs across different poses.
+
+Sitting and standing now own distinct arm/holding variants, their own shoulder and grip geometry, and pose-local joint controls. Creating another pose gives its arms independent variant identities. The creator asks for separate standing arms and grip files, and validates that they are actually assigned to standing. Compatible heads/eye sets and items may still be reused. The current Yohta's redundant full-head expression replacements are archived while its one canonical plain head and eye pair provide awake facial rendering. Both complete sleep pictures remain intentional silhouette variants.
+
+Linked wave arms, items and fingers rotate together. Their default outward arc avoids folding the hand into the face; the legacy pre-raised artwork keeps its existing envelope.
+
+## Implemented baseline
+
+- A versioned `composition` owns reusable variants and named pose recipes. It compiles into the ordinary layered rig, validates references, attachment cycles, complete-pose exclusions and one logical left/right eye pair, and preserves unused declared artwork on export.
+- The current Yohta source pack reuses a compatible canonical head, eye set, tail and items across sitting and standing; each posture has its own arms and grips. Its headless, armless standing torso is a separate body variant. Both existing sleeping pictures and the held picture are explicit complete recipes.
+- The studio's Parts and poses workspace edits shared images, makes independent variants, assigns parts to poses, adjusts pose placement and attachments, edits joint pivots and eye travel, and supports undo/redo and validated save. Replacing a PNG retains its original source and placement.
+- Arrange preview resolves the selected recipe. Behavior testing resolves the default awake recipe and its standing alternative. Sleeping and carrying recipes are rendered by the same rig and identified independently even when they share a body image. The test canvas displays its actual music posture and motion.
+- New creation manifests and both import workflows use the same composition. Sitting and standing request one head and eye set. Static eye pairs and tracking pairs are each one logical assignment; optional light halo artwork is no longer mandatory.
+- Existing legacy packs remain readable and can opt into shared parts in the editor. Legacy standing artwork with embedded limbs remains a compatibility adapter until suitable separated artwork is assigned; it is never silently cut apart.
+- The installed Yohta migration preserves the installed customized head/eyes, dialogue, reactions, placements and override files. It uses staged validation and replacement; the pre-migration copy is retained locally for recovery.
+
+The broader roadmap below also includes direct selection/dragging on the assembled shared preview, richer head/eye compatibility guidance, and a fully unified behavior/artwork Save and Discard transaction. Shared authoring currently uses the pose controls; the existing behavior controls retain their existing save behavior. Those remaining workflow changes are not marked complete by this baseline.
+
 ## Outcome
 
-A creator builds one character library, assigns its variants to poses, and chooses how those poses behave. Sitting and standing share a compatible head and eye set. Seated dozing and curled sleeping are two sleep compositions. Nod and the other music motions work on each compatible active composition.
+A creator builds one character library, assigns its variants to poses, and chooses how those poses behave. Each posture has one compatible head and eye set; compatible face artwork may be reused. Sitting and standing have independent arm artwork and joints. Seated dozing and curled sleeping are two sleep compositions. Nod and the other music motions work on each compatible active composition.
 
 Every required image is explained by a selected pose or capability. The editor, prompt generator, importer and renderer use the same requirements.
 
@@ -29,7 +61,7 @@ Those features currently use several representations.
 | Preview and desktop | Separate render paths and draft handling can disagree | Both consume the same resolved composition and current draft |
 | Creation prompts | Features independently request overlapping files | A single deduplicated requirement list generates prompts and mappings |
 
-These are review findings. The consolidation described below still needs implementation.
+These were the review findings that motivated the work. The shared-composition baseline below is implemented; the acceptance criteria remain the checklist for further editor polish.
 
 ## Scope and rules
 
@@ -99,14 +131,14 @@ Open eyes, closed eyes and breathing are reused across compatible poses. Additio
 
 Feature selection resolves a requirement graph before generating filenames or prompts.
 
-1. Select the desired postures and capabilities.
+1. Select the desired postures and capabilities, including independent anatomy for each posture.
 2. Resolve the shared parts, expression variants and attachments they need.
 3. Reuse compatible assignments already in the character library.
 4. List the remaining unique images once.
 5. Generate the complete folder prompt, individual-image prompts and matching manifest from that list.
 6. Validate the returned files against the same requirements and show their assignments in the editor.
 
-Selecting sitting and standing requests their shared head and eyes once. Selecting blink and seated sleep requests the closed-eye variant once. A shared item is requested once across compatible holding poses.
+Selecting sitting and standing requests separate posture-specific arms and grips. A compatible reused front head and eye pair is requested once; a changed viewing angle justifies another variant. Selecting blink and seated sleep requests the closed-eye variant once. A shared item is requested once across compatible holding poses.
 
 Each prompt specifies the approved reference, image size, source geometry, named attachments, overlap at joints and compatible face placement. The assembled preview verifies alignment. Preserve the original source and transparent padding through import and later edits.
 
@@ -155,7 +187,7 @@ Use one resolved composition for desktop rendering, Settings preview, eye tracki
 
 Acceptance criteria
 
-- Sitting and standing use the same selected front head and eye set.
+- Each posture uses one selected head and eye pair, with reuse only where compatible. Sitting and standing use their own arm variants and shoulder/grip joints.
 - Nod and gaze work in both postures.
 - Blink and seated doze use the same closed-eye assignment.
 - Complete-pose compatibility accounts for embedded parts.

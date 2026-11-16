@@ -103,7 +103,7 @@ pub struct MotionPreview {
     reactions_pack: Config,
     /// Decoded reaction pictures by file, for the draft's held pose and
     /// artwork reactions.
-    pictures: Vec<(super::lines::SoundRef, super::rig::Picture)>,
+    pictures: Vec<(super::lines::SoundRef, Option<String>, super::rig::Picture)>,
     /// A click on the preview sets where the bubble's tail aims.
     pub placing_bubble: bool,
     /// A still pose pinned on the shared stage while positioning its artwork.
@@ -220,9 +220,10 @@ impl MotionPreview {
         let mut settings = super::reactions::companionship(&self.reactions_pack, &self.reactions);
         if let Ok(live) = self.live.try_borrow()
             && live.companion.sleep_motion(live.now)
-                && let Some(pose) = self.sleep_poses().get(live.companion.sleep_pose) {
-                    settings.mouth = pose.mouth;
-                }
+            && let Some(pose) = self.sleep_poses().get(live.companion.sleep_pose)
+        {
+            settings.mouth = pose.mouth;
+        }
         settings
     }
     pub fn companion_test(&self, state: super::companionship::State) {
@@ -281,7 +282,30 @@ impl MotionPreview {
     /// artwork draft, keeping the behavior draft. Motion carries over when
     /// the parts still line up; otherwise the new parts start from their
     /// own defaults.
+    pub fn set_pack_reactions(&mut self, config: Config) {
+        self.reactions_pack = config;
+    }
+
+    pub fn playback_status(&self) -> String {
+        let live = self.live.borrow();
+        format!(
+            "{} · {}",
+            if live.pose.music_active {
+                "Standing"
+            } else {
+                "Sitting"
+            },
+            live.animator.active_bop()
+        )
+    }
+
     pub fn set_rig(&mut self, mut rig: Rig) {
+        let changed = self.kinds
+            != rig
+                .motion_parts()
+                .iter()
+                .map(|part| part.kind)
+                .collect::<Vec<_>>();
         rig.set_bop(self.rig.bop());
         if !rig.set_motion(&self.specs) {
             self.specs = rig.motion().to_vec();
@@ -291,7 +315,9 @@ impl MotionPreview {
         self.labels = rig.motion_labels();
         self.kinds = rig.motion_parts().iter().map(|p| p.kind).collect();
         self.rig = rig;
-        self.live.get_mut().animator = Animator::default();
+        if changed {
+            self.live.get_mut().animator = Animator::default();
+        }
     }
 
     pub fn pose(&self) -> Pose {
@@ -408,22 +434,31 @@ impl MotionPreview {
 
     /// Makes a decoded reaction picture available to the preview.
     pub fn add_picture(&mut self, file: super::lines::SoundRef, pixels: &image::RgbaImage) {
-        self.pictures.retain(|(f, _)| *f != file);
-        self.pictures
-            .push((file, super::rig::Picture::new(pixels, [0.0, 0.0, 1.0])));
+        self.add_art_picture(super::reactions::Art::new(file), pixels);
     }
 
-    /// Every picture the draft's reactions name, for loading.
-    pub fn picture_files(&self) -> Vec<super::lines::SoundRef> {
-        let mut out: Vec<super::lines::SoundRef> = Vec::new();
-        for r in self
+    pub fn add_art_picture(&mut self, art: super::reactions::Art, pixels: &image::RgbaImage) {
+        self.pictures
+            .retain(|(file, pose, _)| *file != art.image || *pose != art.pose);
+        self.pictures.push((
+            art.image,
+            art.pose,
+            super::rig::Picture::new(pixels, [0.0, 0.0, 1.0]),
+        ));
+    }
+
+    pub fn picture_art(&self) -> Vec<super::reactions::Art> {
+        let mut out = Vec::new();
+        for art in self
             .reactions_pack
-            .images()
-            .into_iter()
-            .chain(self.reactions.images())
+            .artwork()
+            .chain(self.reactions.artwork())
         {
-            if !out.contains(r) {
-                out.push(r.clone());
+            if !out
+                .iter()
+                .any(|old: &super::reactions::Art| old.image == art.image && old.pose == art.pose)
+            {
+                out.push(art.clone());
             }
         }
         out
@@ -434,8 +469,8 @@ impl MotionPreview {
         let mut picture = self
             .pictures
             .iter()
-            .find(|(f, _)| *f == art.image)?
-            .1
+            .find(|(file, pose, _)| *file == art.image && *pose == art.pose)?
+            .2
             .clone();
         picture.place = art.place;
         picture.preserve_aspect = art.source_size.is_some();
@@ -461,13 +496,14 @@ impl MotionPreview {
                     return;
                 }
                 if let Some(a) = self.alignment.take()
-                    && apply {
-                        if a.event == Event::Pickup {
-                            self.set_held(Some(a.art));
-                        } else {
-                            self.set_art(a.event, Some(a.art));
-                        }
+                    && apply
+                {
+                    if a.event == Event::Pickup {
+                        self.set_held(Some(a.art));
+                    } else {
+                        self.set_art(a.event, Some(a.art));
                     }
+                }
                 self.placement_preview = None;
                 self.placing_grip = false;
             }
@@ -534,17 +570,19 @@ impl MotionPreview {
 
     pub fn held(&self) -> Option<super::reactions::Art> {
         if let Some(a) = &self.alignment
-            && a.event == Event::Pickup {
-                return Some(a.art.clone());
-            }
+            && a.event == Event::Pickup
+        {
+            return Some(a.art.clone());
+        }
         super::reactions::held(&self.reactions_pack, &self.reactions)
     }
 
     pub fn art(&self, e: Event) -> Option<super::reactions::Art> {
         if let Some(a) = &self.alignment
-            && a.event == e {
-                return Some(a.art.clone());
-            }
+            && a.event == e
+        {
+            return Some(a.art.clone());
+        }
         super::reactions::art(&self.reactions_pack, &self.reactions, e)
     }
 
@@ -722,7 +760,7 @@ impl MotionPreview {
                     self.companion_test(super::companionship::State::Awake);
                     None
                 }
-                Trigger::Idle | Trigger::AnnotationEnd => None,
+                Trigger::Idle | Trigger::AnnotationEnd | Trigger::Neighbor => None,
             };
             if let Some(g) = gesture {
                 let live = self.live.get_mut();
@@ -833,9 +871,10 @@ impl MotionPreview {
             .set_sleep_pose_count(self.sleep_poses().len());
         let touching = live.pointer.is_some_and(|p| {
             if live.companion.sleep_picture(live.now)
-                && let Some(picture) = self.picture_for(self.sleep_art(live.companion.sleep_pose)) {
-                    return picture.hit(self.rig.size(), p);
-                }
+                && let Some(picture) = self.picture_for(self.sleep_art(live.companion.sleep_pose))
+            {
+                return picture.hit(self.rig.size(), p);
+            }
             self.rig.hit(p, &live.pose).is_some()
         });
         if let Some(event) = live.companion.step(
@@ -889,6 +928,8 @@ impl MotionPreview {
             beat,
             bop: self.rig.bop(),
             music_items: self.rig.music_items(),
+            seated_wave: self.rig.seated_wave(),
+            wave_capabilities: self.rig.wave_capabilities(),
             energy: self.control.get().energy,
             dance: self.control.get().dance,
             ..Inputs::default()
