@@ -4,6 +4,10 @@ Composition contract, corrected 16 November 2026. Implementation is tracked in t
 
 A character owns one library of reusable parts and their variants. A pose selects parts from that library and places them at named attachments. Behaviors animate the selected parts. Artwork requirements come from the selected poses and capabilities.
 
+## Current hand rule
+
+A pose may keep arms and paws painted into its body, or use separate movable hands. Fixed hands do not support Wave. Movable hands do not automatically enable Wave: that movement needs a cohesive authored set and explicit permission. Yohta sitting uses its original painted paws and supports Nod and blink; its experimental seated wave is disabled. See the [pose-set design](character-pose-set-design.md).
+
 ## Shared parts
 
 | Part | Initial variants | Reuse rule |
@@ -11,7 +15,7 @@ A character owns one library of reusable parts and their variants. A pose select
 | Eyes | Open and closed, with optional happy or surprised variants | One logical left/right pair is active in each pose. Reuse between poses only when facial geometry fits. Tracking backgrounds, pupils, masks and closed lids belong to that pair. |
 | Head | Front | Each pose selects one compatible head. Reuse is optional; add a variant when viewing angle, expression geometry or silhouette changes. |
 | Body | Sitting, standing, curled | Contains the torso and legs. Separately animated head, arms and tail are omitted and their joints have painted overlap. |
-| Arms | Relaxed left, relaxed right, holding right | Sitting and standing have their own relaxed and holding-arm variants, anatomical shoulders and grips. Holding replaces the relaxed right arm within that pose. |
+| Arms | Relaxed left, relaxed right, holding right | Optional. Fixed poses keep arms/paws in the body. Movable poses use independently authored arms, shoulders and grips; holding replaces the relaxed arm only in a set designed for it. |
 | Tail | Resting | Reuse by placement and rotation. Add a curled variant only if the existing tail cannot fit the sleeping silhouette. |
 | Items | Phone, glow stick | Attach to the holding hand. Reuse the same item across compatible poses. |
 | Grip fingers | Holding right, when needed | Share between items fitting the same hand within a pose; use a pose-specific variant when hand anatomy changes. Draw in front of the item. |
@@ -26,7 +30,7 @@ Variant names describe visible artwork. Behavior names refer to actions.
 3. Heads used with separate eyes have plain face artwork beneath the eye layers. Closed eyes replace the open pair. Blink and sleep reuse the closed-eye variant.
 4. Deduplication is a rule within each pose: exactly one active face and eye system. It does not require different postures to use identical artwork. Reuse a front head/eye pair only when compatible. Do not stack painted-in eyes beneath a second eye pair.
 5. Each head variant declares a compatible eye set and its face placement. A different viewing angle can require a different eye-set variant. This still selects one pair at a time.
-6. Every active arm belongs to one shoulder in its own pose. Sitting and standing use independently authored arms and independently editable shoulder/grip pivots. A holding arm replaces the relaxed arm on that shoulder.
+6. Every active arm belongs to one shoulder in its own pose. A fixed pose needs no arm layers. Each movable pose uses independently authored arms and editable shoulder/grip pivots. A holding arm replaces the relaxed arm on that shoulder.
 7. An item attaches at a hand grip. The arm, item and foreground fingers follow the same transform chain; do not counter-rotate only the item away from its fingers. Include painted shoulder overlap and inspect the entire wave arc.
 8. Each pose declares its ground point and attachment placements. Moving a body carries its head, eyes, arms and tail.
 9. Changing a pose preserves character size and ground alignment. Transitions animate from the current visible state.
@@ -57,7 +61,7 @@ Both sitting and standing can use the same motion. A wave is available when the 
 
 ## Small initial artwork set
 
-Start with a head and one compatible eye set for each selected pose, sitting and standing bodies, and separate sitting/standing relaxed and holding arms. Reuse compatible heads, eyes, tails and items when their anatomy fits. A different arm silhouette is necessary artwork, not redundancy.
+Start with a cohesive body, head and one compatible eye set for each selected pose. Keep painted paws unless that pose is deliberately authored for separate arms. Request holding arms and grips only for a designed holding/waving set. Reuse compatible heads, eyes, tails and items when their anatomy fits. A different arm silhouette is necessary artwork, not redundancy.
 
 Add the curled body for the second sleep pose. Reuse the closed eyes for seated dozing. Add a sleep-specific head, tail or arm variant only where the curled composition needs a different silhouette.
 

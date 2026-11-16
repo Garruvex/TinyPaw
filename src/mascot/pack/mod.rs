@@ -193,30 +193,28 @@ impl Character {
         };
         if let (Some(folder), SoundRef::Pack(_file)) = (&self.folder, &art.image) {
             let manifest = read_manifest(folder).ok()?;
-            if let Some(composition) = &manifest.composition {
-                if let Some(recipe) = art
+            if let Some(composition) = &manifest.composition
+                && let Some(recipe) = art
                     .pose
                     .as_deref()
                     .filter(|name| composition.poses.contains_key(*name))
-                {
-                    let pose = manifest.poses.iter().find(|p| p.name == recipe)?;
-                    let rig =
-                        build_pose_rig(&manifest, pose, &|asset| read_png(folder, asset, canvas))
-                            .ok()?;
-                    let mut raster = super::surface::Raster::new(canvas.0, canvas.1)?;
-                    rig.draw_pose(
-                        &mut raster,
-                        &super::motion::Pose {
-                            expression: if recipe == "held" {
-                                super::motion::Expression::Dragging
-                            } else {
-                                super::motion::Expression::Blink
-                            },
-                            ..Default::default()
+            {
+                let pose = manifest.poses.iter().find(|p| p.name == recipe)?;
+                let rig = build_pose_rig(&manifest, pose, &|asset| read_png(folder, asset, canvas))
+                    .ok()?;
+                let mut raster = super::surface::Raster::new(canvas.0, canvas.1)?;
+                rig.draw_pose(
+                    &mut raster,
+                    &super::motion::Pose {
+                        expression: if recipe == "held" {
+                            super::motion::Expression::Dragging
+                        } else {
+                            super::motion::Expression::Blink
                         },
-                    );
-                    return RgbaImage::from_raw(canvas.0, canvas.1, raster.to_straight_rgba());
-                }
+                        ..Default::default()
+                    },
+                );
+                return RgbaImage::from_raw(canvas.0, canvas.1, raster.to_straight_rgba());
             }
         }
         let path = self.sound_path(&art.image)?;
@@ -306,10 +304,11 @@ pub(in crate::mascot) fn build_rig(
     png: impl Fn(&str) -> Result<RgbaImage, String>,
 ) -> Result<Rig, String> {
     let mut rig = build_pose_rig(m, m.default_pose(), &png)?;
-    if m.composition.is_some() && m.default_pose != "stand" {
-        if let Some(standing) = m.poses.iter().find(|p| p.name == "stand") {
-            rig.set_standing_pose(build_pose_rig(m, standing, &png)?);
-        }
+    if m.composition.is_some()
+        && m.default_pose != "stand"
+        && let Some(standing) = m.poses.iter().find(|p| p.name == "stand")
+    {
+        rig.set_standing_pose(build_pose_rig(m, standing, &png)?);
     }
     Ok(rig)
 }
@@ -332,6 +331,9 @@ pub(in crate::mascot) fn build_pose_rig(
     let body = png(&pose.body)?;
     if pose.parts.is_empty() && pose.eyes.is_empty() {
         let mut rig = Rig::sprite(body, pose.ground);
+        if let Some(composition) = &m.composition {
+            rig.set_wave_enabled(composition.wave_enabled(&pose.name));
+        }
         if let Some(w) = pose.whole {
             rig.set_motion(&[w]);
         }
@@ -382,7 +384,7 @@ pub(in crate::mascot) fn build_pose_rig(
             } else {
                 png(&eye.mask)?
             },
-            blink: eye.blink.as_deref().map(&png).transpose()?,
+            blink: eye.blink.as_deref().map(png).transpose()?,
             max_offset: eye.max_offset,
         });
     }
@@ -392,6 +394,9 @@ pub(in crate::mascot) fn build_pose_rig(
         parts,
         eyes,
     });
+    if let Some(composition) = &m.composition {
+        rig.set_wave_enabled(composition.wave_enabled(&pose.name));
+    }
     rig.set_bop(m.bop.unwrap_or_default());
     if let Some(art) = &m.music_art {
         rig.set_music_art(

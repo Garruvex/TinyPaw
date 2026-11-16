@@ -938,8 +938,8 @@ fn music_page(b: &mut Builder<'_>) {
         }
         b.note_more(
             s,
-            "Random picks among the checked styles. Light wave needs a holding arm and an item.",
-            "The style changes on a beat boundary. With nothing checked, Random uses Nod. Characters without gesture artwork use the built-in glow stick. These apply to every character.",
+            "Random picks among the checked styles. Light wave needs an authored pose with movable hands and wave enabled.",
+            "The style changes on a beat boundary. With nothing checked, Random uses Nod. Fixed-hand poses keep their supported motion; no replacement waving hand or item is invented. Each pose decides whether a style is eligible.",
         );
     });
     b.section("Follow beat", |s, b| {

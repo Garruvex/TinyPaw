@@ -2,12 +2,14 @@
 use super::*;
 use crate::mascot::composition::Composition;
 use crate::mascot::editor::{Editor, LibraryAction, Target};
-use iced::widget::{column, row};
+use iced::widget::{checkbox, column, row};
 
 pub(super) fn library_page(e: &Editor) -> Element<'_, Message> {
     let library = e.library.as_ref().unwrap();
     let composition = &library.composition;
     let action = |a| Message::Ui(UiMsg::ArtLibrary(a));
+    let movable = composition.movable_hands(&library.pose);
+    let wave = composition.wave_enabled(&library.pose);
     let mut assignments = column![].spacing(14);
     for (slot, kind) in [
         ("body", "body"),
@@ -23,6 +25,21 @@ pub(super) fn library_page(e: &Editor) -> Element<'_, Message> {
         ("phone_glow", "phone_glow"),
         ("stick_glow", "stick_glow"),
     ] {
+        if !movable
+            && [
+                "left_arm",
+                "right_arm",
+                "holding_arm",
+                "phone",
+                "glow_stick",
+                "grip",
+                "phone_glow",
+                "stick_glow",
+            ]
+            .contains(&slot)
+        {
+            continue;
+        }
         let value = &composition.poses[&library.pose]["slots"][slot];
         let selected = Composition::variant_id(value).unwrap_or("None").to_owned();
         let mut choices = vec!["None".to_owned()];
@@ -214,6 +231,10 @@ pub(super) fn library_page(e: &Editor) -> Element<'_, Message> {
             pick_list(new_poses,None::<String>,move |p|action(LibraryAction::NewPose(p))).placeholder("Copy into new pose…")
                 .text_size(13).padding([6,10]).style(theme::select),
         ].spacing(8).into(),
+        checkbox(movable).label("Separate movable hands for this pose").on_toggle(move |v|action(LibraryAction::Hands(v))).into(),
+        if movable {checkbox(wave).label("This artwork is designed to wave").on_toggle(move |v|action(LibraryAction::Wave(v))).into()}
+            else {hint("Hands are painted into the body. This pose can nod and breathe; waving is unavailable.")},
+        hint("Choose body artwork matching the hand option. Movable arms do not automatically enable waving. Each pose keeps its own parts, joints and movement permissions."),
         hint("Pose assignments reuse library variants. Position and size belong to this pose. Eyes follow the head; the item and grip follow the holding arm. Arm artwork and joints belong to this pose."),
         assignments.into()]),
         section(vec![h2("Shared parts"),

@@ -194,6 +194,8 @@ pub enum Target {
     /// A complete eye or eyebrow image: a still part riding on the head.
     EyePart,
     /// The whole character in a carried pose, for Pick up's held pose.
+    // Handled and tested, but nothing in the studio offers it yet.
+    #[allow(dead_code)]
     Held,
     /// A head face: part index and face slot (blink, pressed, dragging).
     Face(usize, usize),
@@ -703,6 +705,8 @@ impl Editor {
         }
     }
 
+    // Handled and tested, but nothing in the studio offers it yet.
+    #[allow(dead_code)]
     pub fn set_reference_reaction(
         &mut self,
         event: super::reactions::Event,
@@ -718,6 +722,8 @@ impl Editor {
         self.held = held;
         result
     }
+    // Handled and tested, but nothing in the studio offers it yet.
+    #[allow(dead_code)]
     pub fn enable_reference_headpat(&mut self) {
         self.reactions
             .companionship
@@ -728,12 +734,12 @@ impl Editor {
     /// The draft as a rig, so Test character shows unsaved artwork. Baking
     /// every layer is slow, so callers run it on a worker.
     pub fn draft_rig(&self) -> super::rig::Rig {
-        if let Some(library) = &self.library {
-            if let Some(root) = pack::user_dir() {
-                return library
-                    .build(&root.join(self.id), &self.name, true)
-                    .unwrap_or_else(|_| library.preview.clone());
-            }
+        if let Some(library) = &self.library
+            && let Some(root) = pack::user_dir()
+        {
+            return library
+                .build(&root.join(self.id), &self.name, true)
+                .unwrap_or_else(|_| library.preview.clone());
         }
 
         use super::rig::{EyeArt, LayeredArt, PartArt, Rig};

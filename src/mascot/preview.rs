@@ -452,7 +452,6 @@ impl MotionPreview {
         for art in self
             .reactions_pack
             .artwork()
-            .into_iter()
             .chain(self.reactions.artwork())
         {
             if !out
@@ -930,6 +929,7 @@ impl MotionPreview {
             bop: self.rig.bop(),
             music_items: self.rig.music_items(),
             seated_wave: self.rig.seated_wave(),
+            wave_capabilities: self.rig.wave_capabilities(),
             energy: self.control.get().energy,
             dance: self.control.get().dance,
             ..Inputs::default()

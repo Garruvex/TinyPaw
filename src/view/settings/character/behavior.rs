@@ -94,10 +94,7 @@ pub(super) fn reactions_tab<'a>(
     v: &SettingsView<'a>,
     m: &'a crate::mascot::preview::MotionPreview,
 ) -> Element<'a, Message> {
-    let muted = v
-        .session
-        .settings()
-        .bool(crate::features::sound::MUTE_ALL);
+    let muted = v.session.settings().bool(crate::features::sound::MUTE_ALL);
     column![
         section(vec![
             h2("When touched"),
@@ -981,7 +978,7 @@ pub(super) fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
                 .step(1.0).style(theme::range),
             text(format!("{:.0}%", s.float(mascot::EXCITEMENT))).size(12).width(48),
         ].spacing(8).align_y(Alignment::Center).into(),
-        hint("Automatic keeps gentle bops seated, stands after sustained high activity, and sits again when the music calms. A higher threshold keeps it seated more often. Standing artwork is required. Choose Standing to adjust the waving hand."),
+        hint("Automatic keeps gentle bops seated, stands after sustained high activity, and sits again when the music calms. A higher threshold keeps it seated more often. Standing artwork is required. Light wave runs only on poses with authored movable hands and wave enabled; fixed paws keep nodding. Choose Standing to adjust its authored waving hand."),
         row![
             text("Change every").size(12).color(theme::MUTED).width(110),
             pick_list(["8", "16", "32"], Some(s.choice(mascot::DANCE_EVERY)), |x| Message::Set(mascot::DANCE_EVERY, Value::Choice(x)))
@@ -999,7 +996,7 @@ pub(super) fn music_section<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
         hand_row("Hand angle", -45.0..=45.0, fit.hand_angle, "\u{b0}", 0.0, move |x| MusicFit { hand_angle: x, ..fit }),
         hand_row("Wave range", 0.0..=200.0, fit.wave_range, "%", 100.0, move |x| MusicFit { wave_range: x, ..fit }),
         hint("Music pose and hand position belong to this character and save immediately. Hand position moves the waving arm and item together. Positive horizontal moves right; positive vertical moves down."),
-        hint("Random uses the checked styles and changes on a beat boundary. Light wave joins Random when the character has a holding arm and an item. An empty selection uses Nod. Items use the available artwork; characters without gesture artwork use the built-in glow stick. Interval, included styles and item apply to all characters."),
+        hint("Random uses the checked styles and changes on a beat boundary. Light wave joins Random only for the active pose's approved wave artwork. Movable hands alone do not enable it. An empty selection uses Nod. Fixed-hand poses keep nodding; items use their authored artwork. Interval, included styles and item apply to all characters."),
         check("Random · Nod", s.bool(mascot::DANCE_STYLES[0]), mascot::DANCE_STYLES[0]),
         check("Random · Groove", s.bool(mascot::DANCE_STYLES[1]), mascot::DANCE_STYLES[1]),
         check("Random · Rubber hose", s.bool(mascot::DANCE_STYLES[2]), mascot::DANCE_STYLES[2]),

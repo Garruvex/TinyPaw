@@ -346,6 +346,7 @@ pub struct Inputs {
     /// Bit 0: authored phone arm; bit 1: authored glow-stick arm.
     pub music_items: u8,
     pub seated_wave: bool,
+    pub wave_capabilities: Option<[bool; 2]>,
     /// Where we are between followed beats (0 on the beat), while Follow
     /// beat has one; otherwise music bobs at a relaxed fixed pace.
     pub beat: Option<f32>,
@@ -598,7 +599,9 @@ impl Animator {
             self.standing_mix = 0.0;
         }
 
-        let supports_wave = if i.music_items != 0 {
+        let supports_wave = if let Some(allowed) = i.wave_capabilities {
+            allowed[usize::from(self.standing && i.music_items != 0)]
+        } else if i.music_items != 0 {
             (i.music_items & 3 != 0 && self.standing) || i.seated_wave
         } else {
             parts.iter().any(|p| p.kind == PartType::HoldingArm)
@@ -674,15 +677,20 @@ impl Animator {
             self.item_ready = false;
         }
         let bop = if self.selected == Bop::LightWave
-            && i.music_items != 0
-            && !self.standing
-            && !i.seated_wave
+            && (i.wave_capabilities.is_some() && !supports_wave
+                || i.wave_capabilities.is_none()
+                    && i.music_items != 0
+                    && !self.standing
+                    && !i.seated_wave)
         {
             Bop::Nod
         } else {
             self.selected
         };
 
+        if self.active_bop != bop && self.transition.is_none() {
+            self.transition = self.previous_music_pose.clone().map(|pose| (pose, 0.0));
+        }
         self.active_bop = bop;
         if i.reduced {
             self.light_lift = 0.0;
@@ -1821,6 +1829,62 @@ mod tests {
         }
         assert_eq!(pose.light_lift, 0.0);
         assert!(!animator.settling());
+    }
+
+    #[test]
+    fn wave_permissions_follow_the_visible_authored_pose() {
+        let mut animator = Animator::default();
+        let mut input = Inputs {
+            music: 1.0,
+            bop: Bop::LightWave,
+            wave_capabilities: Some([false, true]),
+            music_items: 7,
+            dance: Dance {
+                pose: 1,
+                ..Default::default()
+            },
+            dt: 1.0 / 60.0,
+            ..Default::default()
+        };
+        for _ in 0..180 {
+            animator.step(&[], &input);
+        }
+        assert_eq!(
+            animator.active_bop(),
+            Bop::Nod,
+            "fixed sitting never waves even when explicitly selected"
+        );
+        input.bop = Bop::Random;
+        input.dance.included = [false, false, false, false, true];
+        for _ in 0..180 {
+            animator.step(&[], &input);
+            assert_eq!(animator.active_bop(), Bop::Nod);
+        }
+        input.bop = Bop::LightWave;
+        input.dance.pose = 2;
+        for _ in 0..180 {
+            animator.step(&[], &input);
+        }
+        assert_eq!(
+            animator.active_bop(),
+            Bop::LightWave,
+            "standing authored wave is eligible"
+        );
+        input.wave_capabilities = Some([true, false]);
+        input.music_items = 0;
+        for _ in 0..180 {
+            animator.step(&[], &input);
+        }
+        assert_eq!(
+            animator.active_bop(),
+            Bop::LightWave,
+            "a single authored pose has no standing alternative"
+        );
+        input.wave_capabilities = Some([false, false]);
+        for _ in 0..180 {
+            animator.step(&[], &input);
+        }
+        assert_eq!(animator.active_bop(), Bop::Nod);
     }
 
     #[test]

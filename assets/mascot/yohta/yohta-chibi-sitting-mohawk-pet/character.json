@@ -611,10 +611,9 @@
     "variants": {
       "body.sit": {
         "kind": "body",
-        "image": "music/body.png",
-        "sources": [
-          "sit/body.png"
-        ]
+        "image": "sit/body.png",
+        "hands": "embedded",
+        "pose": "sit"
       },
       "body.stand": {
         "kind": "body",
@@ -625,7 +624,9 @@
           "music/standing-relaxed-arm.png",
           "music/standing-phone-arm.png",
           "music/standing-stick-arm.png"
-        ]
+        ],
+        "hands": "movable",
+        "pose": "stand"
       },
       "eyes.front": {
         "kind": "eyes",
@@ -781,6 +782,27 @@
           0.537109375,
           0.751953125
         ]
+      },
+      "body.sit.movable": {
+        "kind": "body",
+        "image": "music/body.png",
+        "hands": "movable",
+        "pose": "sit"
+      },
+      "head.stand": {
+        "kind": "head",
+        "image": "music/standing-head-v2.png",
+        "pivot": [
+          0.458984375,
+          0.556640625
+        ],
+        "eye_mode": "embedded",
+        "layer": "front",
+        "motion": {
+          "preset": "tilt",
+          "strength": 1,
+          "speed": 1
+        }
       }
     },
     "poses": {
@@ -793,84 +815,10 @@
           "head": "head.front",
           "eyes": "eyes.front",
           "tail": "tail.front",
-          "left_arm": {
-            "variant": "left_arm.sit",
-            "placement": [
-              0.0,
-              -0.029296875,
-              1,
-              0
-            ],
-            "layer": "front"
-          },
-          "right_arm": {
-            "variant": "right_arm.sit",
-            "placement": [
-              0.0439453125,
-              -0.029296875,
-              1,
-              0
-            ],
-            "layer": "front"
-          },
-          "holding_arm": {
-            "variant": "holding_arm.sit",
-            "placement": [
-              0.08925781250000003,
-              0.061767578125,
-              0.85,
-              0
-            ],
-            "pivot": [
-              0.50390625,
-              0.6396484375
-            ],
-            "layer": "front"
-          },
-          "grip": {
-            "variant": "grip.sit",
-            "parent": "holding_arm",
-            "placement": [
-              0.0244140625,
-              0.0048828125,
-              1,
-              0
-            ],
-            "pivot": [
-              0.537109375,
-              0.751953125
-            ]
-          },
-          "phone": {
-            "variant": "phone.front",
-            "parent": "holding_arm",
-            "placement": [
-              0.0244140625,
-              0.0048828125,
-              1,
-              0
-            ],
-            "pivot": [
-              0.537109375,
-              0.751953125
-            ]
-          },
-          "glow_stick": {
-            "variant": "glow_stick.front",
-            "parent": "holding_arm",
-            "placement": [
-              0.0244140625,
-              0.0048828125,
-              1,
-              0
-            ],
-            "pivot": [
-              0.537109375,
-              0.751953125
-            ]
-          },
           "body": "body.sit"
-        }
+        },
+        "hands": "embedded",
+        "wave": false
       },
       "stand": {
         "ground_anchor": [
@@ -879,15 +827,14 @@
         ],
         "slots": {
           "head": {
-            "variant": "head.front",
+            "variant": "head.stand",
             "placement": [
-              0.0341796875,
-              -0.041015625,
+              -0.017578125,
+              -0.0166015625,
               1,
               0
             ]
           },
-          "eyes": "eyes.front",
           "tail": {
             "variant": "tail.front",
             "placement": [
@@ -990,7 +937,9 @@
               0
             ]
           }
-        }
+        },
+        "hands": "movable",
+        "wave": true
       },
       "doze": {
         "slots": {
@@ -1008,7 +957,9 @@
         "mouth": [
           0.41,
           0.53
-        ]
+        ],
+        "hands": "embedded",
+        "wave": false
       },
       "curled": {
         "slots": {
@@ -1026,7 +977,9 @@
         "mouth": [
           0.36,
           0.695
-        ]
+        ],
+        "hands": "embedded",
+        "wave": false
       },
       "held": {
         "slots": {
@@ -1040,7 +993,9 @@
           0,
           0,
           1
-        ]
+        ],
+        "hands": "embedded",
+        "wave": false
       }
     }
   }

@@ -34,6 +34,11 @@ impl App {
                     r.tail = on;
                 }
             }
+            UiMsg::ReferenceSeatedHands(on) => {
+                if let Some(r) = &mut self.studio.reference {
+                    r.seated_hands = on;
+                }
+            }
             UiMsg::ReferenceDance(on) => {
                 if let Some(r) = &mut self.studio.reference {
                     r.dance = on;

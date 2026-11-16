@@ -1514,6 +1514,7 @@ impl Desktop {
                 music: if sleeping { 0.0 } else { o.music },
                 music_items: self.rig.music_items(),
                 seated_wave: self.rig.seated_wave(),
+                wave_capabilities: self.rig.wave_capabilities(),
                 energy: o.energy,
                 beat: if sleeping { None } else { o.beat },
                 bop: o.bop.unwrap_or_else(|| self.rig.bop()),

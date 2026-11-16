@@ -147,6 +147,7 @@ pub enum UiMsg {
     ReferenceTail(bool),
     ReferenceHead(bool),
     ReferenceDance(bool),
+    ReferenceSeatedHands(bool),
     ReferenceEyes(bool),
     ReferenceTracking(bool),
     ReferenceBrows(bool),

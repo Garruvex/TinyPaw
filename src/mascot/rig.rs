@@ -36,6 +36,7 @@ pub struct Rig {
     standing: Option<Box<Rig>>,
     standing_slots: Vec<usize>,
     extra_parts: Vec<PartMotion>,
+    wave_allowed: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -355,6 +356,7 @@ impl Rig {
             standing: None,
             standing_slots: Vec::new(),
             extra_parts: Vec::new(),
+            wave_allowed: None,
         }
     }
 
@@ -419,6 +421,7 @@ impl Rig {
             standing: None,
             standing_slots: Vec::new(),
             extra_parts: Vec::new(),
+            wave_allowed: None,
         }
     }
 
@@ -527,7 +530,21 @@ impl Rig {
         Ok(())
     }
 
+    pub fn set_wave_enabled(&mut self, enabled: bool) {
+        self.wave_allowed = Some(enabled);
+    }
+
+    pub fn wave_capabilities(&self) -> Option<[bool; 2]> {
+        Some([
+            self.seated_wave(),
+            self.standing.as_ref().is_some_and(|rig| rig.seated_wave()) || self.music.is_some(),
+        ])
+    }
+
     pub fn seated_wave(&self) -> bool {
+        if self.wave_allowed == Some(false) {
+            return false;
+        }
         match &self.kind {
             Kind::Layered { parts, .. } => {
                 parts.iter().any(|p| p.kind == PartType::HoldingArm)
@@ -543,8 +560,12 @@ impl Rig {
         if let Some(standing) = &self.standing {
             let parts = standing.motion_parts();
             return 4
-                | u8::from(parts.iter().any(|p| p.kind == PartType::Phone))
-                | (u8::from(parts.iter().any(|p| p.kind == PartType::GlowStick)) << 1);
+                | u8::from(
+                    standing.seated_wave() && parts.iter().any(|p| p.kind == PartType::Phone),
+                )
+                | (u8::from(
+                    standing.seated_wave() && parts.iter().any(|p| p.kind == PartType::GlowStick),
+                ) << 1);
         }
         if self.music.is_some() { 3 } else { 0 }
     }
@@ -632,16 +653,15 @@ impl Rig {
 
     /// The point between the eyes, in rig pixels, for gaze.
     pub fn eye_point_for_pose(&self, pose: &Pose) -> Option<Point> {
-        if let Some(standing) = self.standing_pose(pose) {
-            if pose
+        if let Some(standing) = self.standing_pose(pose)
+            && pose
                 .music_mix
                 .unwrap_or(if pose.music_active { 1.0 } else { 0.0 })
                 >= 0.5
-            {
-                return standing
-                    .eye_point()
-                    .map(|p| p + (self.anchor - standing.anchor));
-            }
+        {
+            return standing
+                .eye_point()
+                .map(|p| p + (self.anchor - standing.anchor));
         }
         self.eye_point()
     }
@@ -677,13 +697,13 @@ impl Rig {
         }
     }
     pub fn pet_region(&self, p: Point, pose: &Pose) -> bool {
-        if let Some(standing) = self.standing_pose(pose) {
-            if pose.music_mix.unwrap_or(1.0) >= 0.5 {
-                return standing.pet_region(
-                    p - (self.anchor - standing.anchor),
-                    &self.standing_angles(pose),
-                );
-            }
+        if let Some(standing) = self.standing_pose(pose)
+            && pose.music_mix.unwrap_or(1.0) >= 0.5
+        {
+            return standing.pet_region(
+                p - (self.anchor - standing.anchor),
+                &self.standing_angles(pose),
+            );
         }
         let hit = self.hit(p, pose);
         if let Some(music) = self.music_pose(pose) {
@@ -801,6 +821,7 @@ impl Rig {
             }
         }
         if pose.light_lift > 0.0
+            && self.wave_allowed != Some(false)
             && self.music.is_none()
             && self.standing.is_none()
             && !self

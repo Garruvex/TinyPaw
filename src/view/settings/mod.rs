@@ -370,10 +370,12 @@ fn toolbar<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
                 .collect();
             let current = all.iter().find(|n| n.0 == v.character).cloned();
             bar = bar.push(
-                pick_list(all, current, |n: Named| Message::Ui(UiMsg::PickCharacter(n.0)))
-                    .text_size(13)
-                    .padding([6, 10])
-                    .style(theme::select),
+                pick_list(all, current, |n: Named| {
+                    Message::Ui(UiMsg::PickCharacter(n.0))
+                })
+                .text_size(13)
+                .padding([6, 10])
+                .style(theme::select),
             );
         }
         bar = bar.push(space().width(Length::Fill));
@@ -395,7 +397,9 @@ fn toolbar<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
                         ),
                 );
         } else if v.motion.is_some() {
-            bar = bar.push(hint("Changes show in the preview at once, and on the desktop once saved."));
+            bar = bar.push(hint(
+                "Changes show in the preview at once, and on the desktop once saved.",
+            ));
         }
     }
     container(bar)

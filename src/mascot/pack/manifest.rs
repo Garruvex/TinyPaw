@@ -175,8 +175,8 @@ impl Pose {
                                 "speed": p.motion.speed,
                             },
                         });
-                        if p.parent.is_some() {
-                            part["parent"] = json!(p.parent.unwrap());
+                        if let Some(parent) = p.parent {
+                            part["parent"] = json!(parent);
                         }
                         let faces: serde_json::Map<String, Json> = FACES
                             .iter()

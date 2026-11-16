@@ -67,12 +67,58 @@ impl Composition {
                     .intern_variant("eyes.front", json!({"kind":"eyes","eyes":encoded["eyes"]}));
                 slots.insert("eyes".into(), json!(id));
             }
+            let movable = pose.parts.iter().any(|p| {
+                matches!(
+                    p.kind,
+                    super::motion::PartType::LeftArm
+                        | super::motion::PartType::RightArm
+                        | super::motion::PartType::HoldingArm
+                )
+            });
+            let wave = pose
+                .parts
+                .iter()
+                .any(|p| p.kind == super::motion::PartType::HoldingArm)
+                && pose.parts.iter().any(|p| {
+                    matches!(
+                        p.kind,
+                        super::motion::PartType::Phone | super::motion::PartType::GlowStick
+                    )
+                });
             composition.poses.insert(
                 pose.name.clone(),
-                json!({"ground_anchor":[pose.ground.0,pose.ground.1],"slots":slots}),
+                json!({"ground_anchor":[pose.ground.0,pose.ground.1],"slots":slots,"hands":if movable {"movable"}else{"embedded"},"wave":wave}),
             );
         }
         composition
+    }
+
+    pub fn movable_hands(&self, name: &str) -> bool {
+        let Some(pose) = self.poses.get(name) else {
+            return false;
+        };
+        match pose["hands"].as_str() {
+            Some("embedded") => false,
+            Some("movable") => true,
+            _ => pose["slots"].as_object().is_some_and(|slots| {
+                ["left_arm", "right_arm", "holding_arm"]
+                    .iter()
+                    .any(|slot| slots.contains_key(*slot))
+            }),
+        }
+    }
+
+    pub fn wave_enabled(&self, name: &str) -> bool {
+        let Some(pose) = self.poses.get(name) else {
+            return false;
+        };
+        self.movable_hands(name)
+            && pose["wave"].as_bool().unwrap_or_else(|| {
+                // Compatibility for previously authored packs. New recipes write
+                // an explicit opt-in; merely adding a part never enables it.
+                !pose["slots"]["holding_arm"].is_null()
+                    && (!pose["slots"]["phone"].is_null() || !pose["slots"]["glow_stick"].is_null())
+            })
     }
 
     /// Keep authored sleeping and carrying pictures as explicit complete poses.
@@ -390,8 +436,79 @@ impl Composition {
         for (name, recipe) in &self.poses {
             let slots = recipe["slots"].as_object().ok_or("each pose needs slots")?;
             let (body, _) = self.slot(recipe, "body")?;
+            if recipe
+                .get("hands")
+                .is_some_and(|v| !matches!(v.as_str(), Some("embedded" | "movable")))
+            {
+                return Err("hands must be embedded or movable".into());
+            }
+            if recipe.get("wave").is_some_and(|v| !v.is_boolean()) {
+                return Err("wave must be enabled or disabled".into());
+            }
+            let hand_slots = [
+                "left_arm",
+                "right_arm",
+                "holding_arm",
+                "grip",
+                "phone",
+                "glow_stick",
+                "phone_glow",
+                "stick_glow",
+            ];
+            if recipe["hands"] == "embedded"
+                && hand_slots.iter().any(|slot| slots.contains_key(*slot))
+            {
+                return Err("fixed hands belong in the body artwork; remove separate arm and item assignments".into());
+            }
+            if body["hands"].as_str().is_some_and(|mode| {
+                mode != if self.movable_hands(name) {
+                    "movable"
+                } else {
+                    "embedded"
+                }
+            }) {
+                return Err(
+                    "choose body artwork matching this pose's fixed or movable hands".into(),
+                );
+            }
+            if body["hands"] == "movable"
+                && (!slots.contains_key("left_arm")
+                    || (!slots.contains_key("right_arm") && !slots.contains_key("holding_arm")))
+            {
+                return Err("this body omits its arms; assign the authored left and right arms before saving".into());
+            }
+            if recipe["wave"] == true {
+                if !self.movable_hands(name) {
+                    return Err("a pose with fixed hands cannot wave".into());
+                }
+                if !slots.contains_key("holding_arm")
+                    || !["phone", "glow_stick"]
+                        .iter()
+                        .any(|slot| slots.contains_key(*slot))
+                {
+                    return Err(
+                        "wave needs an authored holding arm and an attached item for this pose"
+                            .into(),
+                    );
+                }
+                for item in ["phone", "glow_stick", "grip"] {
+                    if slots.contains_key(item)
+                        && slots[item]
+                            .get("parent")
+                            .is_some_and(|parent| parent != "holding_arm" && parent != "body")
+                    {
+                        return Err(
+                            "wave items and fingers must attach to this pose's holding arm".into(),
+                        );
+                    }
+                }
+            }
+
             if !matches!(body["kind"].as_str(), Some("body" | "complete")) {
                 return Err("body slot needs a body variant".into());
+            }
+            if body["kind"] == "complete" && self.movable_hands(name) {
+                return Err("a complete pose already contains its hands; choose a layered body for movable hands".into());
             }
             if body["kind"] == "complete" && slots.len() != 1 {
                 return Err("a complete pose already contains its head, eyes and limbs".into());
@@ -593,6 +710,29 @@ mod tests {
             .pop();
         assert!(Composition::parse(&json).unwrap_err().contains("pair"));
     }
+    #[test]
+    fn fixed_hands_and_wave_opt_in_are_independent_validated_choices() {
+        let mut composition = fixture();
+        composition.poses.get_mut("sit").unwrap()["hands"] = json!("embedded");
+        composition.poses.get_mut("sit").unwrap()["wave"] = json!(true);
+        assert!(composition.compile((100, 100)).is_err());
+        composition.poses.get_mut("sit").unwrap()["hands"] = json!("movable");
+        composition.poses.get_mut("sit").unwrap()["wave"] = json!(false);
+        assert!(
+            !composition.wave_enabled("sit"),
+            "an arm layer alone never overrides explicit disabled wave"
+        );
+        composition.compile((100, 100)).unwrap();
+        composition.poses.get_mut("sit").unwrap()["wave"] = json!(true);
+        assert!(composition.wave_enabled("sit"));
+        composition.compile((100, 100)).unwrap();
+        composition.poses.get_mut("sit").unwrap()["slots"]
+            .as_object_mut()
+            .unwrap()
+            .remove("holding_arm");
+        assert!(composition.compile((100, 100)).is_err());
+    }
+
     #[test]
     fn embedded_face_cannot_stack_a_second_eye_pair() {
         let mut composition = fixture();

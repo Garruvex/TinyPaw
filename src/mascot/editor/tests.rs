@@ -783,3 +783,59 @@ fn copied_pose_owns_its_arms_and_joint_edits_are_local_even_for_reused_art() {
     assert!((reopened.library.as_ref().unwrap().composition.poses["stand"]["slots"]["holding_arm"]["pivot"][0].as_f64().unwrap()-0.6).abs()<0.0001);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn fixed_hands_hide_attachments_and_restoring_them_does_not_enable_wave() {
+    let dir = std::env::temp_dir().join(format!("tinypaw-hand-options-{}", std::process::id()));
+    let (root, character) = test_install_folder(&dir, OnDuplicate::Ask);
+    let mut editor = Editor::open_in(&root, &character).unwrap();
+    editor.parts.push(EditPart {
+        name: "Arm".into(),
+        kind: PartType::HoldingArm,
+        layer: editor.body.clone(),
+        pivot: (0.5, 0.5),
+        on_head: false,
+        behind: false,
+        motion: MotionSpec::default_for(PartType::HoldingArm),
+        faces: Default::default(),
+    });
+    editor.library_action(LibraryAction::Upgrade).unwrap();
+    editor.library_action(LibraryAction::Hands(false)).unwrap();
+    let library = editor.library.as_ref().unwrap();
+    assert!(!library.composition.movable_hands("sit"));
+    assert!(!library.composition.wave_enabled("sit"));
+    assert!(library.composition.poses["sit"]["slots"]["holding_arm"].is_null());
+    editor.library_action(LibraryAction::Hands(true)).unwrap();
+    assert!(
+        editor
+            .library
+            .as_ref()
+            .unwrap()
+            .composition
+            .movable_hands("sit")
+    );
+    assert!(
+        !editor
+            .library
+            .as_ref()
+            .unwrap()
+            .composition
+            .wave_enabled("sit")
+    );
+    assert!(
+        !editor.library.as_ref().unwrap().composition.poses["sit"]["slots"]["holding_arm"]
+            .is_null()
+    );
+    editor.library_action(LibraryAction::Hands(false)).unwrap();
+    let saved = editor.save_into(&root).unwrap();
+    let reopened = Editor::open_in(&root, &saved).unwrap();
+    assert!(
+        !reopened
+            .library
+            .as_ref()
+            .unwrap()
+            .composition
+            .movable_hands("sit")
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -6,6 +6,18 @@ This is the main roadmap for consolidating TinyPaw's character artwork, editor a
 
 The earlier creation, creator UI, behavior, sleep, alignment and bop plans provide historical decisions and supporting detail. For shared artwork, pose composition, editor organization and prompt requirements, this plan and the artwork rules take precedence.
 
+## Standing face restoration — 16 November 2026
+
+Standing uses `head.stand` / `music/standing-head-v2.png` at its original canvas coordinates and scale, with neck pivot (470, 570) on the 1024 stage. Its painted eye pair is the only active eye system for that pose; the sitting tracking eyes are not assigned to standing. Sitting retains its own head, eye set and original painted paws. A regression check covers the distinct head assignment, native transform, and absence of an extra standing eye overlay.
+
+## Current decision — fixed or movable hands
+
+Yohta sitting has been restored to its original `sit/body.png` with painted paws. Separate seated arm/item assignments are removed from the active recipe, and Wave is disabled. Head nodding, eye tracking/blink and tail motion remain available.
+
+Each pose now has an independent hand option and Wave permission. The editor hides arm controls for fixed hands, validates compatible body/attachments, and requires a deliberate Wave opt-in. Explicit and Random music playback use the visible pose's permissions. New reference prompts keep sitting paws painted by default; separate sitting hands are optional.
+
+The [authored pose-set design](character-pose-set-design.md) defines the complete workflow and the remaining architectural stages. It takes precedence over earlier suggestions to require arms or waving on every posture.
+
 ## Posture and face correction — 16 November 2026
 
 The earlier proposal reused too much artwork across postures. The deduplication requirement is **one active face and one eye pair within each pose**, not identical limbs across different poses.

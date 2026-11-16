@@ -8,22 +8,50 @@ fn mohawk_yohta_artwork_covers_reactions_and_sleep_positions() {
     manifest.validate_files(&source).unwrap();
     assert_eq!(manifest.bop, Some(Bop::LightWave));
     assert_eq!(manifest.lines.total(), 74);
-    assert_eq!(manifest.default_pose().body, "music/body.png");
+    assert_eq!(manifest.default_pose().body, "sit/body.png");
+    assert_eq!(
+        manifest.default_pose().parts.len(),
+        2,
+        "sitting retains its original body/paws, head and tail"
+    );
     assert!(
         manifest.music_art.is_none(),
         "standing uses the ordinary pose renderer"
     );
     let composition = manifest.composition.as_ref().unwrap();
-    for slot in ["head", "eyes", "phone", "glow_stick"] {
-        assert_eq!(
-            super::super::composition::Composition::variant_id(
-                &composition.poses["sit"]["slots"][slot]
-            ),
-            super::super::composition::Composition::variant_id(
-                &composition.poses["stand"]["slots"][slot]
-            )
-        );
-    }
+    let standing = &composition.poses["stand"]["slots"];
+    assert_eq!(
+        super::super::composition::Composition::variant_id(&standing["head"]),
+        Some("head.stand")
+    );
+    assert!(
+        standing["eyes"].is_null(),
+        "standing's painted eye pair must not receive the sitting eyes"
+    );
+    assert_eq!(
+        composition.variants["head.stand"]["image"],
+        "music/standing-head-v2.png"
+    );
+    let stand = manifest
+        .poses
+        .iter()
+        .find(|pose| pose.name == "stand")
+        .unwrap();
+    let head = stand
+        .parts
+        .iter()
+        .find(|part| part.kind == PartType::Head)
+        .unwrap();
+    assert_eq!(head.pivot, (470.0 / 1024.0, 570.0 / 1024.0));
+    assert!(stand.eyes.is_empty());
+    let placement = composition
+        .image_placement("stand", "music/standing-head-v2.png", manifest.canvas)
+        .unwrap();
+    assert_eq!(
+        placement,
+        super::super::placement::Placement::default(),
+        "original standing head keeps its native scale and stage position"
+    );
     for slot in ["left_arm", "right_arm", "holding_arm", "grip"] {
         assert_ne!(
             super::super::composition::Composition::variant_id(
@@ -423,7 +451,7 @@ fn reference_prompt_folders_pass_import_with_every_requested_image_mapped() {
         request.validate_folder(&source).unwrap();
         prepare_folder_into(&dir.join("library"), &source, None).unwrap();
         let mut changed: Json = serde_json::from_str(json).unwrap();
-        changed["composition"]["poses"]["sit"]["slots"]["phone"]["parent"] = json!("missing-arm");
+        changed["composition"]["poses"]["stand"]["slots"]["phone"]["parent"] = json!("missing-arm");
         fs::write(source.join("character.json"), changed.to_string()).unwrap();
         assert!(
             request.validate_folder(&source).is_err(),
@@ -433,7 +461,7 @@ fn reference_prompt_folders_pass_import_with_every_requested_image_mapped() {
 
         let mut changed: Json = serde_json::from_str(json).unwrap();
         changed["composition"]["poses"]["stand"]["slots"]["left_arm"] =
-            changed["composition"]["poses"]["sit"]["slots"]["left_arm"].clone();
+            changed["composition"]["poses"]["stand"]["slots"]["right_arm"].clone();
         fs::write(source.join("character.json"), changed.to_string()).unwrap();
         assert!(
             request.validate_folder(&source).is_err(),
@@ -1431,6 +1459,7 @@ fn render_shared_composition_review() {
                     bop: style,
                     music_items: rig.music_items(),
                     seated_wave: rig.seated_wave(),
+                    wave_capabilities: rig.wave_capabilities(),
                     dance: Dance {
                         pose: if standing { 2 } else { 1 },
                         ..Default::default()
@@ -1474,7 +1503,11 @@ fn install_prepared_shared_review() {
     };
     let rig = character.rig().unwrap();
     assert!(rig.eye_point().is_some());
-    assert!(rig.seated_wave());
+    assert!(
+        !rig.seated_wave(),
+        "the restored seated pose has fixed paws"
+    );
+    assert_eq!(rig.wave_capabilities(), Some([false, true]));
     assert_eq!(character.pack_lines().total(), manifest.lines.total());
 }
 
@@ -1510,6 +1543,7 @@ fn render_pose_arm_review() {
                             Bop::LightWave
                         },
                         seated_wave: rig.seated_wave(),
+                        wave_capabilities: rig.wave_capabilities(),
                         beat: Some((n % 30) as f32 / 30.0),
                         dt: 1.0 / 60.0,
                         dance: Dance {

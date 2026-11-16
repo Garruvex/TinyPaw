@@ -281,9 +281,7 @@ fn character_body<'a>(
         return (page.push(body).into(), side);
     }
     if tab.is_behavior() {
-        page = page.push(hint(
-            "This opens once the character's preview is ready.",
-        ));
+        page = page.push(hint("This opens once the character's preview is ready."));
         return (page.into(), side);
     }
     if tab == CharacterTab::Library || v.character_draft.is_some() {

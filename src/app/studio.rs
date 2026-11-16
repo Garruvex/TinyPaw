@@ -566,20 +566,20 @@ impl App {
                 }
             }
             Message::DraftRig(request, rig) => {
-                if request == self.studio.draft_rig_request {
-                    if let Some(e) = &mut self.studio.art {
-                        if let Some(library) = &mut e.library {
-                            library.preview = rig.arrange.unwrap_or_else(|| rig.rig.clone());
-                        }
-                        if let Some(p) = &mut self.studio.motion_preview {
-                            if p.id == e.id {
-                                p.set_rig(rig.rig);
-                                if let Some((config, pictures)) = rig.reactions {
-                                    p.set_pack_reactions(config);
-                                    for (file, image) in pictures {
-                                        p.add_art_picture(file, &image);
-                                    }
-                                }
+                if request == self.studio.draft_rig_request
+                    && let Some(e) = &mut self.studio.art
+                {
+                    if let Some(library) = &mut e.library {
+                        library.preview = rig.arrange.unwrap_or_else(|| rig.rig.clone());
+                    }
+                    if let Some(p) = &mut self.studio.motion_preview
+                        && p.id == e.id
+                    {
+                        p.set_rig(rig.rig);
+                        if let Some((config, pictures)) = rig.reactions {
+                            p.set_pack_reactions(config);
+                            for (file, image) in pictures {
+                                p.add_art_picture(file, &image);
                             }
                         }
                     }

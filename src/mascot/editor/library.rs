@@ -34,10 +34,14 @@ pub enum LibraryAction {
     NewVariant(String),
     NewPose(String),
     Placement(String, usize, f32),
+    // Handled and tested, but nothing in the studio offers it yet.
+    #[allow(dead_code)]
     Pivot(usize, f32),
     Joint(String, usize, f32),
     Parent(String, String),
     EyeTravel(usize, usize, f32),
+    Hands(bool),
+    Wave(bool),
 }
 
 impl LibraryDraft {
@@ -222,6 +226,60 @@ impl LibraryDraft {
         use serde_json::json;
         match action {
             LibraryAction::Upgrade => {}
+            LibraryAction::Wave(enabled) => {
+                self.composition
+                    .poses
+                    .get_mut(&self.pose)
+                    .ok_or("pose is gone")?["wave"] = json!(enabled);
+            }
+            LibraryAction::Hands(movable) => {
+                let slots = [
+                    "left_arm",
+                    "right_arm",
+                    "holding_arm",
+                    "grip",
+                    "phone",
+                    "glow_stick",
+                    "phone_glow",
+                    "stick_glow",
+                ];
+                let pose = self
+                    .composition
+                    .poses
+                    .get_mut(&self.pose)
+                    .ok_or("pose is gone")?;
+                if !movable {
+                    let mut saved = serde_json::Map::new();
+                    let assignments = pose["slots"].as_object_mut().ok_or("pose needs slots")?;
+                    for slot in slots {
+                        if let Some(value) = assignments.remove(slot) {
+                            saved.insert(slot.into(), value);
+                        }
+                    }
+                    if !saved.is_empty() {
+                        pose["inactive_hands"] = json!(saved);
+                    }
+                } else if let Some(saved) = pose["inactive_hands"].as_object().cloned() {
+                    pose["slots"]
+                        .as_object_mut()
+                        .ok_or("pose needs slots")?
+                        .extend(saved);
+                    pose.as_object_mut().unwrap().remove("inactive_hands");
+                }
+                pose["hands"] = json!(if movable { "movable" } else { "embedded" });
+                pose["wave"] = json!(false);
+                let mode = pose["hands"].as_str().unwrap();
+                if let Some((id, _)) = self.composition.variants.iter().find(|(_, v)| {
+                    v["kind"] == "body" && v["pose"] == self.pose && v["hands"] == mode
+                }) {
+                    let body = &mut pose["slots"]["body"];
+                    if body.is_string() {
+                        *body = json!(id);
+                    } else {
+                        body["variant"] = json!(id);
+                    }
+                }
+            }
             LibraryAction::Pose(name) => {
                 if !self.composition.poses.contains_key(&name) {
                     return Err("pose is gone".into());
@@ -376,6 +434,7 @@ impl LibraryDraft {
                         assignment["variant"] = json!(id);
                     }
                 }
+                recipe["wave"] = json!(false);
                 self.composition.poses.insert(name.clone(), recipe);
                 self.pose = name;
             }

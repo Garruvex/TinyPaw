@@ -11,7 +11,7 @@ impl App {
         std::thread::spawn(move || {
             let _ = tx.send(draft.draft_artwork());
         });
-        return Task::perform(rx, move |result| match result {
+        Task::perform(rx, move |result| match result {
             Ok(rig) => Message::DraftRig(request, Box::new(rig)),
             Err(_) => Message::DraftRig(
                 0,
@@ -21,7 +21,7 @@ impl App {
                     reactions: None,
                 }),
             ),
-        });
+        })
     }
 
     /// Art tab edits.
