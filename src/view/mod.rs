@@ -170,6 +170,7 @@ pub enum UiMsg {
     GripEdit,
     GripSet(Option<[f32; 2]>),
     ReactionPlace(crate::mascot::reactions::Event, bool, usize, f32),
+    ArtLibrary(crate::mascot::editor::LibraryAction),
     ArtEyeStyle(crate::mascot::editor::EyeStyle),
     ArtField(usize, String),
     ArtCanvas(usize, String),

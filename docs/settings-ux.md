@@ -271,3 +271,16 @@ Remove of library characters from Settings, and the Character studio layout.
 Differs from the mockup: Sensitivity, Timing and Engine are three rows, not
 three dropdowns on one line, and Stand at energy and the Dancing section are
 kept (the mockup left them out).
+
+### Character studio, toward the mockup
+
+- A toolbar under the header holds the Character / Pointer switch and the
+  character picker; "Unsaved changes", Discard and Save show there when there
+  is something to save. The left "Editors" navigation and the in-page save bar
+  are gone.
+- The preview sits on the left and stays beside whichever tab is open. The
+  pointer editor keeps its panel on the right.
+- Six tabs: Library, Artwork, Reactions, Speech, Motion, Advanced. Behavior is
+  split into the middle three. Lines for petting, sleep, wake and neighbours
+  stay in Reactions beside those settings, which differs from the mockup.
+- Each group sits on a card, as in Settings.

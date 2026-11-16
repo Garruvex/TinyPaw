@@ -255,7 +255,7 @@ impl App {
                     ));
                 }
                 self.notice = Some(notes.join(" "));
-                self.character_tab = view::settings::CharacterTab::Behavior;
+                self.character_tab = view::settings::CharacterTab::Speech;
                 Task::none()
             }
             Some(choose @ Transfer::Choose { .. }) => {
@@ -566,12 +566,23 @@ impl App {
                 }
             }
             Message::DraftRig(request, rig) => {
-                if request == self.studio.draft_rig_request
-                    && let Some(e) = &self.studio.art
-                    && let Some(p) = &mut self.studio.motion_preview
-                    && p.id == e.id
-                {
-                    p.set_rig(*rig);
+                if request == self.studio.draft_rig_request {
+                    if let Some(e) = &mut self.studio.art {
+                        if let Some(library) = &mut e.library {
+                            library.preview = rig.arrange.unwrap_or_else(|| rig.rig.clone());
+                        }
+                        if let Some(p) = &mut self.studio.motion_preview {
+                            if p.id == e.id {
+                                p.set_rig(rig.rig);
+                                if let Some((config, pictures)) = rig.reactions {
+                                    p.set_pack_reactions(config);
+                                    for (file, image) in pictures {
+                                        p.add_art_picture(file, &image);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Message::CharacterExportPicked(Some(into)) => {
@@ -606,6 +617,12 @@ impl App {
                     let id = self.begin_character_job();
                     tasks.push(character_work(id, move || {
                         let errors = editor.set_images(target, paths);
+                        if editor.library.is_some() {
+                            let rig = editor.draft_rig();
+                            if let Some(library) = &mut editor.library {
+                                library.preview = rig;
+                            }
+                        }
                         Ok(CharacterWork::Editor(Box::new(editor), errors))
                     }));
                 }
@@ -729,7 +746,7 @@ impl App {
                 self.character_tab = tab;
                 // Test character shows the unsaved artwork: build it on a
                 // worker by revision, keeping the last preview meanwhile.
-                if tab == CharacterTab::Behavior
+                if tab.is_behavior()
                     && let Some(e) = self.studio.art.clone()
                     && self
                         .studio
@@ -742,11 +759,18 @@ impl App {
                     let request = self.studio.draft_rig_request;
                     let (tx, rx) = iced::futures::channel::oneshot::channel();
                     std::thread::spawn(move || {
-                        let _ = tx.send(e.draft_rig());
+                        let _ = tx.send(e.draft_artwork());
                     });
                     return Task::perform(rx, move |r| match r {
                         Ok(rig) => Message::DraftRig(request, Box::new(rig)),
-                        Err(_) => Message::DraftRig(0, Box::new(crate::mascot::rig::Rig::load())),
+                        Err(_) => Message::DraftRig(
+                            0,
+                            Box::new(crate::mascot::editor::DraftArtwork {
+                                rig: crate::mascot::rig::Rig::load(),
+                                arrange: None,
+                                reactions: None,
+                            }),
+                        ),
                     });
                 }
                 // Artwork and Advanced open the editor for an installed

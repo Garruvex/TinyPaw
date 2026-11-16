@@ -97,7 +97,7 @@ pub(super) fn reference_panel<'a>(
             h2("Features to create"),
             hint("Each choice adds every required image and its mapping to the folder prompt."),
             checkbox(r.tracking).label("Create tracking eyes (background, pupil and mask for each eye, plus a separate head)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceTracking(on))).into(),
-            checkbox(r.dance).label("Create music gestures (separate arms, holding hand, phone and glow stick)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceDance(on))).into(),
+            checkbox(r.dance).label("Create sitting and standing music poses (own arms and joints, one face/eye pair per pose)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceDance(on))).into(),
             checkbox(r.head).label("Create a head that bops to music (separate head and neck pivot)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceHead(on))).into(),
             checkbox(r.tail).label("Create a moving tail (separate tail and attachment pivot)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceTail(on))).into(),
             checkbox(r.eyes).label("Separate eyes (left and right eye images)").text_size(13).on_toggle(|on| Message::Ui(UiMsg::ReferenceEyes(on))).into(),

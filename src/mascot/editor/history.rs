@@ -5,6 +5,7 @@ use super::*;
 impl Editor {
     pub(super) fn snapshot(&self) -> Snapshot {
         Snapshot {
+            library: self.library.clone(),
             body: self.body.clone(),
             parts: self.parts.clone(),
             eyes: self.eyes.clone(),
@@ -16,6 +17,7 @@ impl Editor {
     }
 
     pub(super) fn restore(&mut self, s: Snapshot) {
+        self.library = s.library;
         self.body = s.body;
         self.parts = s.parts;
         self.eyes = s.eyes;

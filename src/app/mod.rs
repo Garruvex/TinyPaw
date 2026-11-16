@@ -69,7 +69,7 @@ pub enum Message {
     ReferencePicked(Option<PathBuf>),
     ReferenceResults(Vec<PathBuf>),
     /// The artwork draft built as a rig for Test character, by request.
-    DraftRig(u64, Box<crate::mascot::rig::Rig>),
+    DraftRig(u64, Box<crate::mascot::editor::DraftArtwork>),
     CharacterExportPicked(Option<PathBuf>),
     /// A dialogue file to import.
     DialoguePicked(Option<PathBuf>),

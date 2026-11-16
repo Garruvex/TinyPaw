@@ -33,6 +33,9 @@ pub struct Rig {
     /// what the character's Size measures, without transparent padding.
     visible: (f32, f32),
     music: Option<MusicRig>,
+    standing: Option<Box<Rig>>,
+    standing_slots: Vec<usize>,
+    extra_parts: Vec<PartMotion>,
 }
 
 #[derive(Debug, Clone)]
@@ -349,6 +352,9 @@ impl Rig {
             motion: vec![MotionSpec::of(Preset::Tilt)],
             bop: Bop::default(),
             music: None,
+            standing: None,
+            standing_slots: Vec::new(),
+            extra_parts: Vec::new(),
         }
     }
 
@@ -410,7 +416,73 @@ impl Rig {
             size,
             silhouettes,
             music: None,
+            standing: None,
+            standing_slots: Vec::new(),
+            extra_parts: Vec::new(),
         }
+    }
+
+    /// Ordinary standing composition, with a stable union of animation slots.
+    pub fn set_standing_pose(&mut self, standing: Rig) {
+        let base = self.motion_parts();
+        let mut union = base.clone();
+        let parts = standing.motion_parts();
+        let mut counts = Vec::<(PartType, usize)>::new();
+        let mut slots = Vec::new();
+        for part in &parts {
+            let ordinal = counts
+                .iter()
+                .find(|(kind, _)| *kind == part.kind)
+                .map_or(0, |(_, n)| *n);
+            let slot = union
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.kind == part.kind)
+                .nth(ordinal)
+                .map(|(n, _)| n)
+                .unwrap_or_else(|| {
+                    union.push(*part);
+                    union.len() - 1
+                });
+            if let Some((_, n)) = counts.iter_mut().find(|(kind, _)| *kind == part.kind) {
+                *n += 1;
+            } else {
+                counts.push((part.kind, 1));
+            }
+            slots.push(slot);
+        }
+        self.extra_parts = union[base.len()..].to_vec();
+        for (n, part) in parts.iter().enumerate() {
+            if slots[n] >= base.len() {
+                self.extra_parts[slots[n] - base.len()].parent = part.parent.map(|p| slots[p]);
+            }
+        }
+        self.motion.extend(self.extra_parts.iter().map(|p| p.spec));
+        self.standing_slots = slots;
+        self.standing = Some(Box::new(standing));
+    }
+
+    fn standing_pose(&self, pose: &Pose) -> Option<&Rig> {
+        ((pose.music_active || pose.music_mix.is_some_and(|mix| mix > 0.001))
+            && pose.carry.is_none()
+            && !matches!(
+                pose.expression,
+                Expression::Pressed | Expression::Dragging | Expression::Petted
+            ))
+        .then_some(self.standing.as_deref())
+        .flatten()
+    }
+
+    fn standing_angles(&self, pose: &Pose) -> Pose {
+        let mut resolved = pose.clone();
+        resolved.angles = self
+            .standing_slots
+            .iter()
+            .map(|slot| pose.angles.get(*slot).copied().unwrap_or_default())
+            .collect();
+        resolved.music_active = false;
+        resolved.music_mix = None;
+        resolved
     }
 
     pub fn set_music_art(
@@ -455,7 +527,25 @@ impl Rig {
         Ok(())
     }
 
+    pub fn seated_wave(&self) -> bool {
+        match &self.kind {
+            Kind::Layered { parts, .. } => {
+                parts.iter().any(|p| p.kind == PartType::HoldingArm)
+                    && parts
+                        .iter()
+                        .any(|p| matches!(p.kind, PartType::Phone | PartType::GlowStick))
+            }
+            _ => false,
+        }
+    }
+
     pub fn music_items(&self) -> u8 {
+        if let Some(standing) = &self.standing {
+            let parts = standing.motion_parts();
+            return 4
+                | u8::from(parts.iter().any(|p| p.kind == PartType::Phone))
+                | (u8::from(parts.iter().any(|p| p.kind == PartType::GlowStick)) << 1);
+        }
         if self.music.is_some() { 3 } else { 0 }
     }
 
@@ -476,7 +566,7 @@ impl Rig {
             Kind::Sprite(_) => (vec![PartType::Head], vec![None]),
             Kind::Layered { parts, .. } => parts.iter().map(|p| (p.kind, p.parent)).unzip(),
         };
-        kinds
+        let mut parts: Vec<_> = kinds
             .into_iter()
             .zip(parents)
             .zip(&self.motion)
@@ -485,19 +575,23 @@ impl Rig {
                 spec: *spec,
                 parent,
             })
-            .collect()
+            .collect();
+        for (n, part) in self.extra_parts.iter().enumerate() {
+            parts.push(PartMotion {
+                spec: self.motion.get(parts.len()).copied().unwrap_or(part.spec),
+                ..self.extra_parts[n]
+            });
+        }
+        parts
     }
 
     /// What the Motion tab calls each moving part, in `motion_parts` order.
     pub fn motion_labels(&self) -> Vec<String> {
-        match &self.kind {
-            Kind::Sprite(_) => vec!["Whole character".into()],
-            Kind::Layered { parts, .. } => parts
-                .iter()
-                .enumerate()
-                .map(|(i, p)| format!("{} {}", i + 1, p.kind))
-                .collect(),
-        }
+        self.motion_parts()
+            .iter()
+            .enumerate()
+            .map(|(i, p)| format!("{} {}", i + 1, p.kind))
+            .collect()
     }
 
     /// The current motion per part.
@@ -537,6 +631,21 @@ impl Rig {
     }
 
     /// The point between the eyes, in rig pixels, for gaze.
+    pub fn eye_point_for_pose(&self, pose: &Pose) -> Option<Point> {
+        if let Some(standing) = self.standing_pose(pose) {
+            if pose
+                .music_mix
+                .unwrap_or(if pose.music_active { 1.0 } else { 0.0 })
+                >= 0.5
+            {
+                return standing
+                    .eye_point()
+                    .map(|p| p + (self.anchor - standing.anchor));
+            }
+        }
+        self.eye_point()
+    }
+
     pub fn eye_point(&self) -> Option<Point> {
         match &self.kind {
             Kind::Sprite(_) => None,
@@ -552,13 +661,30 @@ impl Rig {
     }
 
     pub fn visible_bounds(&self) -> Rectangle {
-        self.silhouettes
+        let bounds = self
+            .silhouettes
             .iter()
             .filter_map(|s| s.bounds)
             .reduce(|a, b| a.union(&b))
-            .unwrap_or(Rectangle::new(Point::ORIGIN, self.size))
+            .unwrap_or(Rectangle::new(Point::ORIGIN, self.size));
+        if let Some(standing) = &self.standing {
+            let mut other = standing.visible_bounds();
+            other.x += self.anchor.x - standing.anchor.x;
+            other.y += self.anchor.y - standing.anchor.y;
+            bounds.union(&other)
+        } else {
+            bounds
+        }
     }
     pub fn pet_region(&self, p: Point, pose: &Pose) -> bool {
+        if let Some(standing) = self.standing_pose(pose) {
+            if pose.music_mix.unwrap_or(1.0) >= 0.5 {
+                return standing.pet_region(
+                    p - (self.anchor - standing.anchor),
+                    &self.standing_angles(pose),
+                );
+            }
+        }
         let hit = self.hit(p, pose);
         if let Some(music) = self.music_pose(pose) {
             return hit.is_some() && p.y < music.pivot.y;
@@ -566,13 +692,16 @@ impl Rig {
         if let Kind::Layered { parts, .. } = &self.kind
             && let Some(head) = parts.iter().position(|p| p.kind == PartType::Head)
         {
-            return matches!(hit,Some(Layer::Part(i)) if i==head || parts[i].parent==Some(head));
+            return matches!(hit,Some(Layer::Part(i)) if i==head || parts.get(i).is_some_and(|part|part.parent==Some(head)));
         }
         hit.is_some()
     }
 
     /// The head's rotation in `pose`, which the gaze is counter-rotated by.
     pub fn head_angle(&self, pose: &Pose) -> f32 {
+        if let Some(standing) = self.standing_pose(pose) {
+            return standing.head_angle(&self.standing_angles(pose));
+        }
         let index = match &self.kind {
             Kind::Sprite(_) => None,
             Kind::Layered { parts, .. } => parts.iter().position(|p| p.kind == PartType::Head),
@@ -586,6 +715,18 @@ impl Rig {
     /// Draws one frame. Lean and squash are applied by the host around the
     /// feet; this draws the character itself in rig coordinates.
     pub fn draw_pose<S: Surface>(&self, frame: &mut S, pose: &Pose) {
+        if let Some(standing) = self.standing_pose(pose) {
+            let opacity = pose.music_mix.unwrap_or(1.0).clamp(0.0, 1.0);
+            if opacity < 1.0 {
+                self.draw_rest_pose(frame, pose, 1.0 - opacity);
+            }
+            let resolved = self.standing_angles(pose);
+            frame.with_save(|f| {
+                f.translate(self.anchor - standing.anchor);
+                standing.draw_rest_pose(f, &resolved, opacity);
+            });
+            return;
+        }
         if let Some(music) = self.music_pose(pose) {
             let opacity = pose.music_mix.unwrap_or(1.0).clamp(0.0, 1.0);
             if opacity < 1.0 {
@@ -661,6 +802,7 @@ impl Rig {
         }
         if pose.light_lift > 0.0
             && self.music.is_none()
+            && self.standing.is_none()
             && !self
                 .motion_parts()
                 .iter()
@@ -724,6 +866,17 @@ impl Rig {
     /// part's rotation the way `draw_pose` applies it. The whole-character
     /// lean, squash and bounce are the host's (see `motion::unplaced`).
     pub fn hit(&self, p: Point, pose: &Pose) -> Option<Layer> {
+        if let Some(standing) = self
+            .standing_pose(pose)
+            .filter(|_| pose.music_mix.unwrap_or(1.0) >= 0.5)
+        {
+            let resolved = self.standing_angles(pose);
+            let layer = standing.hit(p - (self.anchor - standing.anchor), &resolved)?;
+            return Some(match layer {
+                Layer::Body => Layer::Body,
+                Layer::Part(n) => Layer::Part(self.standing_slots[n]),
+            });
+        }
         if let Some(music) = self
             .music_pose(pose)
             .filter(|_| pose.music_mix.unwrap_or(1.0) >= 0.5)
@@ -788,7 +941,7 @@ impl Rig {
         if music_opacity(part.kind, pose) <= 0.01 {
             return None;
         }
-        let offset = if is_wave_part(part.kind) {
+        let offset = if part.parent.is_none() && is_wave_part(part.kind) {
             hand_offset(pose, self.size)
         } else {
             Vector::ZERO
@@ -799,11 +952,13 @@ impl Rig {
             angle(index),
         );
         let children = |behind: bool| {
-            parts
+            let mut children: Vec<_> = parts
                 .iter()
                 .enumerate()
-                .rev()
-                .filter(move |(_, c)| c.parent == Some(index) && c.behind == behind)
+                .filter(|(_, c)| c.parent == Some(index) && c.behind == behind)
+                .collect();
+            children.sort_by_key(|(_, c)| layer_rank(c.kind));
+            children.into_iter().rev()
         };
         children(false)
             .find_map(|(i, _)| self.hit_part(parts, i, local, angle, drop, pose))
@@ -1103,7 +1258,7 @@ impl Layered<'_> {
         }
         let angle = self.pose.angles.get(index).copied().unwrap_or_default();
         frame.with_save(|f| {
-            if is_wave_part(p.kind) {
+            if p.parent.is_none() && is_wave_part(p.kind) {
                 f.translate(hand_offset(self.pose, self.size));
             }
             f.translate(Rig::shift(self.parts, index, self.drop));
@@ -1111,10 +1266,15 @@ impl Layered<'_> {
             f.rotate(angle);
             f.translate(Vector::new(-p.pivot.x, -p.pivot.y));
             let children = |f: &mut S, behind: bool| {
-                for (i, c) in self.parts.iter().enumerate() {
-                    if c.parent == Some(index) && c.behind == behind {
-                        self.part(f, i);
-                    }
+                let mut children: Vec<_> = self
+                    .parts
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.parent == Some(index) && c.behind == behind)
+                    .collect();
+                children.sort_by_key(|(_, c)| layer_rank(c.kind));
+                for (i, _) in children {
+                    self.part(f, i);
                 }
             };
             children(f, true);
@@ -1507,5 +1667,14 @@ mod reaction_hit_tests {
         assert!(picture.hit(stage, at));
         assert!(!picture.hit(stage, Point::ORIGIN));
         assert!(!picture.hit(stage, picture.in_stage(stage, Point::new(31.5, 40.5))));
+    }
+}
+
+fn layer_rank(kind: PartType) -> u8 {
+    match kind {
+        PartType::PhoneGlow | PartType::StickGlow => 1,
+        PartType::Phone | PartType::GlowStick => 2,
+        PartType::Grip => 3,
+        _ => 0,
     }
 }

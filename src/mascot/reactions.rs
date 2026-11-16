@@ -176,6 +176,8 @@ impl std::fmt::Display for Visual {
 /// in canvas fractions, so the creator can line poses up.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Art {
+    /// Named shared recipe, independent of the image used by its body.
+    pub pose: Option<String>,
     pub image: SoundRef,
     pub place: [f32; 3],
     /// Grip in full source-image fractions. None selects automatic placement.
@@ -187,6 +189,7 @@ pub struct Art {
 impl Art {
     pub fn new(image: SoundRef) -> Self {
         Self {
+            pose: None,
             image,
             place: [0.0, 0.0, 1.0],
             grip: None,
@@ -195,7 +198,7 @@ impl Art {
     }
 
     fn to_json(&self) -> Json {
-        json!({ "image": file_json(&self.image), "place": self.place, "grip": self.grip, "source_size": self.source_size })
+        json!({ "pose":self.pose, "image": file_json(&self.image), "place": self.place, "grip": self.grip, "source_size": self.source_size })
     }
 }
 
@@ -285,7 +288,15 @@ fn parse_art(v: &Json, user: bool) -> Result<Art, String> {
         }
         _ => return Err("source_size must be [width, height]".into()),
     };
+    let pose = match &v["pose"] {
+        Json::Null => None,
+        Json::String(name) if ["doze", "curled", "held"].contains(&name.as_str()) => {
+            Some(name.clone())
+        }
+        _ => return Err("unknown shared reaction pose".into()),
+    };
     Ok(Art {
+        pose,
         image,
         place,
         grip,

@@ -1224,7 +1224,7 @@ impl Desktop {
 
         // Looks at a neighbour when the user is not playing with this one.
         let look_at = self.attention(cursor, rect, k, o).unwrap_or(local);
-        self.target = match self.rig.eye_point() {
+        self.target = match self.rig.eye_point_for_pose(&self.pose) {
             Some(eye) if o.eyes => {
                 let eyes = self.layout.character.position()
                     + Vector::new(eye.x, eye.y) * self.layout.scale;
@@ -1513,6 +1513,7 @@ impl Desktop {
                 velocity,
                 music: if sleeping { 0.0 } else { o.music },
                 music_items: self.rig.music_items(),
+                seated_wave: self.rig.seated_wave(),
                 energy: o.energy,
                 beat: if sleeping { None } else { o.beat },
                 bop: o.bop.unwrap_or_else(|| self.rig.bop()),

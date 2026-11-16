@@ -4,6 +4,7 @@
 pub mod alignment;
 pub mod beat;
 pub mod companionship;
+pub mod composition;
 pub mod crowd;
 #[cfg(windows)]
 pub mod desktop;

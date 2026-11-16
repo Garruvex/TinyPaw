@@ -138,23 +138,6 @@ pub fn tool_button(tone: Tone) -> impl Fn(&Theme, button::Status) -> button::Sty
     }
 }
 
-/// Settings navigation rows.
-pub fn nav_button(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |_, status| {
-        let (bg, fg) = match (selected, status) {
-            (true, _) => (CYAN_BG, CYAN_TEXT),
-            (false, button::Status::Hovered) => (Color::from_rgba8(255, 255, 255, 0.05), SUBTLE),
-            _ => (Color::TRANSPARENT, SUBTLE),
-        };
-        button::Style {
-            background: Some(bg.into()),
-            text_color: fg,
-            border: border(8.0, 0.0, Color::TRANSPARENT),
-            ..button::Style::default()
-        }
-    }
-}
-
 /// Selectable cards (pointer, activation style).
 pub fn card(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {

@@ -198,6 +198,7 @@ pub enum Target {
     /// A head face: part index and face slot (blink, pressed, dragging).
     Face(usize, usize),
     Eye(usize, EyeSlot),
+    LibraryImage(usize, usize),
 }
 
 /// A continuous edit that undo restores as one step, however many
@@ -234,6 +235,7 @@ pub enum Background {
 }
 #[derive(Debug, Clone)]
 struct Snapshot {
+    library: Option<LibraryDraft>,
     body: Layer,
     parts: Vec<EditPart>,
     eyes: Vec<EditEye>,
@@ -251,6 +253,8 @@ const DEFAULT_TRAVEL: f32 = 0.012;
 
 #[derive(Debug, Clone)]
 pub struct Editor {
+    folder: std::path::PathBuf,
+    pub library: Option<LibraryDraft>,
     pub id: &'static str,
     pub name: String,
     pub canvas: (u32, u32),
@@ -347,6 +351,8 @@ impl Editor {
             });
         }
         let mut editor = Self {
+            folder: folder.clone(),
+            library: LibraryDraft::new(&m, &folder)?,
             id,
             name: m.name.clone(),
             canvas: m.canvas,
@@ -515,6 +521,12 @@ impl Editor {
         }
         self.checkpoint();
         match target {
+            Target::LibraryImage(variant, field) => {
+                self.library
+                    .as_mut()
+                    .ok_or("shared artwork is unavailable")?
+                    .replace(variant, field, layer, self.canvas)?;
+            }
             Target::Body => {
                 self.body = layer;
                 self.select(Selected::Body);
@@ -716,6 +728,14 @@ impl Editor {
     /// The draft as a rig, so Test character shows unsaved artwork. Baking
     /// every layer is slow, so callers run it on a worker.
     pub fn draft_rig(&self) -> super::rig::Rig {
+        if let Some(library) = &self.library {
+            if let Some(root) = pack::user_dir() {
+                return library
+                    .build(&root.join(self.id), &self.name, true)
+                    .unwrap_or_else(|_| library.preview.clone());
+            }
+        }
+
         use super::rig::{EyeArt, LayeredArt, PartArt, Rig};
         let bake = |l: &Layer| placement::bake(&l.image, l.placement, self.canvas);
         let ground = match self.rest {
@@ -915,6 +935,8 @@ impl Editor {
         );
         let id = crate::platform::intern(&pack::unique_id(root, &name, taken));
         let mut editor = Self {
+            folder: root.join(id),
+            library: None,
             id,
             name,
             canvas,
@@ -957,6 +979,21 @@ impl Editor {
         layers(&self.body, &self.parts, &self.eyes)
     }
     fn decoded_bytes(&self) -> u64 {
+        if let Some(library) = &self.library {
+            let mut seen = std::collections::HashSet::new();
+            return std::iter::once(library)
+                .chain(
+                    self.undo
+                        .iter()
+                        .chain(&self.redo)
+                        .filter_map(|snapshot| snapshot.library.as_ref()),
+                )
+                .flat_map(|library| library.image_sources())
+                .filter(|image| seen.insert(Arc::as_ptr(image)))
+                .map(|image| u64::from(image.width()) * u64::from(image.height()) * 8)
+                .sum();
+        }
+
         let mut seen = std::collections::HashSet::new();
         self.layers()
             .into_iter()
@@ -1153,6 +1190,10 @@ impl Editor {
     }
 
     pub fn validation_error(&self) -> Option<String> {
+        if let Some(library) = &self.library {
+            return library.error(&self.name);
+        }
+
         for text in &self.canvas_fields {
             if text
                 .parse::<u32>()
@@ -1329,6 +1370,8 @@ impl Editor {
 }
 
 mod history;
+mod library;
+pub use library::{DraftArtwork, LibraryAction, LibraryDraft};
 mod hit;
 mod save;
 

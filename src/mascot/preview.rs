@@ -103,7 +103,7 @@ pub struct MotionPreview {
     reactions_pack: Config,
     /// Decoded reaction pictures by file, for the draft's held pose and
     /// artwork reactions.
-    pictures: Vec<(super::lines::SoundRef, super::rig::Picture)>,
+    pictures: Vec<(super::lines::SoundRef, Option<String>, super::rig::Picture)>,
     /// A click on the preview sets where the bubble's tail aims.
     pub placing_bubble: bool,
     /// A still pose pinned on the shared stage while positioning its artwork.
@@ -282,7 +282,30 @@ impl MotionPreview {
     /// artwork draft, keeping the behavior draft. Motion carries over when
     /// the parts still line up; otherwise the new parts start from their
     /// own defaults.
+    pub fn set_pack_reactions(&mut self, config: Config) {
+        self.reactions_pack = config;
+    }
+
+    pub fn playback_status(&self) -> String {
+        let live = self.live.borrow();
+        format!(
+            "{} · {}",
+            if live.pose.music_active {
+                "Standing"
+            } else {
+                "Sitting"
+            },
+            live.animator.active_bop()
+        )
+    }
+
     pub fn set_rig(&mut self, mut rig: Rig) {
+        let changed = self.kinds
+            != rig
+                .motion_parts()
+                .iter()
+                .map(|part| part.kind)
+                .collect::<Vec<_>>();
         rig.set_bop(self.rig.bop());
         if !rig.set_motion(&self.specs) {
             self.specs = rig.motion().to_vec();
@@ -292,7 +315,9 @@ impl MotionPreview {
         self.labels = rig.motion_labels();
         self.kinds = rig.motion_parts().iter().map(|p| p.kind).collect();
         self.rig = rig;
-        self.live.get_mut().animator = Animator::default();
+        if changed {
+            self.live.get_mut().animator = Animator::default();
+        }
     }
 
     pub fn pose(&self) -> Pose {
@@ -409,22 +434,32 @@ impl MotionPreview {
 
     /// Makes a decoded reaction picture available to the preview.
     pub fn add_picture(&mut self, file: super::lines::SoundRef, pixels: &image::RgbaImage) {
-        self.pictures.retain(|(f, _)| *f != file);
-        self.pictures
-            .push((file, super::rig::Picture::new(pixels, [0.0, 0.0, 1.0])));
+        self.add_art_picture(super::reactions::Art::new(file), pixels);
     }
 
-    /// Every picture the draft's reactions name, for loading.
-    pub fn picture_files(&self) -> Vec<super::lines::SoundRef> {
-        let mut out: Vec<super::lines::SoundRef> = Vec::new();
-        for r in self
+    pub fn add_art_picture(&mut self, art: super::reactions::Art, pixels: &image::RgbaImage) {
+        self.pictures
+            .retain(|(file, pose, _)| *file != art.image || *pose != art.pose);
+        self.pictures.push((
+            art.image,
+            art.pose,
+            super::rig::Picture::new(pixels, [0.0, 0.0, 1.0]),
+        ));
+    }
+
+    pub fn picture_art(&self) -> Vec<super::reactions::Art> {
+        let mut out = Vec::new();
+        for art in self
             .reactions_pack
-            .images()
+            .artwork()
             .into_iter()
-            .chain(self.reactions.images())
+            .chain(self.reactions.artwork())
         {
-            if !out.contains(r) {
-                out.push(r.clone());
+            if !out
+                .iter()
+                .any(|old: &super::reactions::Art| old.image == art.image && old.pose == art.pose)
+            {
+                out.push(art.clone());
             }
         }
         out
@@ -435,8 +470,8 @@ impl MotionPreview {
         let mut picture = self
             .pictures
             .iter()
-            .find(|(f, _)| *f == art.image)?
-            .1
+            .find(|(file, pose, _)| *file == art.image && *pose == art.pose)?
+            .2
             .clone();
         picture.place = art.place;
         picture.preserve_aspect = art.source_size.is_some();
@@ -894,6 +929,7 @@ impl MotionPreview {
             beat,
             bop: self.rig.bop(),
             music_items: self.rig.music_items(),
+            seated_wave: self.rig.seated_wave(),
             energy: self.control.get().energy,
             dance: self.control.get().dance,
             ..Inputs::default()

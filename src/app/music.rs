@@ -369,10 +369,9 @@ impl App {
                     c.pack_reactions(),
                 ));
                 if let Some(p) = &mut self.studio.motion_preview {
-                    for file in p.picture_files() {
-                        let art = crate::mascot::reactions::Art::new(file.clone());
+                    for art in p.picture_art() {
                         if let Some(img) = c.reaction_image(&art) {
-                            p.add_picture(file, &img);
+                            p.add_art_picture(art, &img);
                         }
                     }
                 }

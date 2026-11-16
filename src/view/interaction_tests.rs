@@ -240,55 +240,82 @@ fn character_tabs_show_the_selected_controls_and_keep_the_preview_interactive() 
         Default::default(),
         Default::default(),
     );
-    let tabs = [CharacterTab::Library, CharacterTab::Behavior];
-    for tab in tabs {
+    let all = [
+        CharacterTab::Library,
+        CharacterTab::Artwork,
+        CharacterTab::Reactions,
+        CharacterTab::Speech,
+        CharacterTab::Motion,
+        CharacterTab::Advanced,
+    ];
+    let clicks = |tab: CharacterTab| {
         let mut view = settings_view(&registry, &session, &[], settings::Page::Character);
         view.motion = Some(&preview);
         view.character_tab = tab;
-        let messages = click_layout(settings::view(view), Size::new(1040.0, 4000.0));
-        for target in [
-            CharacterTab::Library,
-            CharacterTab::Artwork,
-            CharacterTab::Behavior,
-            CharacterTab::Advanced,
-        ] {
+        click_layout(settings::view(view), Size::new(1040.0, 6000.0))
+    };
+    let lines = |messages: &[Message]| -> Vec<crate::mascot::lines::Trigger> {
+        crate::mascot::lines::Trigger::ALL
+            .into_iter()
+            .filter(|t| {
+                let row = messages
+                    .iter()
+                    .any(|m| matches!(m, Message::Ui(UiMsg::LineAdd(x)) if x == t));
+                let try_ = messages.iter().any(|m| {
+                    matches!(m, Message::Ui(UiMsg::MotionTest(crate::mascot::preview::Test::Say(x))) if x == t)
+                });
+                assert_eq!(row, try_, "{t:?} has a row without Try, or Try without a row");
+                row
+            })
+            .collect()
+    };
+    let mut seen = Vec::new();
+    for tab in [
+        CharacterTab::Library,
+        CharacterTab::Reactions,
+        CharacterTab::Speech,
+        CharacterTab::Motion,
+    ] {
+        let messages = clicks(tab);
+        // Every tab is reachable from every tab.
+        for target in all {
             assert!(
                 messages
                     .iter()
-                    .any(|m| matches!(m, Message::Ui(UiMsg::CharacterTab(t)) if *t == target))
+                    .any(|m| matches!(m, Message::Ui(UiMsg::CharacterTab(t)) if *t == target)),
+                "{target:?} is not reachable from {tab:?}"
             );
         }
-        // Behavior has a row for every line trigger, each with Try.
-        for t in crate::mascot::lines::Trigger::ALL {
-            let row = messages
-                .iter()
-                .any(|m| matches!(m, Message::Ui(UiMsg::LineAdd(x)) if *x == t));
-            let try_ = messages.iter().any(|m| {
-                matches!(m, Message::Ui(UiMsg::MotionTest(crate::mascot::preview::Test::Say(x))) if *x == t)
-            });
-            assert_eq!(
-                (row, try_),
-                (tab == CharacterTab::Behavior, tab == CharacterTab::Behavior),
-                "{t:?}"
-            );
-        }
+        // The preview stays interactive beside every tab.
         assert!(
             messages
                 .iter()
                 .any(|m| matches!(m, Message::Ui(UiMsg::MotionTest(_))))
         );
+        let here = lines(&messages);
+        match tab {
+            CharacterTab::Library | CharacterTab::Motion => assert!(here.is_empty(), "{tab:?}"),
+            _ => assert!(!here.is_empty(), "{tab:?} has no lines"),
+        }
+        seen.extend(here);
         for (id, owner) in [
-            (mascot::LINES, CharacterTab::Behavior),
-            (mascot::MUSIC, CharacterTab::Behavior),
+            (mascot::LINES, CharacterTab::Speech),
+            (mascot::MUSIC, CharacterTab::Motion),
         ] {
             assert_eq!(
                 messages
                     .iter()
                     .any(|m| matches!(m, Message::Set(key, _) if *key == id)),
-                tab == owner
+                tab == owner,
+                "{id} on {tab:?}"
             );
         }
     }
+    // Between them, Reactions and Speech hold a row for every line trigger, once.
+    seen.sort_by_key(|t| t.label());
+    let mut every: Vec<_> = crate::mascot::lines::Trigger::ALL.into_iter().collect();
+    every.sort_by_key(|t| t.label());
+    assert_eq!(seen, every);
 }
 
 #[test]
@@ -313,7 +340,7 @@ fn one_save_and_the_leave_prompt_appear_only_with_unsaved_work() {
     let messages = |unsaved: bool, leaving: bool| {
         let mut view = settings_view(&registry, &session, &[], settings::Page::Character);
         view.motion = Some(&preview);
-        view.character_tab = CharacterTab::Behavior;
+        view.character_tab = CharacterTab::Speech;
         view.unsaved = unsaved;
         view.leaving = leaving;
         click_layout(settings::view(view), Size::new(1040.0, 1200.0))
@@ -429,7 +456,7 @@ fn character_screens_switch_without_mismatched_widget_state() {
     let tabs = [
         CharacterTab::Library,
         CharacterTab::Artwork,
-        CharacterTab::Behavior,
+        CharacterTab::Reactions,
         CharacterTab::Advanced,
     ];
     let screen = |n: usize| {

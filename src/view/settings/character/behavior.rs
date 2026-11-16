@@ -1,4 +1,4 @@
-//! Behavior tab: motion, music, sounds, speech and the motion preview.
+//! The Reactions, Speech and Motion tabs, and the Test character preview.
 
 use super::*;
 use iced::widget::{column, row};
@@ -83,32 +83,31 @@ pub(super) fn motion_section<'a>(
     ])
 }
 
-/// Behavior, grouped by the moment the creator is thinking about. Each
-/// event row is where its lines (and later its sound) are edited.
-pub(super) fn behavior_section<'a>(
+/// The name of the moment a group of rows is about.
+fn moment<'a>(label: &'static str) -> Element<'a, Message> {
+    text(label).font(theme::MEDIUM).size(13).into()
+}
+
+/// Reactions: what the character shows and plays when it is touched, petted
+/// or left alone.
+pub(super) fn reactions_tab<'a>(
     v: &SettingsView<'a>,
     m: &'a crate::mascot::preview::MotionPreview,
 ) -> Element<'a, Message> {
-    use crate::mascot::lines::Trigger;
-    let s = v.session.settings();
-    let mut own = column![event_row(m, Trigger::Idle)].spacing(16);
-    own = own.push(idle_interval(s));
-    own = own
-        .push(event_row(m, Trigger::MusicStart))
-        .push(event_row(m, Trigger::AnnotationEnd));
-    let muted = s.bool(crate::features::sound::MUTE_ALL);
+    let muted = v
+        .session
+        .settings()
+        .bool(crate::features::sound::MUTE_ALL);
     column![
-        character_sounds(m, muted),
-        companionship_section(m, muted),
         section(vec![
             h2("When touched"),
-            event_row(m, Trigger::Click),
+            moment("Click"),
             visual_row(m, Event::Click),
             sound_row(m, Event::Click, muted),
-            event_row(m, Trigger::Pickup),
+            moment("Pick up"),
             held_row(m),
             sound_row(m, Event::Pickup, muted),
-            event_row(m, Trigger::Drop),
+            moment("Drop"),
             visual_row(m, Event::Drop),
             row![
                 text("After release").size(12).color(theme::MUTED).width(84),
@@ -125,13 +124,53 @@ pub(super) fn behavior_section<'a>(
             .into(),
             sound_row(m, Event::Drop, muted),
         ]),
-        section(vec![h2("On its own"), own.into(), sound_row(m, Event::Idle, muted)]),
-        speech_options(v, m),
-        motion_section(m),
-        music_section(v),
+        section(vec![
+            h2("On its own"),
+            sound_row(m, Event::Idle, muted),
+        ]),
+        companionship_section(m, muted),
+        character_sounds(m, muted),
     ]
-    .spacing(22)
+    .spacing(16)
     .into()
+}
+
+/// Speech: the bubble, and the lines for each everyday moment. Lines for
+/// petting, sleep and neighbours sit with those reactions.
+pub(super) fn speech_tab<'a>(
+    v: &SettingsView<'a>,
+    m: &'a crate::mascot::preview::MotionPreview,
+) -> Element<'a, Message> {
+    use crate::mascot::lines::Trigger;
+    let s = v.session.settings();
+    column![
+        section(vec![
+            h2("When touched"),
+            event_row(m, Trigger::Click),
+            event_row(m, Trigger::Pickup),
+            event_row(m, Trigger::Drop),
+        ]),
+        section(vec![
+            h2("On its own"),
+            event_row(m, Trigger::Idle),
+            idle_interval(s),
+            event_row(m, Trigger::MusicStart),
+            event_row(m, Trigger::AnnotationEnd),
+        ]),
+        speech_options(v, m),
+    ]
+    .spacing(16)
+    .into()
+}
+
+/// Motion: how each part moves, and how the character moves to music.
+pub(super) fn motion_tab<'a>(
+    v: &SettingsView<'a>,
+    m: &'a crate::mascot::preview::MotionPreview,
+) -> Element<'a, Message> {
+    column![motion_section(m), music_section(v)]
+        .spacing(16)
+        .into()
 }
 
 use crate::mascot::reactions::{BUILTIN_SOUNDS, Event, Sound};
@@ -1414,6 +1453,13 @@ impl canvas::Program<Message> for MotionStage<'_> {
             &Path::rounded_rectangle(iced::Point::ORIGIN, size, 12.0.into()),
             theme::WELL,
         );
+        frame.fill_text(canvas::Text {
+            content: self.preview.playback_status(),
+            position: iced::Point::new(12.0, 20.0),
+            color: theme::MUTED,
+            size: 12.0.into(),
+            ..Default::default()
+        });
         let rig = self.preview.rig();
         let mut pose = self.preview.pose().clone();
         let canvas_size = rig.size();

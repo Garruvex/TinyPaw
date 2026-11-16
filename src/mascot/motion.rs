@@ -345,6 +345,7 @@ pub struct Inputs {
     pub energy: Option<f32>,
     /// Bit 0: authored phone arm; bit 1: authored glow-stick arm.
     pub music_items: u8,
+    pub seated_wave: bool,
     /// Where we are between followed beats (0 on the beat), while Follow
     /// beat has one; otherwise music bobs at a relaxed fixed pace.
     pub beat: Option<f32>,
@@ -443,6 +444,7 @@ struct Spring {
 #[derive(Debug, Clone, Default)]
 pub struct Animator {
     selected: Bop,
+    active_bop: Bop,
     random_slot: u32,
     random_ready: bool,
     random_seed: u64,
@@ -483,6 +485,9 @@ const MAX_DT: f32 = 0.1;
 const CLICK_FACE: f32 = 0.35;
 
 impl Animator {
+    pub fn active_bop(&self) -> Bop {
+        self.active_bop
+    }
     /// A click (press and release without dragging) just happened.
     pub fn clicked(&mut self, now: f32) {
         self.react_until = now + CLICK_FACE;
@@ -593,11 +598,14 @@ impl Animator {
             self.standing_mix = 0.0;
         }
 
-        let supports_wave = (i.music_items != 0 && self.standing)
-            || parts.iter().any(|p| p.kind == PartType::HoldingArm)
+        let supports_wave = if i.music_items != 0 {
+            (i.music_items & 3 != 0 && self.standing) || i.seated_wave
+        } else {
+            parts.iter().any(|p| p.kind == PartType::HoldingArm)
                 && parts
                     .iter()
-                    .any(|p| matches!(p.kind, PartType::Phone | PartType::GlowStick));
+                    .any(|p| matches!(p.kind, PartType::Phone | PartType::GlowStick))
+        };
         let slot = self.beats / i.dance.every.max(1);
         let old_style = self.selected;
         if i.bop != Bop::Random {
@@ -665,12 +673,17 @@ impl Animator {
         if self.selected != Bop::LightWave {
             self.item_ready = false;
         }
-        let bop = if self.selected == Bop::LightWave && i.music_items != 0 && !self.standing {
+        let bop = if self.selected == Bop::LightWave
+            && i.music_items != 0
+            && !self.standing
+            && !i.seated_wave
+        {
             Bop::Nod
         } else {
             self.selected
         };
 
+        self.active_bop = bop;
         if i.reduced {
             self.light_lift = 0.0;
         } else {
@@ -685,14 +698,29 @@ impl Animator {
             }
         }
 
+        let linked_wave = parts.iter().enumerate().any(|(index, part)| {
+            part.kind == PartType::HoldingArm
+                && parts.iter().any(|child| {
+                    child.parent == Some(index)
+                        && matches!(child.kind, PartType::Phone | PartType::GlowStick)
+                })
+        });
         let mut angles = vec![0.0; parts.len()];
         if !i.reduced {
             // Parents first, so a child knows how far its parent just moved.
-            let order = parts
-                .iter()
-                .enumerate()
-                .filter(|(_, p)| p.parent.is_none())
-                .chain(parts.iter().enumerate().filter(|(_, p)| p.parent.is_some()));
+            let mut order: Vec<_> = parts.iter().enumerate().collect();
+            order.sort_by_key(|(index, _)| {
+                let mut depth = 0;
+                let mut parent = parts[*index].parent;
+                while let Some(n) = parent.filter(|n| *n < parts.len()) {
+                    depth += 1;
+                    if depth >= parts.len() {
+                        break;
+                    }
+                    parent = parts[n].parent;
+                }
+                depth
+            });
             for (n, part) in order {
                 let spec = part.spec;
                 let t = i.now * spec.speed.clamp(0.0, 2.0);
@@ -717,10 +745,25 @@ impl Animator {
                         | PartType::PhoneGlow
                         | PartType::StickGlow
                 ) {
-                    self.light_lift
-                        * (-1.8
-                            + i.dance.hand_angle
-                            + (beat.two * std::f32::consts::PI).cos() * 0.45 * i.dance.wave_range)
+                    if part.parent.is_some() {
+                        // The shoulder carries the entire grip. Counter-turning
+                        // only the item twists it out of the paw/fingers.
+                        0.0
+                    } else {
+                        // A linked lowered arm needs an outward shoulder arc;
+                        // the legacy pre-raised artwork keeps its old envelope.
+                        let (raise, swing) = if linked_wave {
+                            (-1.25, 0.25)
+                        } else {
+                            (-1.8, 0.45)
+                        };
+                        self.light_lift
+                            * (raise
+                                + i.dance.hand_angle
+                                + (beat.two * std::f32::consts::PI).cos()
+                                    * swing
+                                    * i.dance.wave_range)
+                    }
                 } else {
                     (base + drag + music) * k
                 };
@@ -1778,6 +1821,47 @@ mod tests {
         }
         assert_eq!(pose.light_lift, 0.0);
         assert!(!animator.settling());
+    }
+
+    #[test]
+    fn linked_wave_keeps_item_and_fingers_in_the_same_hand_space() {
+        let parts: Vec<_> = [PartType::HoldingArm, PartType::Phone, PartType::Grip]
+            .into_iter()
+            .enumerate()
+            .map(|(n, kind)| PartMotion {
+                kind,
+                spec: MotionSpec::default_for(kind),
+                parent: if n == 0 { None } else { Some(0) },
+            })
+            .collect();
+        let mut animator = Animator::default();
+        for n in 0..240 {
+            let pose = animator.step(
+                &parts,
+                &Inputs {
+                    music: 1.0,
+                    bop: Bop::LightWave,
+                    seated_wave: true,
+                    beat: Some((n % 30) as f32 / 30.0),
+                    dt: 1.0 / 60.0,
+                    ..Default::default()
+                },
+            );
+            if n > 120 {
+                assert!(
+                    pose.angles[0] < -0.9 && pose.angles[0] > -1.6,
+                    "outward wave avoids folding the paw into the face"
+                );
+                assert!(
+                    pose.angles[1].abs() < 0.0001,
+                    "item inherits the shoulder once"
+                );
+                assert!(
+                    pose.angles[2].abs() < 0.0001,
+                    "fingers stay with the item and paw"
+                );
+            }
+        }
     }
 
     #[test]

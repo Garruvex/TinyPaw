@@ -191,6 +191,34 @@ impl Character {
             None => bundled_manifest().canvas,
             Some(folder) => read_manifest(folder).ok()?.canvas,
         };
+        if let (Some(folder), SoundRef::Pack(_file)) = (&self.folder, &art.image) {
+            let manifest = read_manifest(folder).ok()?;
+            if let Some(composition) = &manifest.composition {
+                if let Some(recipe) = art
+                    .pose
+                    .as_deref()
+                    .filter(|name| composition.poses.contains_key(*name))
+                {
+                    let pose = manifest.poses.iter().find(|p| p.name == recipe)?;
+                    let rig =
+                        build_pose_rig(&manifest, pose, &|asset| read_png(folder, asset, canvas))
+                            .ok()?;
+                    let mut raster = super::surface::Raster::new(canvas.0, canvas.1)?;
+                    rig.draw_pose(
+                        &mut raster,
+                        &super::motion::Pose {
+                            expression: if recipe == "held" {
+                                super::motion::Expression::Dragging
+                            } else {
+                                super::motion::Expression::Blink
+                            },
+                            ..Default::default()
+                        },
+                    );
+                    return RgbaImage::from_raw(canvas.0, canvas.1, raster.to_straight_rgba());
+                }
+            }
+        }
         let path = self.sound_path(&art.image)?;
         let bytes = fs::read(&path).ok()?;
         decode_png(
@@ -273,8 +301,34 @@ impl Character {
 }
 
 /// A rig from a manifest's default pose, reading images through `png`.
-fn build_rig(m: &Manifest, png: impl Fn(&str) -> Result<RgbaImage, String>) -> Result<Rig, String> {
-    let pose = m.default_pose();
+pub(in crate::mascot) fn build_rig(
+    m: &Manifest,
+    png: impl Fn(&str) -> Result<RgbaImage, String>,
+) -> Result<Rig, String> {
+    let mut rig = build_pose_rig(m, m.default_pose(), &png)?;
+    if m.composition.is_some() && m.default_pose != "stand" {
+        if let Some(standing) = m.poses.iter().find(|p| p.name == "stand") {
+            rig.set_standing_pose(build_pose_rig(m, standing, &png)?);
+        }
+    }
+    Ok(rig)
+}
+
+pub(in crate::mascot) fn build_pose_rig(
+    m: &Manifest,
+    pose: &Pose,
+    read: &impl Fn(&str) -> Result<RgbaImage, String>,
+) -> Result<Rig, String> {
+    let png = |asset: &str| {
+        let image = read(asset)?;
+        let placement = m
+            .composition
+            .as_ref()
+            .map(|c| c.image_placement(&pose.name, asset, m.canvas))
+            .transpose()?
+            .unwrap_or_default();
+        Ok::<_, String>(super::placement::bake(&image, placement, m.canvas))
+    };
     let body = png(&pose.body)?;
     if pose.parts.is_empty() && pose.eyes.is_empty() {
         let mut rig = Rig::sprite(body, pose.ground);
@@ -318,8 +372,16 @@ fn build_rig(m: &Manifest, png: impl Fn(&str) -> Result<RgbaImage, String>) -> R
     for eye in &pose.eyes {
         eyes.push(EyeArt {
             white: png(&eye.white)?,
-            pupil: png(&eye.pupil)?,
-            mask: png(&eye.mask)?,
+            pupil: if eye.static_image {
+                RgbaImage::new(m.canvas.0, m.canvas.1)
+            } else {
+                png(&eye.pupil)?
+            },
+            mask: if eye.static_image {
+                RgbaImage::new(m.canvas.0, m.canvas.1)
+            } else {
+                png(&eye.mask)?
+            },
             blink: eye.blink.as_deref().map(&png).transpose()?,
             max_offset: eye.max_offset,
         });
@@ -640,6 +702,7 @@ fn install_into_guarded(
         lines: Lines::default(),
         bop: None,
         music_art: None,
+        composition: None,
         reactions: super::reactions::new_character(),
     };
     let art = draft.art.clone();

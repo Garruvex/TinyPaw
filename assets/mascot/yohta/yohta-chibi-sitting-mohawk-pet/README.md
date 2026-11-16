@@ -1,3 +1,11 @@
+## Shared composition update — 16 November 2026
+
+`character.json` now contains the authoritative `composition` library. Each awake pose has one active face and eye pair. A compatible `head.front`, `eyes.front`, tail and items are reused; sitting and standing now use their own arm/holding variants and pose-local joints. `pose-arm-prompts.json` records the corrected artwork requirements. Pose offsets align compatible parts. `music/standing-body-shared.png` removes the old embedded arm and tail; its generation instructions are retained in `shared-artwork-prompt.txt`. The older standing images remain archived sources for compatibility and comparison.
+
+The two complete sleeping pictures and `held.png` are named recipes. Complete recipes have no extra head, eyes or limbs stacked over them. Replacing a shared image changes every pose using it; Make variant copies the selected variant and assigns the copy to the current pose.
+
+See [the artwork inventory](../../../../docs/character-shared-artwork-inventory.md) and [the editor implementation status](../../../../docs/character-editor-improvement-plan.md#implemented-baseline).
+
 # Yohta mohawk chibi
 
 Yohta **sits at rest and stands only for music**, using the approved saturated

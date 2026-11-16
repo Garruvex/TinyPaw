@@ -7,6 +7,7 @@ use super::*;
 
 mod art;
 mod behavior;
+mod library;
 mod reference;
 #[cfg(test)]
 mod tests;
@@ -65,31 +66,6 @@ fn leave_prompt<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     .into()
 }
 
-/// One Save and Discard for the behavior draft (motion, lines, bop).
-fn save_bar<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
-    if !v.unsaved {
-        return hint("Changes show in the preview straight away and on the desktop once saved.");
-    }
-    container(
-        row![
-            text("Unsaved changes").size(13).width(Length::Fill),
-            button(text("Discard").size(12))
-                .padding([5, 10])
-                .style(theme::secondary)
-                .on_press(Message::Ui(UiMsg::CharacterDiscard)),
-            button(text("Save").font(theme::MEDIUM).size(12))
-                .padding([5, 14])
-                .style(theme::primary)
-                .on_press_maybe((!v.character_busy).then_some(Message::Ui(UiMsg::CharacterSave))),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center),
-    )
-    .padding([6, 10])
-    .style(theme::fill(theme::WELL, 10.0))
-    .into()
-}
-
 /// Library and On desktop, then the Customize sections. One draft spans
 /// them all.
 fn navigator<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
@@ -97,7 +73,9 @@ fn navigator<'a>(v: &SettingsView<'a>) -> Element<'a, Message> {
     for (tab, label) in [
         (CharacterTab::Library, "Library"),
         (CharacterTab::Artwork, "Artwork"),
-        (CharacterTab::Behavior, "Behavior"),
+        (CharacterTab::Reactions, "Reactions"),
+        (CharacterTab::Speech, "Speech"),
+        (CharacterTab::Motion, "Motion"),
         (CharacterTab::Advanced, "Advanced"),
     ] {
         tabs = tabs.push(
@@ -163,7 +141,9 @@ fn character_body<'a>(
     if let Some(e) = v.art
         && matches!(tab, CharacterTab::Artwork | CharacterTab::Advanced)
     {
-        let body = if tab == CharacterTab::Artwork {
+        let body = if e.library.is_some() {
+            library::library_page(e)
+        } else if tab == CharacterTab::Artwork {
             art_page(e, v.character_busy)
         } else {
             advanced_page(e)
@@ -188,8 +168,8 @@ fn character_body<'a>(
     if matches!(tab, CharacterTab::Artwork | CharacterTab::Advanced) && v.character_draft.is_none()
     {
         return (
-            column![h1("Character"), navigator(v), artwork_closed(v)]
-                .spacing(22)
+            column![navigator(v), artwork_closed(v)]
+                .spacing(16)
                 .max_width(640)
                 .into(),
             v.motion.map(motion_preview),
@@ -283,22 +263,26 @@ fn character_body<'a>(
     };
     // The tabs sit directly under the title on every tab; they hide only
     // while Add character's draft is open beside the library.
-    let mut page = column![h1("Character")].spacing(22).max_width(640);
+    let mut page = column![].spacing(16).max_width(640);
     if v.character_draft.is_none() {
         page = page.push(navigator(v));
     }
     if let Some(m) = v.motion
-        && tab == CharacterTab::Behavior
+        && tab.is_behavior()
     {
-        page = page.push(save_bar(v));
         if let Some(t) = v.transfer {
             page = page.push(transfer_panel(t, name));
         }
-        return (page.push(behavior_section(v, m)).into(), side);
+        let body = match tab {
+            CharacterTab::Reactions => reactions_tab(v, m),
+            CharacterTab::Speech => speech_tab(v, m),
+            _ => motion_tab(v, m),
+        };
+        return (page.push(body).into(), side);
     }
-    if tab == CharacterTab::Behavior {
+    if tab.is_behavior() {
         page = page.push(hint(
-            "Behavior opens once the character's preview is ready.",
+            "This opens once the character's preview is ready.",
         ));
         return (page.into(), side);
     }
